@@ -58,6 +58,13 @@ fi
 
 echo "==> enable services"
 systemctl daemon-reload
+# Debian ships hostapd masked by default; unmask before enabling (idempotent).
+systemctl unmask hostapd
+# hostapd's ExecStart uses ${DAEMON_CONF}; point it at our rendered config.
+if ! grep -q '^DAEMON_CONF="/etc/hostapd/hostapd.conf"' /etc/default/hostapd 2>/dev/null; then
+    sed -i '/^DAEMON_CONF=/d' /etc/default/hostapd 2>/dev/null || true
+    echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
+fi
 systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd nucleusd.service
 
 echo
