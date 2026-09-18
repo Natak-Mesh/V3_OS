@@ -52,6 +52,38 @@ def test_short_password_rejected():
         cfg(mesh={"password": "short"})
 
 
+def test_id_from_hostname(monkeypatch):
+    monkeypatch.setattr("nucleusd.schema.socket.gethostname", lambda: "0042-nucleus")
+    c = NucleusConfig.model_validate({
+        "node": {},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+    })
+    assert c.node.id == 42
+    assert c.mesh_ip == "10.20.1.42"
+    assert c.node.hostname == "0042-nucleus"
+
+
+def test_bad_hostname_rejected(monkeypatch):
+    monkeypatch.setattr("nucleusd.schema.socket.gethostname", lambda: "raspberrypi")
+    with pytest.raises(ValidationError):
+        NucleusConfig.model_validate({
+            "node": {},
+            "mesh": {"password": "52235223"},
+            "ap": {"password": "52235223"},
+        })
+
+
+def test_explicit_id_overrides_hostname(monkeypatch):
+    monkeypatch.setattr("nucleusd.schema.socket.gethostname", lambda: "0042-nucleus")
+    c = NucleusConfig.model_validate({
+        "node": {"id": 7},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+    })
+    assert c.node.id == 7
+
+
 def test_subnet_collision_rejected():
     with pytest.raises(ValidationError):
         cfg(mesh={"password": "52235223", "subnet_prefix": "10.20.5"},

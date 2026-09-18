@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import re
+import socket
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -37,11 +39,39 @@ def _ll_from_seed(seed: str) -> str:
     return "fe80::" + ":".join(parts)
 
 
-class NodeConfig(BaseModel):
-    """Identity of this node. `id` drives most derived addressing."""
+def _id_from_hostname() -> Optional[int]:
+    """Parse the node id from the system hostname (e.g. '0042-nucleus' -> 42).
 
-    id: int = Field(..., ge=1, le=254, description="Node serial (1-254). Drives all derived IPs.")
-    name: Optional[str] = Field(None, description="Hostname; defaults to '<id:04d>-nucleus'.")
+    Hostname is the provisioning-time identity (set when the SD card is flashed),
+    so a freshly-imaged node needs zero config edits. Returns None if the
+    hostname doesn't match the NNNN-nucleus pattern.
+    """
+    host = socket.gethostname().split(".")[0]
+    m = re.match(r"^(\d{1,4})-nucleus$", host)
+    return int(m.group(1)) if m else None
+
+
+class NodeConfig(BaseModel):
+    """Identity of this node. `id` drives most derived addressing.
+
+    `id` is optional: when omitted it is parsed from the system hostname
+    (NNNN-nucleus). An explicit value overrides the hostname.
+    """
+
+    id: Optional[int] = Field(None, ge=1, le=254, description="Node serial (1-254). Defaults to the id parsed from the hostname.")
+    name: Optional[str] = Field(None, description="Hostname override; defaults to system hostname / '<id:04d>-nucleus'.")
+
+    @model_validator(mode="after")
+    def _resolve_id(self) -> "NodeConfig":
+        if self.id is None:
+            derived = _id_from_hostname()
+            if derived is None:
+                raise ValueError(
+                    "node.id not set and could not be parsed from hostname "
+                    f"'{socket.gethostname()}' (expected NNNN-nucleus)"
+                )
+            object.__setattr__(self, "id", derived)
+        return self
 
     @property
     def hostname(self) -> str:
@@ -116,8 +146,14 @@ class Eth0Config(BaseModel):
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
-    node: NodeConfig
+    node: NodeConfig = Field(default_factory=NodeConfig)
     mesh: MeshConfig
+
+    @field_validator("node", mode="before")
+    @classmethod
+    def _node_null_to_default(cls, v):
+        # `node:` with all keys commented parses as None; treat as defaults.
+        return NodeConfig() if v is None else v
     br_lan: BrLanConfig = BrLanConfig()
     ap: ApConfig
     eth0: Eth0Config = Eth0Config()

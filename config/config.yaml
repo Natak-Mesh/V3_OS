@@ -13,8 +13,10 @@
 # ============================================================
 
 node:
-  id: 9              # 1-254, unique per node. Drives all addressing.
-  # name:            # optional hostname override; default '<id:04d>-nucleus'
+  # id is parsed from the hostname (e.g. 0042-nucleus -> 42), set when the SD
+  # card is flashed. Uncomment to override.
+  # id: 42
+  # name:            # optional hostname override; default = system hostname
 
 mesh:
   ssid: natak_mesh
