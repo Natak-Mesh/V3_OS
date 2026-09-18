@@ -23,7 +23,7 @@ def test_all_targets_render():
 def test_babeld_has_subnets():
     b = rendered()["/etc/babeld.conf"]
     assert "redistribute ip 10.20.1.0/24 allow" in b
-    assert "redistribute ip 10.20.12.0/24 allow" in b
+    assert "redistribute ip 10.20.9.0/24 allow" in b   # br-lan = 10.20.<id>.0
     assert "local-port 33123" in b
 
 

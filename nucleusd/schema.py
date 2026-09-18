@@ -115,14 +115,13 @@ class MeshConfig(BaseModel):
 class BrLanConfig(BaseModel):
     """Wired/AP-side bridge (br-lan): wlan0 AP + eth0 LAN clients live here."""
 
-    subnet_prefix: str = Field("10.20.12", description="First three octets of the br-lan /24.")
+    subnet_prefix: Optional[str] = Field(
+        None,
+        description="First three octets of the br-lan /24. Default: '10.20.<node.id>'.",
+    )
     dhcp_pool_offset: int = 10
     dhcp_pool_size: int = 50
     dns: str = "8.8.8.8"
-
-    @property
-    def subnet(self) -> str:
-        return f"{self.subnet_prefix}.0/24"
 
 
 class ApConfig(BaseModel):
@@ -148,15 +147,15 @@ class NucleusConfig(BaseModel):
 
     node: NodeConfig = Field(default_factory=NodeConfig)
     mesh: MeshConfig
+    br_lan: BrLanConfig = Field(default_factory=BrLanConfig)
+    ap: ApConfig
+    eth0: Eth0Config = Field(default_factory=Eth0Config)
 
     @field_validator("node", mode="before")
     @classmethod
     def _node_null_to_default(cls, v):
         # `node:` with all keys commented parses as None; treat as defaults.
         return NodeConfig() if v is None else v
-    br_lan: BrLanConfig = BrLanConfig()
-    ap: ApConfig
-    eth0: Eth0Config = Eth0Config()
 
     # ---- Derived addressing (computed, never hand-entered) ----------------
     @property
@@ -164,8 +163,23 @@ class NucleusConfig(BaseModel):
         return f"{self.mesh.subnet_prefix}.{self.node.id}"
 
     @property
+    def br_lan_prefix(self) -> str:
+        # Per-node /24: 10.20.<id>.0. Each node's LAN must be a distinct subnet
+        # so babeld can redistribute it and remote clients stay reachable.
+        return self.br_lan.subnet_prefix or f"10.20.{self.node.id}"
+
+    @property
+    def br_lan_subnet(self) -> str:
+        return f"{self.br_lan_prefix}.0/24"
+
+    @property
     def br_lan_ip(self) -> str:
-        return f"{self.br_lan.subnet_prefix}.1"
+        return f"{self.br_lan_prefix}.1"
+
+    @property
+    def eth0_lan_ip(self) -> str:
+        # Per-node eth0 LAN gateway (old scheme): 10.10.<id>.1.
+        return self.eth0.static_ip or f"10.10.{self.node.id}.1"
 
     @property
     def mesh_ipv6_ll(self) -> str:
@@ -181,8 +195,12 @@ class NucleusConfig(BaseModel):
 
     @model_validator(mode="after")
     def _no_subnet_collision(self) -> "NucleusConfig":
-        if self.mesh.subnet_prefix == self.br_lan.subnet_prefix:
-            raise ValueError("mesh.subnet_prefix and br_lan.subnet_prefix must differ")
+        if self.mesh.subnet_prefix == self.br_lan_prefix:
+            raise ValueError(
+                f"mesh subnet ({self.mesh.subnet_prefix}) collides with br-lan "
+                f"({self.br_lan_prefix}); with the default scheme this happens when "
+                f"node.id == 1 — set a distinct node.id or br_lan.subnet_prefix"
+            )
         return self
 
     def render_context(self) -> dict:
@@ -207,7 +225,7 @@ class NucleusConfig(BaseModel):
             "mesh_802_ttl": self.mesh.mesh_802_ttl,
             "mesh_rts_threshold": self.mesh.rts_threshold,
             "br_lan_ip": self.br_lan_ip,
-            "br_lan_subnet": self.br_lan.subnet,
+            "br_lan_subnet": self.br_lan_subnet,
             "br_lan_ipv6_ll": self.br_lan_ipv6_ll,
             "br_lan_dhcp_offset": self.br_lan.dhcp_pool_offset,
             "br_lan_dhcp_size": self.br_lan.dhcp_pool_size,
@@ -216,7 +234,7 @@ class NucleusConfig(BaseModel):
             "ap_channel": self.ap.channel,
             "ap_password": self.ap.password,
             "eth0_mode": self.eth0.mode,
-            "eth0_static_ip": self.eth0.static_ip,
+            "eth0_static_ip": self.eth0_lan_ip,
             "eth0_dhcp_offset": self.eth0.dhcp_pool_offset,
             "eth0_dhcp_size": self.eth0.dhcp_pool_size,
         }

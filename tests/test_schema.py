@@ -23,9 +23,16 @@ def cfg(**over):
 def test_derived_addressing():
     c = cfg()
     assert c.mesh_ip == "10.20.1.9"
-    assert c.br_lan_ip == "10.20.12.1"
+    assert c.br_lan_ip == "10.20.9.1"          # per-node: 10.20.<id>.1
+    assert c.br_lan_subnet == "10.20.9.0/24"
+    assert c.eth0_lan_ip == "10.10.9.1"        # per-node eth0 LAN gateway
     assert c.node.hostname == "0009-nucleus"
     assert c.ap_name == "0009-nucleus-ap"
+
+
+def test_br_lan_prefix_override():
+    c = cfg(br_lan={"subnet_prefix": "10.20.200"})
+    assert c.br_lan_ip == "10.20.200.1"
 
 
 def test_frequency_matches_channel():
@@ -85,6 +92,6 @@ def test_explicit_id_overrides_hostname(monkeypatch):
 
 
 def test_subnet_collision_rejected():
+    # node.id == 1 makes the default br-lan (10.20.1) collide with the mesh.
     with pytest.raises(ValidationError):
-        cfg(mesh={"password": "52235223", "subnet_prefix": "10.20.5"},
-            br_lan={"subnet_prefix": "10.20.5"})
+        cfg(node={"id": 1})

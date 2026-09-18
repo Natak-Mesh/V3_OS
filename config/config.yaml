@@ -30,7 +30,8 @@ mesh:
   rts_threshold: 500 # RTS/CTS bytes (0=off; 500 recommended for 3+ nodes)
 
 br_lan:
-  subnet_prefix: "10.20.12"
+  # subnet_prefix defaults to 10.20.<node.id> (per-node LAN). Uncomment to override.
+  # subnet_prefix: "10.20.42"
   dhcp_pool_offset: 10
   dhcp_pool_size: 50
   dns: "8.8.8.8"
