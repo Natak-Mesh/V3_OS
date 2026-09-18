@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from . import config as cfgio
 from . import status as statusmod
 from .apply import apply as apply_config
@@ -20,7 +21,13 @@ from .schema import NucleusConfig
 
 WEB_DIR = Path(__file__).parent / "web"
 
-app = FastAPI(title="Nucleus V3 OS", version="3.0.0")
+app = FastAPI(title="Nucleus V3 OS", version=__version__)
+
+
+@app.get("/api/v1/version")
+def get_version() -> dict:
+    """Report the running Nucleus OS version (from the VERSION file)."""
+    return {"version": __version__}
 
 
 @app.get("/api/v1/config")

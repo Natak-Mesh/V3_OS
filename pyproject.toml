@@ -1,6 +1,6 @@
 [project]
 name = "nucleusd"
-version = "3.0.0"
+dynamic = ["version"]
 description = "Nucleus V3 OS — configuration daemon, control CLI, and mesh bring-up"
 requires-python = ">=3.11"
 dependencies = [
@@ -23,6 +23,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["nucleusd"]
+
+[tool.setuptools.dynamic]
+version = { file = ["VERSION"] }
 
 [tool.setuptools.package-data]
 nucleusd = ["templates/**/*.j2", "web/*"]
