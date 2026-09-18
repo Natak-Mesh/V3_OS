@@ -42,11 +42,11 @@ Everything flows one direction, from one file:
 - **One contract.** The pydantic model in `schema.py` is the single definition
   of what a valid node config is. The API, the CLI, and the renderer all import
   it, so there is no second place where rules can drift.
-- **Operators set primitives; the system derives the rest.** You set `node.id`
-  and a handful of values; the schema computes `mesh_ip`, `br_lan_ip`, the AP
-  SSID, the hostname, and the per-interface IPv6 link-local addresses. The old
-  `mesh.conf` required hand-pasting all of these per node — the main source of
-  its bugs.
+- **Operators set primitives; the system derives the rest.** Node identity comes
+  from the hostname set at provisioning (`NNNN-nucleus`, so `node.id` is parsed
+  automatically); from that id the schema computes `mesh_ip`, `br_lan_ip`, the AP
+  SSID, and the per-interface IPv6 link-local addresses. The old `mesh.conf`
+  required hand-pasting all of these per node — the main source of its bugs.
 - **Templates are dumb.** They only substitute pre-computed values from
   `render_context()`. All logic and validation live in Python, testable off-box.
 - **Idempotent apply.** `apply.py` writes a file only if its content changed and
@@ -142,26 +142,33 @@ to deploy code changes, and `nucleusctl apply` to regenerate system configs.
 
 ## 5. Configuration guide
 
-Edit `/etc/nucleus/config.yaml`, then apply. You mostly set `node.id`:
+Edit `/etc/nucleus/config.yaml`, then apply. A freshly flashed node needs **no
+identity edits**: `node.id` is parsed from the system hostname (`NNNN-nucleus`,
+e.g. `0009-nucleus` → 9), set when the SD card is flashed. You mostly just set
+the passwords:
 
 ```yaml
 node:
-  id: 9                      # 1-254, unique per node — drives all addressing
+  # id: 9                    # optional; overrides the id parsed from the hostname
+  # name:                    # optional hostname override
 mesh:
   password: "..."            # SAE/WPA3 passphrase (>= 8 chars)
 ap:
   password: "..."            # AP WPA2 passphrase
 ```
 
-Derived automatically from `node.id: 9`:
+Derived automatically from the node id (e.g. `9`, whether parsed from the
+hostname or set explicitly):
 
 | Value | Result |
 |-------|--------|
-| hostname | `0009-nucleus` |
 | mesh IP | `10.20.1.9` |
-| br-lan IP | `10.20.12.1` |
+| br-lan IP | `10.20.9.1` |
 | AP SSID | `0009-nucleus-ap` |
 | IPv6 link-locals | deterministic per-interface `fe80::…` |
+
+The hostname is the node's own identity (`0009-nucleus`), not a derived value —
+it's the *source* of the id unless you override with `node.id` / `node.name`.
 
 Workflow:
 

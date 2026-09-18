@@ -4,7 +4,9 @@ Nucleus V3 OS — configuration schema (single source of truth).
 The entire node configuration lives in one YAML file (config/config.yaml,
 installed to /etc/nucleus/config.yaml). This module defines the pydantic model
 that validates that file and computes every *derived* value so an operator only
-ever sets a handful of primitives (chiefly `node.id`).
+ever sets a handful of primitives (chiefly the mesh/AP passwords). The node
+identity (`node.id`) is parsed from the system hostname by default, so a freshly
+flashed node needs no identity edits at all.
 
 Design rules:
   * Operators set primitives; the schema derives the rest.
