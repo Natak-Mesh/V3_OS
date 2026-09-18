@@ -44,9 +44,40 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     return neighbours
 
 
+def _parse_link(out: dict) -> None:
+    """Fill oper-state and bridge master from `ip -o link show`.
+
+    Existence/state MUST come from the link table, not the addr table: a bridge
+    member like wlan0 (AP enslaved to br-lan) carries no IP, so it never appears
+    in `ip addr` and was wrongly reported "absent".
+    """
+    try:
+        r = subprocess.run(["ip", "-o", "link", "show"], capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return
+    for line in r.stdout.splitlines():
+        f = line.split()
+        # e.g.: "3: wlan0: <...,UP,LOWER_UP> mtu 1500 ... master br-lan state UP ..."
+        if len(f) < 2:
+            continue
+        name = f[1].rstrip(":")
+        if name not in out:
+            continue
+        out[name]["state"] = "present"
+        if "state" in f:
+            out[name]["oper_state"] = f[f.index("state") + 1]
+        if "master" in f:
+            out[name]["master"] = f[f.index("master") + 1]
+
+
 def iface_addrs(names: tuple[str, ...] = ("wlan1", "br-lan", "wlan0", "eth0")) -> dict:
-    """Return {iface: {state, addrs[]}} using `ip -o addr`."""
+    """Return {iface: {state, oper_state, master?, addrs[]}}.
+
+    Merges `ip -o link` (existence/state/bridge master) with `ip -o addr`
+    (addresses) so address-less bridge members are reported correctly.
+    """
     out: dict[str, dict] = {n: {"state": "absent", "addrs": []} for n in names}
+    _parse_link(out)
     try:
         r = subprocess.run(["ip", "-o", "addr", "show"], capture_output=True, text=True, check=False)
     except FileNotFoundError:
@@ -56,10 +87,8 @@ def iface_addrs(names: tuple[str, ...] = ("wlan1", "br-lan", "wlan0", "eth0")) -
         if len(f) < 4:
             continue
         name = f[1]
-        if name in out:
-            out[name]["state"] = "up"
-            if f[2] in ("inet", "inet6"):
-                out[name]["addrs"].append(f[3])
+        if name in out and f[2] in ("inet", "inet6"):
+            out[name]["addrs"].append(f[3])
     return out
 
 
