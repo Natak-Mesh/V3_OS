@@ -68,14 +68,18 @@ function meshFill(cfg) {
   $("m-psk-mode").value = "keep";
   $("m-psk-custom").value = "";
   $("m-psk-custom").style.display = "none";
+  $("m-psk-custom-label").style.display = "none";
   $("m-url").value = cfg.channel_url || "";
   meshCfgCache = cfg;
 }
 
 // Show the custom-key input only when PSK mode = custom.
 document.addEventListener("change", (e) => {
-  if (e.target && e.target.id === "m-psk-mode")
-    $("m-psk-custom").style.display = e.target.value === "custom" ? "block" : "none";
+  if (e.target && e.target.id === "m-psk-mode") {
+    const show = e.target.value === "custom";
+    $("m-psk-custom").style.display = show ? "block" : "none";
+    $("m-psk-custom-label").style.display = show ? "block" : "none";
+  }
 });
 
 // Poll op-status until the background radio op finishes.

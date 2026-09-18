@@ -25,7 +25,8 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip git curl gpg \
     babeld smcroute hostapd wpasupplicant iw \
-    nftables network-manager
+    nftables network-manager \
+    nginx avahi-daemon avahi-utils openssl
 
 echo "==> meshtasticd (native, from the Meshtastic apt repo)"
 # Native meshtasticd replaces the V2 Docker container. The repo ships the
@@ -35,11 +36,18 @@ echo "==> meshtasticd (native, from the Meshtastic apt repo)"
 MESHREPO=/etc/apt/sources.list.d/meshtastic.list
 if [ ! -f "$MESHREPO" ]; then
     . /etc/os-release
-    DISTRO_ID="${ID}"; [ "$DISTRO_ID" = "raspbian" ] && DISTRO_ID="Raspbian"
-    KEYURL="https://software.opensuse.org/download/repository/network:/Meshtastic:/beta/Debian_12/Release.key"
-    REPOBASE="https://software.opensuse.org/download/repository/network:/Meshtastic:/beta/Debian_12/"
+    # Pick the OBS suite from the running OS — never hardcode. OBS publishes
+    # Debian_13 / Raspbian_13 (trixie) etc; a wrong suite pulls a build with
+    # unsatisfiable libs (e.g. bookworm's libgpiod2 on trixie).
+    DISTRO="Debian"; [ "$ID" = "raspbian" ] && DISTRO="Raspbian"
+    SUITE="${DISTRO}_${VERSION_ID}"
+    KEYURL="https://download.opensuse.org/repositories/network:/Meshtastic:/beta/${SUITE}/Release.key"
+    REPOBASE="https://download.opensuse.org/repositories/network:/Meshtastic:/beta/${SUITE}/"
     mkdir -p /etc/apt/keyrings
-    curl -fsSL "$KEYURL" | gpg --dearmor -o /etc/apt/keyrings/meshtastic.gpg
+    # Remove any key from a previously-failed run so gpg never prompts to
+    # overwrite (--yes) and never dearmors a stale/empty file.
+    rm -f /etc/apt/keyrings/meshtastic.gpg
+    curl -fsSL "$KEYURL" | gpg --dearmor --yes -o /etc/apt/keyrings/meshtastic.gpg
     echo "deb [signed-by=/etc/apt/keyrings/meshtastic.gpg] ${REPOBASE} /" > "$MESHREPO"
 fi
 apt-get update -qq
@@ -117,10 +125,14 @@ if ! grep -q '^DAEMON_CONF="/etc/hostapd/hostapd.conf"' /etc/default/hostapd 2>/
     sed -i '/^DAEMON_CONF=/d' /etc/default/hostapd 2>/dev/null || true
     echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
 fi
+# avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
+# :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
+systemctl enable avahi-daemon nginx
 systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service
 
 echo
 echo "Install complete. Next:"
 echo "  1. edit /etc/nucleus/config.yaml  (set node.id etc.)"
 echo "  2. sudo nucleusctl apply           (render configs + start units)"
-echo "  3. browse http://<node-ip>:8080    (web UI)"
+echo "  3. browse http://<serial>-nucleus.local  (web UI, no port; via nginx+avahi)"
+echo "     or http://<node-ip>:8080             (direct fallback)"

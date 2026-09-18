@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -29,7 +30,7 @@ MESH_CONF_PATH = os.environ.get("NUCLEUS_CONFIG", "/etc/nucleus/config.yaml")
 
 # meshtastic CLI invoked as a module — mesh-web.service's PATH does not
 # include ~/.local/bin where the `meshtastic` entry point lives.
-MESHTASTIC_CMD = ["python3", "-m", "meshtastic"]
+MESHTASTIC_CMD = [sys.executable, "-m", "meshtastic"]
 
 # Cached parsed radio config (survives page reloads without touching radio)
 CONFIG_CACHE_PATH = "/tmp/meshtastic_config.json"

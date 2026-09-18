@@ -23,7 +23,7 @@ import time
 from .. import config as cfgio
 
 HOST = "localhost"
-MESHTASTIC = ["python3", "-m", "meshtastic", "--host", HOST]
+MESHTASTIC = [sys.executable, "-m", "meshtastic", "--host", HOST]
 
 
 def _cli(args: list[str], timeout: int = 120) -> tuple[int, str]:
