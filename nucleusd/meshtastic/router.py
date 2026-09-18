@@ -25,6 +25,10 @@ class ChannelUrlBody(BaseModel):
     url: str = ""
 
 
+class JoinPeerBody(BaseModel):
+    host: str = ""
+
+
 def _handle(fn, *args):
     """Call a meshtastic_api helper, mapping its exceptions to HTTP errors."""
     try:
@@ -70,6 +74,16 @@ def config_apply(body: ApplyBody) -> dict:
 @router.post("/config/channel-url")
 def config_channel_url(body: ChannelUrlBody) -> dict:
     return _handle(mx.config_channel_url, body.url)
+
+
+@router.get("/peers")
+def peers() -> dict:
+    return mx.peers()
+
+
+@router.post("/config/join-peer")
+def config_join_peer(body: JoinPeerBody) -> dict:
+    return _handle(mx.config_join_peer, body.host)
 
 
 @router.get("/config/qr")

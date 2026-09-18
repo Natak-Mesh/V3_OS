@@ -52,20 +52,42 @@
             <option>MEDIUM_FAST</option><option>MEDIUM_SLOW</option>
             <option>SHORT_FAST</option><option>SHORT_SLOW</option><option>SHORT_TURBO</option>
           </select>
-          <label>Hop limit</label><input id="m-hop" type="number" min="1" max="7">
-          <label>TX power (dBm)</label><input id="m-tx" type="number" min="0" max="30">
-          <label>Role</label>
+          <label>Frequency slot</label><input id="m-slot" type="number" min="0" max="104" placeholder="0 = auto">
+          <label style="color:#58a6ff">Channel name</label><input id="m-chan" maxlength="11">
+          <label style="color:#58a6ff">Encryption key</label>
+          <select id="m-psk-mode">
+            <option value="keep">Keep current key</option>
+            <option value="random">Generate new random key</option>
+            <option value="default">Default key (public)</option>
+            <option value="none">No encryption</option>
+            <option value="custom">Enter key…</option>
+          </select>
+          <label style="color:#58a6ff">Key (base64)</label>
+          <input id="m-psk-custom" placeholder="base64:..." style="display:none">
+          <label style="color:#58a6ff">Region</label>
+          <select id="m-region">
+            <option>US</option><option>EU_433</option><option>EU_868</option>
+            <option>ANZ</option><option>CN</option><option>JP</option>
+            <option>KR</option><option>TW</option><option>RU</option>
+            <option>IN</option><option>NZ_865</option><option>TH</option>
+            <option>UA_433</option><option>UA_868</option><option>LORA_24</option>
+          </select>
+          <label style="color:#d29922">Hop limit</label><input id="m-hop" type="number" min="1" max="7">
+          <label style="color:#d29922">TX power (dBm)</label><input id="m-tx" type="number" min="0" max="30">
+          <label style="color:#d29922">Role</label>
           <select id="m-role">
             <option>CLIENT</option><option>CLIENT_MUTE</option><option>CLIENT_HIDDEN</option>
             <option>TRACKER</option><option>TAK</option><option>TAK_TRACKER</option>
             <option>SENSOR</option><option>ROUTER</option><option>ROUTER_CLIENT</option>
             <option>ROUTER_LATE</option><option>REPEATER</option>
           </select>
-          <label>Channel name</label><input id="m-chan" maxlength="11">
+        </div>
+        <div style="margin-top:6px; font-size:12px; color:#8b949e">
+          <span style="color:#58a6ff">Blue</span> = channel identity (must match across nodes) ·
+          <span style="color:#d29922">Amber</span> = this node only
         </div>
         <div style="margin-top:12px">
           <button onclick="meshApplyConfig()">Apply to Radio</button>
-          <span style="color:#8b949e; font-size:12px">region: <span id="m-region">&mdash;</span> (set via config.yaml)</span>
         </div>
         <div style="margin-top:16px">
           <label style="font-size:13px; color:#8b949e">Channel share URL</label>
@@ -78,6 +100,27 @@
         </div>
       </div>
       <div id="mesh-msg" class="msg"></div>
+    </section>
+    <section>
+      <h2>Mesh Peers</h2>
+      <div style="font-size:13px; color:#8b949e; margin-bottom:8px">
+        Nodes reachable over the wifi mesh. Join copies a peer's channel
+        identity (name, key, region, preset, slot) to this radio — no URL
+        copy/paste. This node's role, TX power and hop limit are untouched.
+      </div>
+      <button class="secondary" onclick="meshLoadPeers()">Discover Peers</button>
+      <table id="peers-table" style="display:none; width:100%; border-collapse:collapse; font-size:13px; margin-top:12px">
+        <thead>
+          <tr style="text-align:left; color:#8b949e; border-bottom:1px solid #30363d">
+            <th style="padding:6px">Node IP</th><th style="padding:6px">Channel</th>
+            <th style="padding:6px">Key</th><th style="padding:6px">Region</th>
+            <th style="padding:6px">Preset</th><th style="padding:6px">Slot</th>
+            <th style="padding:6px">Match</th><th style="padding:6px"></th>
+          </tr>
+        </thead>
+        <tbody id="peers-body"></tbody>
+      </table>
+      <div id="peers-msg" class="msg"></div>
     </section>
     <section>
       <h2>Status</h2>

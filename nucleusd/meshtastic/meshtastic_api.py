@@ -265,6 +265,26 @@ VALID_ROLES = {
     'ROUTER_CLIENT', 'ROUTER_LATE', 'REPEATER', 'LOST_AND_FOUND',
 }
 
+# LoRa region codes (RegionCode enum names). UNSET is excluded — the UI
+# must never write UNSET back (that disables TX).
+VALID_REGIONS = {
+    'US', 'EU_433', 'EU_868', 'CN', 'JP', 'ANZ', 'KR', 'TW', 'RU',
+    'IN', 'NZ_865', 'TH', 'LORA_24', 'UA_433', 'UA_868', 'MY_433',
+    'MY_919', 'SG_923', 'PH_433', 'PH_868', 'PH_915', 'ANZ_433',
+    'KZ_433', 'KZ_863', 'NP_865', 'BR_902',
+}
+
+# PSK modes accepted by --ch-set psk. Anything else is treated as an
+# explicit key (base64:... or a hex/simpleN string the CLI understands).
+PSK_KEYWORDS = {'random', 'default', 'none'}
+
+# Port the nucleusd web app (this API's host) listens on. Peer nodes run
+# the same app, so peer discovery fetches their config over this port.
+WEB_PORT = 8080
+
+# Per-peer HTTP timeout when polling mesh neighbours for their config.
+PEER_HTTP_TIMEOUT = 3
+
 
 def _validate_changes(changes):
     """Validate an apply request. Returns error string or None."""
@@ -272,7 +292,8 @@ def _validate_changes(changes):
         return 'No changes provided'
 
     allowed = {'owner', 'owner_short', 'modem_preset', 'hop_limit',
-               'tx_power', 'role', 'channel_name', 'psk_random'}
+               'tx_power', 'role', 'channel_name', 'psk_random',
+               'region', 'frequency_slot', 'psk'}
     unknown = set(changes) - allowed
     if unknown:
         return f'Unknown fields: {", ".join(sorted(unknown))}'
@@ -312,6 +333,22 @@ def _validate_changes(changes):
     if 'psk_random' in changes:
         if not isinstance(changes['psk_random'], bool):
             return 'psk_random must be true/false'
+    if 'region' in changes:
+        if str(changes['region']) not in VALID_REGIONS:
+            return f'Invalid region: {changes["region"]}'
+    if 'frequency_slot' in changes:
+        try:
+            v = int(changes['frequency_slot'])
+        except (TypeError, ValueError):
+            return 'Frequency slot must be a number'
+        # 0 = auto (derive slot from channel name hash). Upper bound
+        # depends on region/preset; 104 is the widest case (LORA_24).
+        if not 0 <= v <= 104:
+            return 'Frequency slot must be 0-104 (0 = auto)'
+    if 'psk' in changes:
+        v = str(changes['psk']).strip()
+        if not v:
+            return 'PSK must not be empty (use "none" to disable)'
 
     return None
 
@@ -333,8 +370,13 @@ def _build_command_groups(changes):
         args += ['--set-owner', str(changes['owner']).strip()]
     if 'owner_short' in changes:
         args += ['--set-owner-short', str(changes['owner_short']).strip()]
+    if 'region' in changes:
+        args += ['--set', 'lora.region', str(changes['region'])]
     if 'modem_preset' in changes:
         args += ['--set', 'lora.modem_preset', str(changes['modem_preset'])]
+    if 'frequency_slot' in changes:
+        args += ['--set', 'lora.channel_num',
+                 str(int(changes['frequency_slot']))]
     if 'hop_limit' in changes:
         args += ['--set', 'lora.hop_limit', str(int(changes['hop_limit']))]
     if 'tx_power' in changes:
@@ -348,7 +390,10 @@ def _build_command_groups(changes):
     args = []
     if 'channel_name' in changes:
         args += ['--ch-set', 'name', str(changes['channel_name']).strip()]
-    if changes.get('psk_random'):
+    # Explicit psk value takes precedence over the legacy psk_random bool.
+    if 'psk' in changes:
+        args += ['--ch-set', 'psk', str(changes['psk']).strip()]
+    elif changes.get('psk_random'):
         args += ['--ch-set', 'psk', 'random']
     if args:
         groups.append(args + ['--ch-index', '0'])
@@ -452,11 +497,14 @@ def _bridge_paused():
 def _decode_channel_url(url):
     """Decode a meshtastic channel URL into channel summaries.
 
-    Returns a list of {index, name, has_psk} dicts, or [] on failure.
+    Returns a list of {index, name, has_psk, psk_fingerprint} dicts, or
+    [] on failure. The psk_fingerprint is a short hex digest of the key
+    so two nodes' channels can be compared without exposing the key.
     Used both for display and to validate pasted URLs before touching
     the radio.
     """
     try:
+        import hashlib
         from meshtastic.protobuf import apponly_pb2
         part = url.split('#', 1)[1]
         part += '=' * (-len(part) % 4)
@@ -464,10 +512,14 @@ def _decode_channel_url(url):
         channel_set.ParseFromString(base64.urlsafe_b64decode(part))
         channels = []
         for i, s in enumerate(channel_set.settings):
+            fp = ''
+            if s.psk:
+                fp = hashlib.sha256(s.psk).hexdigest()[:8]
             channels.append({
                 'index': i,
                 'name': s.name or '(default)',
                 'has_psk': bool(s.psk),
+                'psk_fingerprint': fp,
             })
         return channels
     except Exception:
@@ -490,12 +542,14 @@ def _parse_export(yaml_text):
         'owner_short': data.get('owner_short', ''),
         'region': lora.get('region', 'UNSET'),
         'modem_preset': lora.get('modemPreset', 'LONG_FAST'),
+        'frequency_slot': lora.get('channelNum', 0),
         'hop_limit': lora.get('hopLimit', 3),
         'tx_power': lora.get('txPower', 0),
         'role': device.get('role', 'CLIENT'),
         'channel_url': channel_url,
         'channels': channels,
         'channel_name': channels[0]['name'] if channels else '',
+        'psk_fingerprint': channels[0]['psk_fingerprint'] if channels else '',
     }
 
 
@@ -542,12 +596,15 @@ def _read_config_from_radio():
             'region': config_pb2.Config.LoRaConfig.RegionCode.Name(lora.region),
             'modem_preset': config_pb2.Config.LoRaConfig.ModemPreset.Name(
                 lora.modem_preset),
+            'frequency_slot': lora.channel_num,
             'hop_limit': lora.hop_limit,
             'tx_power': lora.tx_power,
             'role': config_pb2.Config.DeviceConfig.Role.Name(device.role),
             'channel_url': channel_url,
             'channels': channels,
             'channel_name': channels[0]['name'] if channels else '',
+            'psk_fingerprint': (channels[0]['psk_fingerprint']
+                                if channels else ''),
         }
     except RuntimeError:
         raise
@@ -579,6 +636,149 @@ def _read_cache():
             return json.load(f)
     except Exception:
         return None
+
+
+# ── Mesh peer discovery + one-click channel join ────────────────
+# Nodes are discovered over the wifi mesh via Babel's kernel routes.
+# Each peer runs this same nucleusd web app, so we fetch its
+# /api/v1/meshtastic/config to compare channel identity and, on
+# request, apply its channel URL locally (join). Only the channel
+# identity (name/PSK/region/preset/slot via --ch-set-url) is copied —
+# per-node settings (owner, role, tx_power, hop_limit) are untouched.
+
+
+def _babel_peer_ips():
+    """Return mesh node IPs discovered from Babel routes.
+
+    `ip route show proto babel` gives next-hop IPs, each of which is a
+    reachable mesh node running nucleusd.
+    """
+    ips = []
+    try:
+        import re
+        result = subprocess.run(
+            ['ip', 'route', 'show', 'proto', 'babel', 'dev', 'wlan1'],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.strip().split('\n'):
+            if not line:
+                continue
+            m = re.search(r'via\s+(\S+)', line)
+            if m and m.group(1) not in ips:
+                ips.append(m.group(1))
+    except Exception:
+        pass
+    return ips
+
+
+def _fetch_peer_config(ip):
+    """Fetch and summarise one peer's radio config. Returns a dict with
+    reachability + channel identity, never raises."""
+    import urllib.request
+    entry = {
+        'ip': ip,
+        'reachable': False,
+        'channel_name': '',
+        'psk_fingerprint': '',
+        'modem_preset': '',
+        'region': '',
+        'frequency_slot': None,
+        'has_channel_url': False,
+    }
+    try:
+        url = f'http://{ip}:{WEB_PORT}/api/v1/meshtastic/config'
+        with urllib.request.urlopen(url, timeout=PEER_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        cfg = (data or {}).get('config') or {}
+        entry['reachable'] = True
+        entry['channel_name'] = cfg.get('channel_name', '')
+        entry['psk_fingerprint'] = cfg.get('psk_fingerprint', '')
+        entry['modem_preset'] = cfg.get('modem_preset', '')
+        entry['region'] = cfg.get('region', '')
+        entry['frequency_slot'] = cfg.get('frequency_slot')
+        entry['has_channel_url'] = bool(cfg.get('channel_url'))
+    except Exception:
+        pass
+    return entry
+
+
+def peers():
+    """List mesh nodes discovered over wifi and their channel identity.
+
+    Returns {'peers': [...], 'local': {...}} so the frontend can diff each
+    peer against this node and offer a one-click Join. Only nodes reachable
+    over the wifi mesh appear — isolated nodes use the QR / URL-paste path.
+    No radio access, so this is safe to call any time.
+    """
+    ips = _babel_peer_ips()
+    results = []
+    if ips:
+        threads = []
+        out = {}
+
+        def worker(peer_ip):
+            out[peer_ip] = _fetch_peer_config(peer_ip)
+
+        for ip in ips:
+            t = threading.Thread(target=worker, args=(ip,), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=PEER_HTTP_TIMEOUT + 1)
+        results = [out[ip] for ip in ips if ip in out]
+
+    local = _read_cache() or {}
+    return {
+        'peers': results,
+        'local': {
+            'channel_name': local.get('channel_name', ''),
+            'psk_fingerprint': local.get('psk_fingerprint', ''),
+            'modem_preset': local.get('modem_preset', ''),
+            'region': local.get('region', ''),
+            'frequency_slot': local.get('frequency_slot'),
+        },
+    }
+
+
+def config_join_peer(host: str):
+    """Join a mesh peer's LoRa channel by fetching its channel URL and
+    applying it locally (background op — poll op-status).
+
+    Copies channel identity only (name/PSK/region/preset/slot). Local
+    settings (owner, role, tx_power, hop_limit) are left untouched.
+    """
+    if not _radio_detected():
+        raise RadioBadRequest('No radio detected')
+    host = str(host or '').strip()
+    if not host:
+        raise RadioBadRequest('No peer host provided')
+    # Only allow peers we actually discovered over the mesh (prevents this
+    # endpoint being used to pull config from arbitrary hosts).
+    if host not in _babel_peer_ips():
+        raise RadioBadRequest('Host is not a known mesh peer')
+
+    import urllib.request
+    try:
+        url = f'http://{host}:{WEB_PORT}/api/v1/meshtastic/config'
+        with urllib.request.urlopen(url, timeout=PEER_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        peer_url = ((data or {}).get('config') or {}).get('channel_url', '')
+    except Exception as e:
+        raise RadioBadRequest(f'Failed to read peer config: {e}')
+
+    if not peer_url or not _decode_channel_url(peer_url):
+        raise RadioBadRequest('Peer has no valid channel URL')
+
+    def work():
+        rc, out = _run_meshtastic(['--ch-set-url', peer_url])
+        if rc != 0:
+            raise RuntimeError(f'Channel join failed: {out[-300:]}')
+        _wait_for_radio()
+        return _read_config_from_radio()
+
+    if not _start_op('join_peer', work):
+        raise RadioBusy('Another radio operation is in progress')
+    return {'success': True, 'started': True}
 
 
 # ── Exceptions the FastAPI router maps to HTTP status codes ─────
