@@ -20,8 +20,13 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     try:
         with socket.create_connection(("::1", port), timeout=timeout) as s:
             s.settimeout(timeout)
+            # babeld emits a header ending in "ok" on connect, then stays quiet
+            # until given a command. We must send "dump" to get the state dump
+            # (interfaces/neighbours/routes), which ends in a second "ok".
+            s.sendall(b"dump\n")
             buf = b""
-            while b"\n" in buf or len(buf) < 65536:
+            oks = 0
+            while oks < 2 and len(buf) < 262144:
                 try:
                     chunk = s.recv(4096)
                 except socket.timeout:
@@ -29,13 +34,15 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
                 if not chunk:
                     break
                 buf += chunk
-                if b"ok" in buf.split(b"\n")[-2:][0]:
-                    break
-    except (OSError, IndexError):
+                # Count completed "ok" lines: header ok + end-of-dump ok.
+                oks = sum(1 for ln in buf.split(b"\n") if ln.strip() == b"ok")
+    except OSError:
         return neighbours
 
     for line in buf.decode(errors="replace").splitlines():
         parts = line.split()
+        # Format: add neighbour <id> address <ip> if <iface> reach <hex>
+        #         ureach <hex> rxcost <n> txcost <n> cost <n>
         if len(parts) >= 4 and parts[0] == "add" and parts[1] == "neighbour":
             entry = {"id": parts[2]}
             for i in range(3, len(parts) - 1, 2):
