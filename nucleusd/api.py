@@ -23,6 +23,13 @@ WEB_DIR = Path(__file__).parent / "web"
 
 app = FastAPI(title="Nucleus V3 OS", version=__version__)
 
+# Meshtastic radio configurator + CoT bridge status/control endpoints.
+try:
+    from .meshtastic.router import router as meshtastic_router
+    app.include_router(meshtastic_router)
+except Exception:  # meshtastic deps optional off-box / on non-radio nodes
+    pass
+
 
 @app.get("/api/v1/version")
 def get_version() -> dict:

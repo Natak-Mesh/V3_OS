@@ -1,0 +1,52 @@
+---
+# Rendered by nucleusd — DO NOT EDIT. Source: /etc/nucleus/config.yaml
+# meshtasticd runs natively and reads this file at /etc/meshtasticd/config.yaml.
+# We inline the LoRa pin block directly (config.d overlay merging is unreliable
+# and "Module: auto" mis-detects the RAK6421 slot).
+Lora:
+{% if mesh_hat == "rak6421-slot1" %}
+  ### RAK13302 in Slot 1 (RAK6421-13302)
+  Module: sx1262
+  IRQ: 22        # IO6
+  Reset: 16      # IO4
+  Busy: 24       # IO5
+  Enable_Pins:
+    - 12
+    - 13
+  DIO3_TCXO_VOLTAGE: true
+  DIO2_AS_RF_SWITCH: true
+  spidev: spidev0.0
+  TX_GAIN_LORA: [9, 9, 10, 11, 9, 8, 9, 10, 10, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 10, 9, 8]
+{% elif mesh_hat == "rak6421-slot2" %}
+  ### RAK13302 in Slot 2 (RAK6421-13302)
+  Module: sx1262
+  IRQ: 6         # IO1
+  Reset: 16      # IO4
+  Busy: 24       # IO5
+  Enable_Pins:
+    - 12
+    - 13
+  DIO3_TCXO_VOLTAGE: true
+  DIO2_AS_RF_SWITCH: true
+  spidev: spidev0.1
+  TX_GAIN_LORA: [9, 9, 10, 11, 9, 8, 9, 10, 10, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 10, 9, 8]
+{% else %}
+  # Autodetect (HAT+ EEPROM). Use only if the slot blocks above mis-detect.
+  Module: auto
+{% endif %}
+
+GPS:
+{% if mesh_gps == "uart" %}
+  SerialPath: {{ mesh_gps_serial_path }}
+{% endif %}
+
+I2C:
+{% if mesh_gps == "i2c" %}
+  I2CDevice: {{ mesh_i2c_device }}
+{% endif %}
+
+General:
+  MaxNodes: 200
+  ConfigDirectory: /etc/meshtasticd/config.d/
+  AvailableDirectory: /etc/meshtasticd/available.d/
+  APIPort: 4403

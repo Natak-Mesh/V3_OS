@@ -43,6 +43,7 @@ TARGETS: list[Target] = [
     Target("babeld.conf.j2", Path("/etc/babeld.conf"), ("babeld",)),
     Target("smcroute.conf.j2", Path("/etc/smcroute.conf"), ("smcroute",)),
     Target("hostapd.conf.j2", Path("/etc/hostapd/hostapd.conf"), ("hostapd",)),
+    Target("meshtasticd-config.yaml.j2", Path("/etc/meshtasticd/config.yaml"), ("meshtasticd",)),
 ]
 
 
@@ -94,6 +95,32 @@ def _restart(units: list[str]) -> None:
             subprocess.run(["systemctl", "restart", f"{unit}.service"], check=False)
 
 
+def _set_service(unit: str, want_on: bool) -> None:
+    """Enable+start or stop+disable a unit to match desired state. Idempotent."""
+    if want_on:
+        subprocess.run(["systemctl", "enable", "--now", f"{unit}.service"], check=False)
+    else:
+        subprocess.run(["systemctl", "disable", "--now", f"{unit}.service"], check=False)
+
+
+def _reconcile_meshtastic(cfg: NucleusConfig) -> list[str]:
+    """Enable/disable meshtasticd + cot-bridge to match the config flags.
+
+    Runs after templates are written so the units start against fresh config.
+    The cot-bridge only runs when meshtasticd is enabled AND cot_bridge is on.
+    Returns the list of units whose enabled-state was reconciled.
+    """
+    m = cfg.meshtastic
+    touched: list[str] = []
+    _set_service("meshtasticd", m.enabled)
+    touched.append("meshtasticd")
+    _set_service("nucleus-meshtastic-init", m.enabled)
+    touched.append("nucleus-meshtastic-init")
+    _set_service("cot-bridge", m.enabled and m.cot_bridge)
+    touched.append("cot-bridge")
+    return touched
+
+
 def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     """Render, write changed files, restart affected units. Idempotent."""
     env = _env()
@@ -112,11 +139,25 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
             result.changed.append(str(t.dest))
             units_to_restart.update(t.units)
 
-    if not dry_run and units_to_restart:
+    # meshtasticd is enable/disable-driven (not just restart): reconcile its
+    # unit state via _reconcile_meshtastic below, so drop it from the plain
+    # restart set to avoid starting a unit we're about to disable.
+    units_to_restart.discard("meshtasticd")
+
+    if dry_run:
+        return result
+
+    if units_to_restart:
         # Deterministic, dependency-friendly restart order.
         order = ["systemd-networkd", "nucleus-mesh", "babeld", "smcroute", "hostapd"]
         ordered = [u for u in order if u in units_to_restart]
         _restart(ordered)
         result.units_restarted = ordered
+
+    # Reconcile meshtasticd + cot-bridge enabled-state every apply (cheap and
+    # idempotent), then restart meshtasticd if its rendered config changed.
+    result.units_restarted += _reconcile_meshtastic(cfg)
+    if str(Path("/etc/meshtasticd/config.yaml")) in result.changed and cfg.meshtastic.enabled:
+        _restart(["meshtasticd"])
 
     return result

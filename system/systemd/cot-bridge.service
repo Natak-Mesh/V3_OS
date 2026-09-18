@@ -1,0 +1,22 @@
+[Unit]
+Description=ATAK CoT Bridge (Meshtastic LoRa)
+# meshtasticd exposes the radio API on TCP localhost:4403; the bridge needs it.
+After=meshtasticd.service nucleus-meshtastic-init.service network-online.target
+Wants=meshtasticd.service nucleus-meshtastic-init.service
+Requires=meshtasticd.service
+
+[Service]
+Type=simple
+User=natak
+Group=natak
+AmbientCapabilities=CAP_NET_RAW
+Environment=PYTHONUNBUFFERED=1
+# Run the bridge module out of the installed nucleusd venv.
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.meshtastic.cot_bridge
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

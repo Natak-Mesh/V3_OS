@@ -9,6 +9,15 @@ dependencies = [
     "Jinja2>=3.1",
     "fastapi>=0.110",
     "uvicorn>=0.27",
+    # --- Meshtastic CoT bridge + radio configurator ---
+    "meshtastic>=2.3",           # radio client lib + CLI (python -m meshtastic)
+    "pypubsub>=4.0",             # cot_bridge pub/sub event delivery
+    "qrcode>=7.4",               # channel-URL QR rendering (SVG)
+    # protobuf pinned to v6 — takproto / TAKPacket-SDK generate against it.
+    "protobuf>=6,<7",
+    # TAK protocol V1 parser (Natak fork) + TAKPacketV2 compression SDK.
+    "takproto @ git+https://github.com/Natak-Mesh/takproto.git",
+    "meshtastic_tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git@v0.9.1#subdirectory=python",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +31,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["nucleusd"]
+packages = ["nucleusd", "nucleusd.meshtastic"]
 
 [tool.setuptools.dynamic]
 version = { file = ["VERSION"] }

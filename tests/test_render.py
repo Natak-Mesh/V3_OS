@@ -16,8 +16,21 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 10
+    assert len(r) == 11
     assert all(v.strip() for v in r.values())
+
+
+def test_meshtasticd_config():
+    m = rendered()["/etc/meshtasticd/config.yaml"]
+    # RAK6421 slot1 LoRa pin block inlined (defaults).
+    assert "Module: sx1262" in m
+    assert "IRQ: 22" in m
+    assert "Reset: 16" in m
+    assert "Busy: 24" in m
+    assert "spidev: spidev0.0" in m
+    # UART GPS on the Pi GPIO header.
+    assert "SerialPath: /dev/ttyS0" in m
+    assert "APIPort: 4403" in m
 
 
 def test_babeld_has_subnets():

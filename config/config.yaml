@@ -45,3 +45,12 @@ eth0:
   mode: wan          # wan = DHCP client / internet gateway; lan = serve DHCP
   dhcp_pool_offset: 10
   dhcp_pool_size: 100
+
+meshtastic:
+  enabled: true            # run meshtasticd (native) + expose radio to the bridge
+  region: US               # LoRa region; radio won't TX until set
+  hat: rak6421-slot1       # LoRa HAT/slot: rak6421-slot1 | rak6421-slot2 | auto
+  gps: uart                # GPS wiring: off | uart | i2c  (hardware-verified: uart)
+  gps_serial_path: /dev/ttyS0   # UART GPS device (Pi GPIO header = ttyS0)
+  i2c_device: /dev/i2c-1        # only used when gps: i2c
+  cot_bridge: true         # run the ATAK CoT <-> LoRa bridge (cot-bridge.service)

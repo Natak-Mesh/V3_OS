@@ -144,6 +144,32 @@ class Eth0Config(BaseModel):
 
 
 
+class MeshtasticConfig(BaseModel):
+    """Meshtastic LoRa radio (native meshtasticd) + ATAK CoT bridge.
+
+    meshtasticd runs natively (apt package) and exposes its API on TCP
+    localhost:4403. We render /etc/meshtasticd/config.yaml directly rather than
+    relying on config.d overlay merging (which is unreliable) — the `hat` value
+    selects the LoRa pin block and `gps` selects the GPS wiring.
+    """
+
+    enabled: bool = Field(True, description="Run meshtasticd + expose the radio to the CoT bridge.")
+    region: str = Field("US", description="LoRa region code (US, EU_868, ...). Radio won't TX until set.")
+    hat: str = Field(
+        "rak6421-slot1",
+        pattern="^(rak6421-slot1|rak6421-slot2|auto)$",
+        description="LoRa HAT/slot: rak6421-slot1 | rak6421-slot2 | auto.",
+    )
+    gps: str = Field(
+        "uart",
+        pattern="^(off|uart|i2c)$",
+        description="GPS wiring: off | uart | i2c.",
+    )
+    gps_serial_path: str = Field("/dev/ttyS0", description="Serial device for a UART GPS.")
+    i2c_device: str = Field("/dev/i2c-1", description="I2C bus device for an I2C GPS.")
+    cot_bridge: bool = Field(True, description="Run the ATAK CoT <-> LoRa bridge (cot-bridge.service).")
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -152,6 +178,7 @@ class NucleusConfig(BaseModel):
     br_lan: BrLanConfig = Field(default_factory=BrLanConfig)
     ap: ApConfig
     eth0: Eth0Config = Field(default_factory=Eth0Config)
+    meshtastic: MeshtasticConfig = Field(default_factory=MeshtasticConfig)
 
     @field_validator("node", mode="before")
     @classmethod
@@ -239,4 +266,13 @@ class NucleusConfig(BaseModel):
             "eth0_static_ip": self.eth0_lan_ip,
             "eth0_dhcp_offset": self.eth0.dhcp_pool_offset,
             "eth0_dhcp_size": self.eth0.dhcp_pool_size,
+            "mesh_enabled": self.meshtastic.enabled,
+            "mesh_region": self.meshtastic.region,
+            "mesh_hat": self.meshtastic.hat,
+            "mesh_gps": self.meshtastic.gps,
+            "mesh_gps_serial_path": self.meshtastic.gps_serial_path,
+            "mesh_i2c_device": self.meshtastic.i2c_device,
+            "mesh_cot_bridge": self.meshtastic.cot_bridge,
+            "mesh_owner": self.node.hostname,
+            "mesh_owner_short": self.node.short,
         }

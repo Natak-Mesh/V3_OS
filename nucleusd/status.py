@@ -108,9 +108,26 @@ def unit_states(units: tuple[str, ...] = ("systemd-networkd", "nucleus-mesh", "b
     return states
 
 
+def meshtastic_status(host: str = "localhost", port: int = 4403, timeout: float = 1.5) -> dict:
+    """Report meshtasticd/cot-bridge unit states and whether the radio API is up.
+
+    radio_up = the meshtasticd TCP API (localhost:4403) accepts a connection,
+    which is the same signal the CoT bridge uses to reach the radio.
+    """
+    units = unit_states(("meshtasticd", "cot-bridge", "nucleus-meshtastic-init"))
+    radio_up = False
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            radio_up = True
+    except OSError:
+        radio_up = False
+    return {"services": units, "radio_up": radio_up}
+
+
 def collect() -> dict:
     return {
         "interfaces": iface_addrs(),
         "services": unit_states(),
         "babel_neighbours": babel_neighbours(),
+        "meshtastic": meshtastic_status(),
     }

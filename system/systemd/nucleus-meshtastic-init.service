@@ -1,0 +1,16 @@
+[Unit]
+Description=Nucleus Meshtastic first-boot radio config (owner + region)
+After=meshtasticd.service
+Wants=meshtasticd.service
+# Skip cleanly on nodes without meshtasticd enabled (unit is Wanted by the
+# bridge target; the script itself no-ops when meshtastic.enabled is false).
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.meshtastic.radio_init
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
