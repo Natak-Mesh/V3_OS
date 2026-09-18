@@ -1,0 +1,18 @@
+[Unit]
+Description=Nucleus configuration API + web UI (nucleusd)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# uvicorn serves the FastAPI app (REST API + static web UI) on br-lan/localhost.
+ExecStart=/opt/nucleus/venv/bin/uvicorn nucleusd.api:app --host 0.0.0.0 --port 8080
+WorkingDirectory=/opt/nucleus
+Environment=NUCLEUS_CONFIG=/etc/nucleus/config.yaml
+Restart=on-failure
+RestartSec=3
+# Memory guard for 1 GB production nodes.
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Nucleus 802.11s mesh bring-up (wlan1)
+# Needs the interfaces networkd creates; runs before the AP and routing daemons.
+After=systemd-networkd.service sys-subsystem-net-devices-wlan1.device
+Wants=systemd-networkd.service
+Before=hostapd.service babeld.service smcroute.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Rendered from /etc/nucleus/config.yaml by `nucleusctl apply`.
+ExecStart=/opt/nucleus/bin/nucleus-mesh-up.sh
+
+[Install]
+WantedBy=multi-user.target

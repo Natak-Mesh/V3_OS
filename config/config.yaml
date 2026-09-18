@@ -1,0 +1,44 @@
+# ============================================================
+# Nucleus V3 OS — node configuration (single source of truth)
+#
+# Edit this file, then apply with:   sudo nucleusctl apply
+# or via the web UI / REST API (PUT /api/v1/config).
+#
+# You set primitives; the system DERIVES everything else from node.id:
+#   mesh IP        = <mesh.subnet_prefix>.<node.id>
+#   br-lan IP      = <br_lan.subnet_prefix>.1
+#   AP SSID        = <node.id:04d>-nucleus-ap
+#   hostname       = <node.id:04d>-nucleus
+#   IPv6 link-locals = derived deterministically from the hostname
+# ============================================================
+
+node:
+  id: 9              # 1-254, unique per node. Drives all addressing.
+  # name:            # optional hostname override; default '<id:04d>-nucleus'
+
+mesh:
+  ssid: natak_mesh
+  channel: 3         # 2.4 GHz
+  password: "52235223"
+  subnet_prefix: "10.20.1"
+  country: US
+  # --- tuning (ported from Nucleus_OS; leave defaults unless you know why) ---
+  mcast_ttl: 8       # IP TTL forced on br-lan multicast ingress
+  mesh_802_ttl: 8    # 802.11s L2 mesh_ttl / mesh_element_ttl
+  rts_threshold: 500 # RTS/CTS bytes (0=off; 500 recommended for 3+ nodes)
+
+br_lan:
+  subnet_prefix: "10.20.12"
+  dhcp_pool_offset: 10
+  dhcp_pool_size: 50
+  dns: "8.8.8.8"
+
+ap:
+  channel: 36        # 5 GHz
+  password: "52235223"
+  # name:            # optional SSID override; default '<id:04d>-nucleus-ap'
+
+eth0:
+  mode: wan          # wan = DHCP client / internet gateway; lan = serve DHCP
+  dhcp_pool_offset: 10
+  dhcp_pool_size: 100
