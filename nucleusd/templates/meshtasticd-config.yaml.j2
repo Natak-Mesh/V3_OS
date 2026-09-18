@@ -19,13 +19,15 @@ Lora:
   TX_GAIN_LORA: [9, 9, 10, 11, 9, 8, 9, 10, 10, 10, 11, 12, 12, 12, 12, 12, 12, 12, 12, 10, 9, 8]
 {% elif mesh_hat == "rak6421-slot2" %}
   ### RAK13302 in Slot 2 (RAK6421-13302)
+  # Pins match the official lora-RAK6421-13302-slot2.yaml shipped by meshtasticd
+  # (verified on hardware). Do NOT reuse the slot-1 pin numbers here.
   Module: sx1262
-  IRQ: 6         # IO1
-  Reset: 16      # IO4
-  Busy: 24       # IO5
+  IRQ: 18        # IO6
+  Reset: 24      # IO4
+  Busy: 19       # IO5
   Enable_Pins:
-    - 12
-    - 13
+    - 26
+    - 23
   DIO3_TCXO_VOLTAGE: true
   DIO2_AS_RF_SWITCH: true
   spidev: spidev0.1
