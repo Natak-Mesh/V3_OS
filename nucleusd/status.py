@@ -43,15 +43,27 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     # A neighbour advertises its br-lan /24 (10.20.<id>.0/24) via its link-local
     # address; the node's mesh IP is 10.20.1.<id> (see schema). We derive the
     # IPv4 from that route so the UI can show a usable address, not fe80::.
+    #
+    # CRITICAL: the dump lists *every* route learned via a neighbour, including
+    # prefixes that neighbour is merely relaying from other nodes (multi-hop).
+    # Those re-advertised routes share the same "via <ll-ipv6>" as the
+    # neighbour's own prefix, so keying purely on `via` makes two neighbours
+    # collapse onto one IPv4 (the last one parsed wins). We must only accept the
+    # route a neighbour *originates*: `refmetric 0` means the via-neighbour is
+    # the origin of the prefix (its own br-lan /24), never a relayed route.
     via_to_ipv4: dict[str, str] = {}
     for line in buf.decode(errors="replace").splitlines():
         parts = line.split()
-        # add route <id> prefix 10.20.<n>.0/24 ... via <ll-ipv6> if <iface>
+        # add route <id> prefix 10.20.<n>.0/24 ... refmetric <rm> via <ll> if <if>
         if len(parts) >= 4 and parts[0] == "add" and parts[1] == "route":
             try:
                 prefix = parts[parts.index("prefix") + 1]
                 via = parts[parts.index("via") + 1]
+                refmetric = parts[parts.index("refmetric") + 1]
             except (ValueError, IndexError):
+                continue
+            # Only the origin advertises refmetric 0; relayed routes are >0.
+            if refmetric != "0":
                 continue
             octets = prefix.split("/")[0].split(".")
             if len(octets) == 4 and octets[0] == "10" and octets[1] == "20" \

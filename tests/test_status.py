@@ -31,15 +31,49 @@ BABEL_DUMP = (
     "add interface wlan1 up true ipv6 fe80::b2 ipv4 10.20.1.42\n"
     "add neighbour 559159c770 address fe80::a3c3:4e41:d850:bf66 if wlan1 "
     "reach feff ureach 0000 rxcost 258 txcost 256 cost 258\n"
-    "add route 559159ce80 prefix 10.20.46.0/24 installed yes if wlan1\n"
+    "add route 559159ce80 prefix 10.20.46.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:46 metric 258 refmetric 0 "
+    "via fe80::a3c3:4e41:d850:bf66 if wlan1\n"
     "ok\n"
 )
 
 
-def test_babel_neighbours_parsed(monkeypatch):
+# Two directly-connected neighbours. Each originates its own br-lan /24
+# (refmetric 0) AND re-advertises the *other* node's /24 as a relayed route
+# (refmetric > 0) with its own link-local as the via. The relayed lines must be
+# ignored so each neighbour resolves to its own distinct mesh IPv4 — the
+# "same IP for both connected nodes" regression.
+BABEL_DUMP_TWO = (
+    "BABEL 1.0\n"
+    "version babeld-1.13.1\n"
+    "host 0042-nucleus\n"
+    "my-id 2e:cf:67:ff:fe:6d:8b:b6\n"
+    "ok\n"
+    "add interface wlan1 up true ipv6 fe80::b2 ipv4 10.20.1.42\n"
+    "add neighbour AAAAAAAAAA address fe80::aaaa if wlan1 "
+    "reach ffff ureach 0000 rxcost 256 txcost 256 cost 256\n"
+    "add neighbour BBBBBBBBBB address fe80::bbbb if wlan1 "
+    "reach ffff ureach 0000 rxcost 256 txcost 256 cost 256\n"
+    # A originates its own /24
+    "add route r1 prefix 10.20.5.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:05 metric 256 refmetric 0 via fe80::aaaa if wlan1\n"
+    # B originates its own /24
+    "add route r2 prefix 10.20.7.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:07 metric 256 refmetric 0 via fe80::bbbb if wlan1\n"
+    # A relays B's /24 (refmetric > 0) — must NOT map fe80::aaaa to 10.20.1.7
+    "add route r3 prefix 10.20.7.0/24 from ::/0 installed no "
+    "id 00:00:00:00:00:00:00:07 metric 512 refmetric 256 via fe80::aaaa if wlan1\n"
+    # B relays A's /24 (refmetric > 0) — must NOT map fe80::bbbb to 10.20.1.5
+    "add route r4 prefix 10.20.5.0/24 from ::/0 installed no "
+    "id 00:00:00:00:00:00:00:05 metric 512 refmetric 256 via fe80::bbbb if wlan1\n"
+    "ok\n"
+)
+
+
+def _fake_sock_factory(dump):
     class FakeSock:
         def __init__(self):
-            self._buf = BABEL_DUMP.encode()
+            self._buf = dump.encode()
         def settimeout(self, *_): pass
         def sendall(self, *_): pass
         def recv(self, n):
@@ -47,8 +81,12 @@ def test_babel_neighbours_parsed(monkeypatch):
             return chunk
         def __enter__(self): return self
         def __exit__(self, *a): pass
+    return FakeSock
 
-    monkeypatch.setattr(status.socket, "create_connection", lambda *a, **k: FakeSock())
+
+def test_babel_neighbours_parsed(monkeypatch):
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(BABEL_DUMP)())
     nbrs = status.babel_neighbours()
     assert len(nbrs) == 1
     n = nbrs[0]
@@ -56,6 +94,20 @@ def test_babel_neighbours_parsed(monkeypatch):
     assert n["address"] == "fe80::a3c3:4e41:d850:bf66"
     assert n["if"] == "wlan1"
     assert n["cost"] == "258"
+    assert n["ipv4"] == "10.20.1.46"
+
+
+def test_two_neighbours_distinct_ipv4(monkeypatch):
+    """Regression: relayed routes must not collapse two neighbours to one IPv4."""
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(BABEL_DUMP_TWO)())
+    nbrs = status.babel_neighbours()
+    assert len(nbrs) == 2
+    by_addr = {n["address"]: n["ipv4"] for n in nbrs}
+    assert by_addr["fe80::aaaa"] == "10.20.1.5"
+    assert by_addr["fe80::bbbb"] == "10.20.1.7"
+    # Each connected node shows a *distinct* mesh IP.
+    assert by_addr["fe80::aaaa"] != by_addr["fe80::bbbb"]
 
 
 def test_bridge_member_not_absent(monkeypatch):
