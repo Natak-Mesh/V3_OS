@@ -108,7 +108,40 @@ class MessagingService:
         self.lora_enabled = bool(cfg["lora"])
         self._wifi_tx = None
         self._lora_tx = None
+        self._notify_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Local push subscribers (API WS bridges): addr -> expiry epoch.
+        self._subs: dict = {}
+        self._subs_lock = threading.Lock()
         self._stop = threading.Event()
+
+    # ── local push subscribers (for live UI over WS) ────────────
+    SUB_TTL = 20.0  # a subscriber must re-subscribe within this window
+
+    def _subscribe(self, addr) -> None:
+        with self._subs_lock:
+            self._subs[addr] = time.time() + self.SUB_TTL
+
+    def _notify(self, msg: dict) -> None:
+        """Push a new message to all live subscribers (best-effort)."""
+        now = time.time()
+        frame = json.dumps({"event": "message", "message": msg}).encode("utf-8")
+        with self._subs_lock:
+            dead = [a for a, exp in self._subs.items() if exp < now]
+            for a in dead:
+                del self._subs[a]
+            targets = list(self._subs.keys())
+        for a in targets:
+            try:
+                self._notify_tx.sendto(frame, a)
+            except OSError:
+                pass
+
+    def _ingest(self, sender, text, transport, ts=None, mine=False):
+        """store.ingest + push to subscribers when the message is new."""
+        msg, is_new = self.store.ingest(sender, text, transport, ts=ts, mine=mine)
+        if is_new:
+            self._notify(msg)
+        return msg, is_new
 
     # ── send: fan out to BOTH transports ────────────────────────
     def send(self, text: str) -> dict:
@@ -116,7 +149,7 @@ class MessagingService:
         if not text:
             return {"ok": False, "error": "empty message"}
         # Local echo into the store first so the UI shows it immediately.
-        msg, _ = self.store.ingest(self.sender, text, "wifi", mine=True)
+        msg, _ = self._ingest(self.sender, text, "wifi", mine=True)
         self._send_wifi(text)
         if self.lora_enabled:
             self._send_lora(text)
@@ -165,7 +198,7 @@ class MessagingService:
             # Skip our own multicast echo (we already stored it on send).
             if sender == self.sender:
                 continue
-            self.store.ingest(sender, text, "wifi", ts=ts)
+            self._ingest(sender, text, "wifi", ts=ts)
         sock.close()
 
     def _setup_wifi_tx(self) -> None:
@@ -205,7 +238,7 @@ class MessagingService:
             text = data[1 + nlen:].decode("utf-8", "ignore")
             if not text:
                 continue
-            self.store.ingest(sender, text, "lora")
+            self._ingest(sender, text, "lora")
         sock.close()
 
     # ── Control socket (API/CLI) ────────────────────────────────
@@ -226,6 +259,11 @@ class MessagingService:
                 req = json.loads(data.decode("utf-8"))
             except Exception:
                 self._reply(sock, addr, {"ok": False, "error": "bad json"})
+                continue
+            # subscribe: remember the caller's addr for live push notifications.
+            if req.get("cmd") == "subscribe":
+                self._subscribe(addr)
+                self._reply(sock, addr, {"ok": True, "ttl": self.SUB_TTL})
                 continue
             self._reply(sock, addr, self._handle(req))
         sock.close()

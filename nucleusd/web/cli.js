@@ -134,6 +134,9 @@
 
   async function go(pageKey, push = true) {
     if (!PAGES[pageKey]) return;
+    // Tear down the page we're leaving (close sockets, etc.).
+    const leaving = PAGES[state.page];
+    if (leaving && leaving.onLeave) { try { leaving.onLeave(S); } catch (e) {} }
     if (push && pageKey !== state.page) state.stack.push(state.page);
     state.page = pageKey;
     state.sel = 0;
@@ -141,6 +144,9 @@
     stopTimer();
     await build(false);
     startTimer();
+    // Spin up the page we're entering (open sockets, subscribe, etc.).
+    const entering = PAGES[state.page];
+    if (entering && entering.onEnter) { try { entering.onEnter(S); } catch (e) {} }
   }
 
   function back() {

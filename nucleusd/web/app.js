@@ -90,6 +90,21 @@ let HB = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
 let MSG_DRAFT = "";
+// Live chat state: messages cache + WebSocket, populated by the messaging page.
+let MSG_CACHE = [];        // ordered oldest→newest, keyed by id
+let MSG_WS = null;         // active WebSocket, or null when the page is closed
+let MSG_WS_POLL = false;   // true once WS failed and we fell back to polling
+
+// Merge a message into MSG_CACHE by id (updates transports/mine if it exists).
+function msgUpsert(m) {
+  if (!m || !m.id) return;
+  const i = MSG_CACHE.findIndex((x) => x.id === m.id);
+  if (i >= 0) MSG_CACHE[i] = m;
+  else MSG_CACHE.push(m);
+}
+
+// Voice state: channel list cache for the TUI voice page.
+let VOICE_CH = null;
 
 function meshFillFrom(cfg) {
   M = {
@@ -127,7 +142,7 @@ const PAGES = {
         items: [
           { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
           { type: "nav", label: "MESSAGING", to: "messaging" },
-          { type: "button", label: "VOICE (PTT)", onEnter: () => { location.href = "/voice"; } },
+          { type: "nav", label: "VOICE (PTT)", to: "voice" },
           { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
           { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
           { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
@@ -458,26 +473,34 @@ const PAGES = {
   // per-message badge shows which transport(s) delivered it.
   messaging: {
     title: "Messaging",
+    // A live WebSocket pushes new messages (see onEnter). `dynamic` stays as a
+    // fallback poll: build() only fetches when the WS isn't delivering.
     dynamic: 3000,
+    onEnter: (S) => msgWsOpen(S),
+    onLeave: () => msgWsClose(),
     async build() {
-      const { ok, d } = await jget("/api/v1/messaging/messages");
+      // When the WS is live, render straight from the pushed cache (no fetch).
+      // Otherwise fall back to a one-shot history fetch into the same cache.
+      let ok = true;
+      if (!MSG_WS || MSG_WS_POLL) {
+        const r = await jget("/api/v1/messaging/messages");
+        ok = r.ok;
+        if (ok) (r.d.messages || []).forEach(msgUpsert);
+      }
       let h = `<div class="content">`;
       if (!ok) {
         h += `<div class="warn">messaging service unavailable</div>`;
+      } else if (!MSG_CACHE.length) {
+        h += `<div class="off">no messages yet</div>`;
       } else {
-        const msgs = d.messages || [];
-        if (!msgs.length) {
-          h += `<div class="off">no messages yet</div>`;
-        } else {
-          h += `<table><tr><th>When</th><th>From</th><th>Message</th><th>Via</th></tr>`;
-          msgs.slice(-100).forEach((m) => {
-            const via = (m.transports || []).join("+") || "—";
-            const who = m.mine ? "me" : esc(m.sender);
-            h += `<tr><td>${ago(m.ts)}</td><td class="${m.mine ? "ok" : ""}">${who}</td>` +
-              `<td>${esc(m.text)}</td><td>${esc(via)}</td></tr>`;
-          });
-          h += `</table>`;
-        }
+        h += `<table><tr><th>When</th><th>From</th><th>Message</th><th>Via</th></tr>`;
+        MSG_CACHE.slice(-100).forEach((m) => {
+          const via = (m.transports || []).join("+") || "—";
+          const who = m.mine ? "me" : esc(m.sender);
+          h += `<tr><td>${ago(m.ts)}</td><td class="${m.mine ? "ok" : ""}">${who}</td>` +
+            `<td>${esc(m.text)}</td><td>${esc(via)}</td></tr>`;
+        });
+        h += `</table>`;
       }
       h += `</div>`;
       return {
@@ -488,6 +511,58 @@ const PAGES = {
           { type: "button", label: "» Send (WiFi + LoRa)", onEnter: sendMessage },
         ],
       };
+    },
+  },
+
+  // Voice (PTT) status + channel control. The full soft-PTT handset lives at
+  // /voice; this page mirrors the daemon's control socket so an operator can
+  // see mesh audio state and switch channel from the TUI.
+  voice: {
+    title: "Voice",
+    dynamic: 5000,
+    async build() {
+      const { ok, d } = await jget("/api/v1/voice/status");
+      let h = `<div class="content">`;
+      const items = [{ type: "content", html: "" }];  // placeholder, filled below
+      if (!ok) {
+        h += `<div class="warn">voice daemon unavailable</div></div>`;
+        items[0].html = h;
+        items.push({ type: "button", label: "» Open soft-PTT handset (/voice)",
+          onEnter: () => { location.href = "/voice"; } });
+        return { items };
+      }
+      const talkers = (d.sources || []).length;
+      h += `<div class="kv"><span>PTT</span>` +
+        `<span class="${d.ptt ? "ok" : "off"}">${d.ptt ? "TX" : "idle"}</span></div>`;
+      h += `<div class="kv"><span>Channel</span><span>${esc(d.channel)} ` +
+        `(${esc(d.channel_label || "—")})</span></div>`;
+      h += `<div class="kv"><span>Talkers</span>` +
+        `<span class="${talkers ? "ok" : ""}">${talkers}</span></div>`;
+      h += `<div class="kv"><span>Handset</span>` +
+        `<span class="${d.hardware ? "ok" : "off"}">` +
+        `${d.hardware ? "OpenVLM card " + esc(d.card) : "none (phone only)"}</span></div>`;
+      const lora = d.lora || {};
+      h += `<div class="kv"><span>Transport</span><span>${esc(d.transport || "ip")}</span></div>`;
+      if (lora.enabled) {
+        h += `<div class="kv"><span>LoRa STT</span>` +
+          `<span class="${lora.ready ? "ok" : "warn"}">` +
+          `${lora.ready ? esc(lora.stt || "ready") : "not ready"}</span></div>`;
+      }
+      h += `</div>`;
+      items[0].html = h;
+
+      // Channel selector — options come from the daemon's named channel list.
+      VOICE_CH = { current: d.channel, list: d.channels || [] };
+      const opts = VOICE_CH.list.map((c) => String(c.n));
+      if (opts.length) {
+        items.push({ type: "fselect", key: "voice_channel", label: "Set channel",
+          options: opts, value: String(d.channel),
+          onChange: (v) => VOICE_CH.current = parseInt(v, 10) });
+        items.push({ type: "button", label: "» Switch channel", onEnter: setVoiceChannel });
+      }
+      items.push({ type: "button", label: "» Open soft-PTT handset (/voice)",
+        onEnter: () => { location.href = "/voice"; } });
+      return { items };
     },
   },
 };
@@ -612,6 +687,58 @@ async function sendMessage(S) {
   if (!ok) return S.msg("send failed: " + (d.detail || "error"), false);
   MSG_DRAFT = "";
   S.msg("sent");
+  // The WS push will echo our own message back; still reload for immediate view.
+  return S.reload();
+}
+
+// ── Messaging live push (WebSocket) ────────────────────────────
+// Opens a WS to the daemon-backed /api/v1/messaging/ws endpoint. New messages
+// arrive as {event:"message",message:{...}}; the initial frame is the history.
+// Falls back to the page's 3s poll if the socket can't be established.
+function msgWsOpen(S) {
+  msgWsClose();
+  MSG_WS_POLL = false;
+  let ws;
+  try {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/api/v1/messaging/ws");
+  } catch (e) {
+    MSG_WS_POLL = true;
+    return;
+  }
+  MSG_WS = ws;
+  ws.onmessage = (ev) => {
+    let obj;
+    try { obj = JSON.parse(ev.data); } catch (e) { return; }
+    if (obj.event === "history") {
+      MSG_CACHE = [];
+      (obj.messages || []).forEach(msgUpsert);
+    } else if (obj.event === "message") {
+      msgUpsert(obj.message);
+    } else return;
+    if (S) S.reload();
+  };
+  ws.onclose = () => {
+    // Fall back to polling only if this socket is still the active one.
+    if (MSG_WS === ws) { MSG_WS = null; MSG_WS_POLL = true; }
+  };
+  ws.onerror = () => { MSG_WS_POLL = true; };
+}
+
+function msgWsClose() {
+  if (MSG_WS) {
+    try { MSG_WS.onclose = null; MSG_WS.close(); } catch (e) {}
+    MSG_WS = null;
+  }
+}
+
+async function setVoiceChannel(S) {
+  if (!VOICE_CH) return S.msg("no channel selected", false);
+  const n = parseInt(VOICE_CH.current, 10);
+  if (Number.isNaN(n)) return S.msg("pick a channel first", false);
+  const { ok, d } = await jsend("POST", "/api/v1/voice/channel", { n });
+  if (!ok) return S.msg("switch failed: " + (d.detail || "error"), false);
+  S.msg("channel " + n);
   return S.reload();
 }
 

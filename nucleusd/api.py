@@ -38,6 +38,14 @@ try:
 except Exception:
     pass
 
+# Voice status/channel endpoints — thin layer over the nucleus-voice daemon's
+# control socket. Audio stays on the daemon's own WebSocket (/voice-ws).
+try:
+    from .voice.router import router as voice_router
+    app.include_router(voice_router)
+except Exception:
+    pass
+
 
 @app.get("/api/v1/version")
 def get_version() -> dict:
