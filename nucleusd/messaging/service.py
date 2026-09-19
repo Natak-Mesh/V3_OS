@@ -52,6 +52,25 @@ def log(msg: str) -> None:
     print(f"[messaging] {msg}", flush=True)
 
 
+def iface_ipv4(ifname: str) -> str | None:
+    """Return the primary IPv4 address of ``ifname``, or None if unavailable.
+
+    Used to scope multicast TX/join to the mesh interface without needing
+    CAP_NET_RAW (SO_BINDTODEVICE requires it; IP_MULTICAST_IF / the join's
+    interface address do not, so this works for the unprivileged daemon).
+    """
+    import fcntl
+    import struct
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        packed = struct.pack("256s", ifname.encode("utf-8")[:15])
+        return socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, packed)[20:24])
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
 def load_config() -> dict:
     """Read messaging.* + identity from config.yaml into a flat dict."""
     out = {
@@ -175,7 +194,15 @@ class MessagingService:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", self.wifi_port))
-        mreq = socket.inet_aton(self.wifi_group) + socket.inet_aton("0.0.0.0")
+        # Join on the mesh interface's address, not INADDR_ANY. With 0.0.0.0 the
+        # kernel joins on the default-route iface (eth0 here), so multicast from
+        # the mesh never reaches us. Scope the join to wlan1's IP.
+        if_ip = iface_ipv4(MCAST_IF)
+        join_ip = if_ip or "0.0.0.0"
+        if if_ip is None:
+            log(f"WARNING: {MCAST_IF} has no IPv4 addr; "
+                f"joining multicast on default iface (RX may not work)")
+        mreq = socket.inet_aton(self.wifi_group) + socket.inet_aton(join_ip)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         sock.settimeout(1.0)
         log(f"WiFi RX on {self.wifi_group}:{self.wifi_port}")
@@ -205,11 +232,17 @@ class MessagingService:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         ttl = int(self.cfg.get("mesh_ttl", 8))
         s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-        try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
-                         MCAST_IF.encode())
-        except OSError:
-            pass  # not permitted / iface absent off-box; multicast still works
+        # Egress multicast out the mesh interface. SO_BINDTODEVICE needs
+        # CAP_NET_RAW (we run unprivileged as User=natak, so it silently fails
+        # and TX follows the default route out eth0). IP_MULTICAST_IF, set to
+        # wlan1's address, pins the egress iface without any capability.
+        if_ip = iface_ipv4(MCAST_IF)
+        if if_ip is not None:
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                         socket.inet_aton(if_ip))
+        else:
+            log(f"WARNING: {MCAST_IF} has no IPv4 addr; "
+                f"multicast TX will follow the default route (may not reach mesh)")
         self._wifi_tx = s
 
     # ── LoRa transport (via cot_bridge relay) ───────────────────
