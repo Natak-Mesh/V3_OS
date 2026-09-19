@@ -17,6 +17,16 @@ server {
 
     server_name {{ hostname }}.local _;
 
+    # Mesh PTT voice: soft-PTT handset WebSocket → nucleus-voice daemon (:5557).
+    location /voice-ws {
+        proxy_pass http://127.0.0.1:5557;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
@@ -38,6 +48,17 @@ server {
 
     ssl_certificate /etc/nucleus/certs/nucleus-web.crt;
     ssl_certificate_key /etc/nucleus/certs/nucleus-web.key;
+
+    # Mesh PTT voice: soft-PTT handset WebSocket → nucleus-voice daemon (:5557).
+    # HTTPS is required for browser mic access, so this block is the real path.
+    location /voice-ws {
+        proxy_pass http://127.0.0.1:5557;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:8080;

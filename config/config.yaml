@@ -54,3 +54,30 @@ meshtastic:
   gps_serial_path: /dev/ttyS0   # UART GPS device (Pi GPIO header = ttyS0)
   i2c_device: /dev/i2c-1        # only used when gps: i2c
   cot_bridge: true         # run the ATAK CoT <-> LoRa bridge (cot-bridge.service)
+
+messaging:
+  enabled: true            # run the text messaging service (nucleus-messaging.service)
+  wifi_group: 239.10.10.60 # UDP multicast group for the WiFi transport (wlan1 mesh)
+  wifi_port: 17020         # UDP port for the WiFi transport
+  lora: true               # also send/receive over Meshtastic LoRa (standard text)
+  dedupe_window_secs: 60   # window to match the LoRa + WiFi copies of one message
+  history_limit: 500       # max messages retained / returned to the UI
+
+voice:
+  enabled: true            # run the mesh PTT voice daemon (nucleus-voice.service)
+  channel: 1               # startup voice channel (multicast group 239.10.10.N)
+  channels: "1:Command"    # named channel list "N:Label,N:Label"
+  jitter_ms: 80            # per-source RX jitter buffer before playback (ms)
+  tx_gain: 4.0             # software mic gain for the OpenVLM (hardware) path
+  # --- LoRa voice-text (Vosk STT -> Meshtastic text -> Piper TTS); needs models ---
+  lora_enabled: false      # enable LoRa voice-text
+  lora_max_secs: 30.0      # max speech captured per utterance (s)
+  lora_portnum: 260        # Meshtastic app portnum for LoRa voice-text
+  lora_hop_limit: 0        # 0 = direct RF neighbors only (no rebroadcast)
+  stt_engine: vosk         # vosk (fielded default) | sherpa (opt-in)
+  # stt_model:             # optional model override (dir name or abs path)
+  # stt_grammar:           # optional phrase-list file (vosk only)
+  stt_cleanup: true        # HPF + WebRTC noise-suppression on the STT mic tap
+  # --- live Codec2 voice stream over LoRa (advanced) ---
+  stream_enabled: false
+  stream_portnum: 256

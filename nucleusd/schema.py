@@ -186,6 +186,73 @@ class MeshtasticConfig(BaseModel):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig, description="Presence heartbeat settings.")
 
 
+class VoiceConfig(BaseModel):
+    """Mesh PTT voice (nucleus-voice.service).
+
+    Real-time push-to-talk voice over the wlan1 802.11s mesh (UDP multicast).
+    Two interchangeable PTT front-ends feed the same transport:
+      * Hardware PTT — OpenVLM CM108 tactical headset (hot-plug), and
+      * Soft PTT     — a phone/browser on the node AP, via the /voice page (WS).
+    An optional LoRa voice-text path (Vosk STT → one Meshtastic text packet →
+    Piper TTS) is relayed through the CoT bridge. See docs/voice.md.
+    """
+
+    enabled: bool = Field(True, description="Run the mesh PTT voice daemon (nucleus-voice.service).")
+    channel: int = Field(1, ge=1, le=254, description="Startup voice channel (multicast group 239.10.10.N).")
+    channels: str = Field(
+        "1:Command",
+        description='Named channel list "N:Label,N:Label" (e.g. "1:Command,2:Squad").',
+    )
+    jitter_ms: int = Field(80, ge=20, le=500, description="Per-source RX jitter buffer before playback (ms).")
+    tx_gain: float = Field(4.0, ge=0.0, le=32.0, description="Software mic gain for the OpenVLM (hardware) path.")
+    # LoRa voice-text (STT/TTS) — optional, off by default (needs models).
+    lora_enabled: bool = Field(False, description="Enable LoRa voice-text (Vosk STT -> Meshtastic text -> Piper TTS).")
+    lora_max_secs: float = Field(30.0, ge=1.0, le=60.0, description="Max speech captured per LoRa utterance (s).")
+    lora_portnum: int = Field(260, ge=1, le=511, description="Meshtastic app portnum for LoRa voice-text.")
+    lora_hop_limit: int = Field(0, ge=0, le=7, description="Hop limit for LoRa voice packets (0 = direct RF only).")
+    stt_engine: str = Field(
+        "vosk", pattern="^(vosk|sherpa)$",
+        description="STT engine: vosk (fielded default) | sherpa (opt-in).",
+    )
+    stt_model: str = Field("", description="STT model override (dir name under the model dir, or abs path).")
+    stt_grammar: str = Field("", description="Optional phrase-list file constraining the recognizer (vosk only).")
+    stt_cleanup: bool = Field(True, description="HPF + WebRTC noise-suppression on the STT mic tap.")
+    # Live Codec2 voice stream over LoRa (VLoRa-compatible) — advanced/off.
+    stream_enabled: bool = Field(False, description="Enable live Codec2 voice streaming over LoRa.")
+    stream_portnum: int = Field(256, ge=1, le=511, description="Meshtastic app portnum for the Codec2 stream.")
+
+
+class MessagingConfig(BaseModel):
+    """Text messaging that delivers over two parallel transports into one store.
+
+    A single message service (nucleus-messaging.service) owns one message store
+    and fans every outbound message out over BOTH:
+      * WiFi   — UDP multicast on the wlan1 802.11s mesh (fast, free, multi-hop).
+      * LoRa   — standard Meshtastic TEXT_MESSAGE_APP (portnum 1) via the CoT
+                 bridge, so plain Meshtastic radios/phones on the same channel
+                 interoperate transparently.
+    Inbound messages from either transport (including Meshtastic-only radios)
+    land in the same store and are de-duplicated by (sender, text) within a
+    short window. See docs/messaging.md.
+    """
+
+    enabled: bool = Field(True, description="Run the text messaging service (nucleus-messaging.service).")
+    wifi_group: str = Field(
+        "239.10.10.60",
+        description="UDP multicast group for the WiFi transport (on the wlan1 mesh).",
+    )
+    wifi_port: int = Field(17020, ge=1, le=65535, description="UDP port for the WiFi transport.")
+    lora: bool = Field(True, description="Also send/receive over Meshtastic LoRa (standard text, interoperable).")
+    dedupe_window_secs: int = Field(
+        60, ge=5, le=600,
+        description="Window for matching the LoRa and WiFi copies of one message (5–600s).",
+    )
+    history_limit: int = Field(
+        500, ge=10, le=10000,
+        description="Max messages retained in the store / returned to the UI.",
+    )
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -195,6 +262,8 @@ class NucleusConfig(BaseModel):
     ap: ApConfig
     eth0: Eth0Config = Field(default_factory=Eth0Config)
     meshtastic: MeshtasticConfig = Field(default_factory=MeshtasticConfig)
+    messaging: MessagingConfig = Field(default_factory=MessagingConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
 
     @field_validator("node", mode="before")
     @classmethod

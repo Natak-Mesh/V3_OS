@@ -31,6 +31,13 @@ try:
 except Exception:  # meshtastic deps optional off-box / on non-radio nodes
     pass
 
+# Text messaging (WiFi + LoRa) endpoints — thin layer over the messaging daemon.
+try:
+    from .messaging.router import router as messaging_router
+    app.include_router(messaging_router)
+except Exception:
+    pass
+
 
 @app.get("/api/v1/version")
 def get_version() -> dict:

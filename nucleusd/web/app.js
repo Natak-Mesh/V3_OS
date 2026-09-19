@@ -89,6 +89,7 @@ let MESH_CFG_OPEN = false;
 let HB = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
+let MSG_DRAFT = "";
 
 function meshFillFrom(cfg) {
   M = {
@@ -125,6 +126,8 @@ const PAGES = {
       return {
         items: [
           { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
+          { type: "nav", label: "MESSAGING", to: "messaging" },
+          { type: "button", label: "VOICE (PTT)", onEnter: () => { location.href = "/voice"; } },
           { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
           { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
           { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
@@ -449,6 +452,44 @@ const PAGES = {
       return { items };
     },
   },
+
+  // Messaging: one conversation, delivered over WiFi + LoRa into a single store.
+  // A message from a plain Meshtastic radio appears here like any other; the
+  // per-message badge shows which transport(s) delivered it.
+  messaging: {
+    title: "Messaging",
+    dynamic: 3000,
+    async build() {
+      const { ok, d } = await jget("/api/v1/messaging/messages");
+      let h = `<div class="content">`;
+      if (!ok) {
+        h += `<div class="warn">messaging service unavailable</div>`;
+      } else {
+        const msgs = d.messages || [];
+        if (!msgs.length) {
+          h += `<div class="off">no messages yet</div>`;
+        } else {
+          h += `<table><tr><th>When</th><th>From</th><th>Message</th><th>Via</th></tr>`;
+          msgs.slice(-100).forEach((m) => {
+            const via = (m.transports || []).join("+") || "—";
+            const who = m.mine ? "me" : esc(m.sender);
+            h += `<tr><td>${ago(m.ts)}</td><td class="${m.mine ? "ok" : ""}">${who}</td>` +
+              `<td>${esc(m.text)}</td><td>${esc(via)}</td></tr>`;
+          });
+          h += `</table>`;
+        }
+      }
+      h += `</div>`;
+      return {
+        items: [
+          { type: "content", html: h },
+          { type: "ftext", key: "msg_text", label: "Message", value: "",
+            max: 200, onChange: (v) => MSG_DRAFT = v },
+          { type: "button", label: "» Send (WiFi + LoRa)", onEnter: sendMessage },
+        ],
+      };
+    },
+  },
 };
 
 
@@ -562,6 +603,16 @@ async function saveHeartbeat(S) {
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("heartbeat saved — active within one bridge cycle (~10s)");
   else S.msg("save failed: " + JSON.stringify(d.detail), false);
+}
+
+async function sendMessage(S) {
+  const text = (MSG_DRAFT || "").trim();
+  if (!text) return S.msg("type a message first", false);
+  const { ok, d } = await jsend("POST", "/api/v1/messaging/messages", { text });
+  if (!ok) return S.msg("send failed: " + (d.detail || "error"), false);
+  MSG_DRAFT = "";
+  S.msg("sent");
+  return S.reload();
 }
 
 async function saveCfg(S) {

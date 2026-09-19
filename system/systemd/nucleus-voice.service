@@ -1,0 +1,20 @@
+[Unit]
+Description=Nucleus mesh PTT voice (OpenVLM hardware PTT + soft PTT over WS)
+# Voice rides the wlan1 802.11s mesh (UDP multicast). The optional LoRa
+# voice-text path relays through the CoT bridge's localhost relay.
+After=nucleus-mesh.service network-online.target
+Wants=nucleus-mesh.service
+
+[Service]
+Type=simple
+# Root required for /dev/hidraw* (OpenVLM hardware PTT) access.
+User=root
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.voice.daemon
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

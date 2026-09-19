@@ -31,7 +31,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["nucleusd", "nucleusd.meshtastic"]
+packages = ["nucleusd", "nucleusd.meshtastic", "nucleusd.messaging", "nucleusd.voice"]
 
 [tool.setuptools.dynamic]
 version = { file = ["VERSION"] }

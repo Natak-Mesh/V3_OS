@@ -93,6 +93,17 @@ STREAM_SEQ_TERM = 65535                   # reserved seq: stream end
 STREAM_CODEC2_ID = 2                      # codec id carried in INIT
 STREAM_SILENCE_TIMEOUT = 0.5              # s of no input = PTT released
 
+# ── LoRa TEXT relay (nucleus-messaging <-> radio) ───────────────
+# Standard Meshtastic text messaging (portnum TEXT_MESSAGE_APP = 1) so plain
+# Meshtastic radios/phones on the same channel interoperate. The bridge owns
+# the radio, so the messaging daemon hands us UTF-8 text over localhost UDP and
+# we sendText() it; inbound text packets are forwarded back to the daemon.
+# See docs/messaging.md
+TEXT_MESSAGE_PORTNUM = 1
+TEXT_RELAY_LISTEN = ("127.0.0.1", 5560)    # messaging daemon -> bridge -> LoRa TX
+TEXT_RELAY_FORWARD = ("127.0.0.1", 5561)   # LoRa RX -> bridge -> messaging daemon
+TEXT_MAX_BYTES = 200                        # keep one utterance in one packet
+
 # ── meshtasticd TCP connection (USB radio or Pi HAT) ─────────────
 # When MESHTASTICD_ENABLED=true in mesh.conf the radio is controlled by
 # meshtasticd (Docker) and exposes its API over TCP instead of USB serial.
@@ -119,6 +130,9 @@ voice_portnum = None      # int app port for voice packets (VOICE_LORA_PORTNUM)
 voice_hop_limit = 0       # hop limit for voice TX (VOICE_LORA_HOP_LIMIT)
 voice_port_match = set()  # values decoded["portnum"] may take for that port
 voice_fwd_sock = None     # UDP socket for forwarding RX voice to the daemon
+
+# LoRa text relay state (initialized in main; None = text relay disabled)
+text_fwd_sock = None      # UDP socket for forwarding RX text to the messaging daemon
 
 # LoRa voice STREAM relay state (None = streaming voice disabled)
 stream_portnum = None     # int app port (VOICE_LORA_STREAM_PORTNUM)
@@ -162,6 +176,9 @@ stats = {
     "voice_tx": 0,
     "voice_rx": 0,
     "voice_errors": 0,
+    "text_tx": 0,
+    "text_rx": 0,
+    "text_errors": 0,
     "stream_tx": 0,
     "stream_rx": 0,
     "stream_errors": 0,
@@ -190,16 +207,17 @@ def _read_mesh_conf():
             raw = yaml.safe_load(f) or {}
         m = raw.get("meshtastic", {}) or {}
         cfg["MESHTASTICD_ENABLED"] = "true" if m.get("enabled", True) else "false"
-        # Voice-over-LoRa transports (optional; disabled unless configured).
-        voice = m.get("voice", {}) or {}
-        if voice.get("enabled"):
+        # Voice-over-LoRa transports (top-level `voice:` section in V3 config;
+        # validated by nucleusd.schema.VoiceConfig). Disabled unless configured.
+        voice = raw.get("voice", {}) or {}
+        if voice.get("lora_enabled"):
             cfg["VOICE_LORA_ENABLED"] = "true"
-            cfg["VOICE_LORA_PORTNUM"] = str(voice.get("portnum", 256))
-            cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("hop_limit", 0))
+            cfg["VOICE_LORA_PORTNUM"] = str(voice.get("lora_portnum", 260))
+            cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("lora_hop_limit", 0))
         if voice.get("stream_enabled"):
             cfg["VOICE_LORA_STREAM_ENABLED"] = "true"
             cfg["VOICE_LORA_STREAM_PORTNUM"] = str(voice.get("stream_portnum", 256))
-            cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("hop_limit", 0))
+            cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("lora_hop_limit", 0))
         # Presence heartbeat: tiny periodic broadcast so peers stay visible in
         # the node list even without ATAK traffic. Defaults on at 5 min.
         hb = m.get("heartbeat", {}) or {}
@@ -294,6 +312,53 @@ def _voice_relay_loop(sock):
             stats["voice_errors"] += 1
             logger.error(f"Voice TX error: {e}")
     logger.info("Voice relay exiting")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  LoRa TEXT RELAY: nucleus-messaging <-> Meshtastic radio
+#  Standard TEXT_MESSAGE_APP so plain Meshtastic radios interoperate.
+# ═══════════════════════════════════════════════════════════════
+
+def _text_relay_loop(sock):
+    """Thread loop: messaging daemon hands us UTF-8 text → sendText over LoRa.
+
+    The wire payload is raw UTF-8 (no custom header) so the bytes on the air
+    are indistinguishable from a message typed on any Meshtastic client.
+    """
+    logger.info(
+        f"Text relay: listening on {TEXT_RELAY_LISTEN[0]}:{TEXT_RELAY_LISTEN[1]} "
+        f"→ LoRa TEXT_MESSAGE_APP (portnum {TEXT_MESSAGE_PORTNUM})"
+    )
+    while True:
+        try:
+            data, _addr = sock.recvfrom(2048)
+        except OSError:
+            break
+        if not data:
+            continue
+        # Truncate on UTF-8 boundary to one packet (never fragment).
+        if len(data) > TEXT_MAX_BYTES:
+            data = data[:TEXT_MAX_BYTES]
+            while data:
+                try:
+                    data.decode("utf-8")
+                    break
+                except UnicodeDecodeError:
+                    data = data[:-1]
+        try:
+            text = data.decode("utf-8", "ignore")
+        except Exception:
+            text = ""
+        if not text:
+            continue
+        try:
+            iface.sendText(text, wantAck=False)
+            stats["text_tx"] += 1
+            logger.info(f"TEXT TX → LoRa | {len(text)} chars")
+        except Exception as e:
+            stats["text_errors"] += 1
+            logger.error(f"Text TX error: {e}")
+    logger.info("Text relay exiting")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -673,6 +738,33 @@ def onReceive(packet, interface):
                 logger.error(f"Voice RX forward error: {e}")
         return
 
+    # LoRa standard text message → forward to the messaging daemon. Covers
+    # messages from other Nucleus nodes AND from plain Meshtastic radios.
+    if text_fwd_sock is not None and portnum in ("TEXT_MESSAGE_APP", TEXT_MESSAGE_PORTNUM, str(TEXT_MESSAGE_PORTNUM)):
+        payload = decoded.get("payload")
+        if payload:
+            # Resolve a human sender name from the node DB (falls back to id).
+            sender_name = from_id
+            try:
+                node_info = iface.nodes.get(f"{from_id}")
+                if node_info:
+                    u = node_info.get("user", {})
+                    sender_name = u.get("longName") or u.get("shortName") or from_id
+            except Exception:
+                pass
+            try:
+                name_b = sender_name.encode("utf-8")[:63]
+                text_fwd_sock.sendto(
+                    struct.pack("<B", len(name_b)) + name_b + payload,
+                    TEXT_RELAY_FORWARD,
+                )
+                stats["text_rx"] += 1
+                logger.info(f"TEXT RX ← LoRa | {sender_name} | {len(payload)}B")
+            except Exception as e:
+                stats["text_errors"] += 1
+                logger.error(f"Text RX forward error: {e}")
+        return
+
     if portnum != "ATAK_FORWARDER":
         return
 
@@ -937,6 +1029,7 @@ def main():
     global compressor, builder, cot_parser, mcast_send_sock, iface, local_subnet
     global voice_portnum, voice_hop_limit, voice_port_match, voice_fwd_sock
     global stream_portnum, stream_hop_limit, stream_port_match, stream_fwd_sock
+    global text_fwd_sock
 
     parser = argparse.ArgumentParser(description="ATAK CoT Bridge (Stage 7)")
     parser.add_argument("--port", default=None, help="Serial port (default: auto-detect)")
@@ -1045,6 +1138,23 @@ def main():
     else:
         logger.info("LoRa voice relay disabled (VOICE_LORA_ENABLED != true)")
 
+    # ── LoRa text relay for nucleus-messaging ────────────────
+    # Always on: standard Meshtastic text is universal. The daemon simply
+    # doesn't connect these sockets if messaging.lora is disabled.
+    text_relay_sock = None
+    text_fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        text_relay_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        text_relay_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        text_relay_sock.bind(TEXT_RELAY_LISTEN)
+        threading.Thread(
+            target=_text_relay_loop, args=(text_relay_sock,), daemon=True,
+        ).start()
+    except Exception as e:
+        logger.error(f"Could not start text relay: {e}")
+        text_relay_sock = None
+        text_fwd_sock = None
+
     # ── LoRa voice stream relay (live Codec2) ────────────────
     stream_portnum, stream_hop_limit = _load_stream_config()
     stream_raw_sock = None
@@ -1093,6 +1203,11 @@ def main():
         if stream_portnum is not None:
             logger.info(f"Stream stats: tx={stats['stream_tx']} "
                          f"rx={stats['stream_rx']} errors={stats['stream_errors']}")
+        if text_relay_sock:
+            try:
+                text_relay_sock.close()
+            except Exception:
+                pass
         if voice_relay_sock:
             try:
                 voice_relay_sock.close()

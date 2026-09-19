@@ -91,6 +91,8 @@ install -m 644 "$REPO/system/systemd/brlan-setup.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleusd.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/cot-bridge.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-meshtastic-init.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-messaging.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-voice.service" /etc/systemd/system/
 install -m 644 "$REPO/system/udev/60-meshtastic.rules" /etc/udev/rules.d/
 mkdir -p /etc/NetworkManager/conf.d
 install -m 644 "$REPO/system/networkmanager/unmanaged-devices.conf" \
@@ -134,7 +136,7 @@ fi
 # avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
 # :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
 systemctl enable avahi-daemon nginx
-systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service
+systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service
 
 echo
 echo "Install complete. Next:"

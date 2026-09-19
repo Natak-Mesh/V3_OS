@@ -1,0 +1,21 @@
+[Unit]
+Description=Nucleus text messaging (WiFi + LoRa)
+# WiFi transport rides the wlan1 802.11s mesh; LoRa path relays through the
+# CoT bridge's localhost text relay (bridge owns the radio).
+After=nucleus-mesh.service cot-bridge.service network-online.target
+Wants=nucleus-mesh.service cot-bridge.service
+
+[Service]
+Type=simple
+User=natak
+Group=natak
+Environment=PYTHONUNBUFFERED=1
+StateDirectory=nucleus
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.messaging.service
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
