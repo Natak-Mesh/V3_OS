@@ -97,6 +97,52 @@ def test_babel_neighbours_parsed(monkeypatch):
     assert n["ipv4"] == "10.20.1.46"
 
 
+# Whole-mesh route table: node 5 is a direct neighbour (refmetric 0), node 9 is
+# multi-hop reached via node 5 (refmetric > 0). Only installed=yes routes count;
+# the backup route to node 9 (installed no) and self/gateway prefixes are ignored.
+BABEL_DUMP_ROUTES = (
+    "BABEL 1.0\n"
+    "version babeld-1.13.1\n"
+    "host 0042-nucleus\n"
+    "my-id 2e:cf:67:ff:fe:6d:8b:b6\n"
+    "ok\n"
+    "add interface wlan1 up true ipv6 fe80::b2 ipv4 10.20.1.42\n"
+    "add neighbour AAAAAAAAAA address fe80::aaaa if wlan1 "
+    "reach ffff ureach 0000 rxcost 256 txcost 256 cost 256\n"
+    # node 5: direct (refmetric 0), installed
+    "add route r1 prefix 10.20.5.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:05 metric 256 refmetric 0 via fe80::aaaa if wlan1\n"
+    # node 5 also originates so via_to_ipv4[fe80::aaaa] = 10.20.1.5
+    # node 9: multi-hop via node 5 (refmetric > 0), installed
+    "add route r2 prefix 10.20.9.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:09 metric 512 refmetric 256 via fe80::aaaa if wlan1\n"
+    # node 9 backup route: installed no -> ignored
+    "add route r3 prefix 10.20.9.0/24 from ::/0 installed no "
+    "id 00:00:00:00:00:00:00:09 metric 999 refmetric 700 via fe80::aaaa if wlan1\n"
+    # gateway/self prefixes -> ignored (0.0.0.0/0, 10.20.1.0/24)
+    "add route r4 prefix 0.0.0.0/0 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:05 metric 256 refmetric 0 via fe80::aaaa if wlan1\n"
+    "add route r5 prefix 10.20.1.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:05 metric 256 refmetric 0 via fe80::aaaa if wlan1\n"
+    "ok\n"
+)
+
+
+def test_babel_routes_direct_and_multihop(monkeypatch):
+    """Whole-mesh view: direct vs multi-hop nodes, backups/self excluded."""
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(BABEL_DUMP_ROUTES)())
+    routes = status.babel_routes()
+    by_node = {r["node"]: r for r in routes}
+    assert set(by_node) == {"10.20.1.5", "10.20.1.9"}
+    assert by_node["10.20.1.5"]["direct"] is True
+    assert by_node["10.20.1.5"]["via"] is None
+    assert by_node["10.20.1.5"]["metric"] == 256
+    assert by_node["10.20.1.9"]["direct"] is False
+    assert by_node["10.20.1.9"]["via"] == "10.20.1.5"
+    assert by_node["10.20.1.9"]["metric"] == 512
+
+
 def test_two_neighbours_distinct_ipv4(monkeypatch):
     """Regression: relayed routes must not collapse two neighbours to one IPv4."""
     monkeypatch.setattr(status.socket, "create_connection",

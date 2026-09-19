@@ -83,6 +83,8 @@ const PSK_MODES = ["keep", "random", "default", "none"];
 
 // Working copy of the radio config, filled from the cached read.
 let M = null;
+// Whether the collapsible radio-config section is expanded on the Meshtastic page.
+let MESH_CFG_OPEN = false;
 // Working copy of the presence-heartbeat node config (separate from radio).
 let HB = null;
 // Working copy of the full node config, edited on the CONFIG page.
@@ -122,11 +124,11 @@ const PAGES = {
     build() {
       return {
         items: [
-          { type: "nav", label: "MONITOR", to: "monitor" },
-          { type: "nav", label: "MESHTASTIC RADIO", to: "meshtastic" },
-          { type: "nav", label: "SYSTEM", to: "system" },
-          { type: "nav", label: "CONFIG", to: "config" },
-          { type: "nav", label: "UPDATE", to: "update" },
+          { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
+          { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
+          { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
+          { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
+          { type: "nav", label: "SYSTEM UPDATE", to: "update" },
         ],
       };
     },
@@ -139,21 +141,19 @@ const PAGES = {
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
-      const nbrs = st.babel_neighbours || [];
+      const routes = st.babel_routes || [];
       let h = "";
 
-      h += `<div class="content"><div class="page-title" style="padding-left:0">Wifi mesh neighbours</div>`;
-      if (!nbrs.length) {
-        h += `<div class="off">no neighbours — this node does not see any other node over wlan1</div>`;
+      h += `<div class="content"><div class="page-title" style="padding-left:0">Wifi mesh nodes</div>`;
+      if (!routes.length) {
+        h += `<div class="off">no nodes — this node does not see any other node over wlan1</div>`;
       } else {
-        h += `<table><tr><th>Neighbour</th><th>Iface</th><th>Cost</th><th>Link</th></tr>`;
-        nbrs.forEach((n) => {
-          const good = n.cost && parseInt(n.cost, 10) < 512;
-          const linkGood = n.link_pct != null && n.link_pct >= 75;
-          const link = n.link_pct != null ? n.link_pct + "%" : "—";
-          h += `<tr><td>${esc(n.ipv4 || n.address || n.id)}</td><td>${esc(n["if"] || "—")}</td>` +
-            `<td class="${good ? "ok" : "warn"}">${esc(n.cost || "—")}</td>` +
-            `<td class="${linkGood ? "ok" : "warn"}">${esc(link)}</td></tr>`;
+        h += `<table><tr><th>Node</th><th>Via</th><th>Cost</th></tr>`;
+        routes.forEach((r) => {
+          const via = r.direct ? "direct" : esc(r.via || "—");
+          const cost = (r.metric / 256).toFixed(1);
+          h += `<tr><td>${esc(r.node)}</td><td>${via}</td>` +
+            `<td>${esc(cost)}</td></tr>`;
         });
         h += `</table>`;
       }
@@ -222,7 +222,7 @@ const PAGES = {
         `bridge: ${s.service_active ? "running" : "stopped"}` +
         (s.bridge_enabled ? " (enabled)" : " (disabled)");
 
-      if (!M) {
+      if (MESH_CFG_OPEN && !M) {
         const { d } = await jget(MB + "/config");
         if (d.config) meshFillFrom(d.config);
       }
@@ -233,11 +233,19 @@ const PAGES = {
           `<div class="hint" style="padding-left:0">Blue = channel identity (must match ` +
           `across nodes) · Amber = this node only</div></div>`,
       }, {
-        type: "button", label: "» Read config from radio",
-        onEnter: (S) => radioOp(S, MB + "/config/read", null, "read"),
+        type: "button",
+        label: MESH_CFG_OPEN ? "« Radio configuration" : "» Radio configuration",
+        onEnter: (S) => { MESH_CFG_OPEN = !MESH_CFG_OPEN; return S.reload(); },
       }];
 
-      if (M) {
+      if (MESH_CFG_OPEN) {
+        items.push({
+          type: "button", label: "» Read config from radio",
+          onEnter: (S) => radioOp(S, MB + "/config/read", null, "read"),
+        });
+      }
+
+      if (MESH_CFG_OPEN && M) {
         items.push(
           { type: "ftext", key: "owner", label: "Long name", value: M.owner, max: 39, onChange: (v) => M.owner = v },
           { type: "ftext", key: "owner_short", label: "Short name", value: M.owner_short, max: 4, onChange: (v) => M.owner_short = v },

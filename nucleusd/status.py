@@ -10,19 +10,17 @@ import socket
 import subprocess
 
 
-def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
-    """Parse Babel's local read-only monitor socket for current neighbours.
+def _babel_dump(port: int = 33123, timeout: float = 2.0) -> bytes:
+    """Fetch Babel's read-only state dump from its local monitor socket.
 
     babeld exposes a plaintext dump on local-port (33123 in our babeld.conf).
-    We connect, read the initial state dump, and extract neighbour lines.
+    It emits a header ending in "ok" on connect, then stays quiet until given a
+    command. We send "dump" to get the state dump (interfaces/neighbours/routes),
+    which ends in a second "ok". Returns b"" on any connection error.
     """
-    neighbours: list[dict] = []
     try:
         with socket.create_connection(("::1", port), timeout=timeout) as s:
             s.settimeout(timeout)
-            # babeld emits a header ending in "ok" on connect, then stays quiet
-            # until given a command. We must send "dump" to get the state dump
-            # (interfaces/neighbours/routes), which ends in a second "ok".
             s.sendall(b"dump\n")
             buf = b""
             oks = 0
@@ -36,25 +34,22 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
                 buf += chunk
                 # Count completed "ok" lines: header ok + end-of-dump ok.
                 oks = sum(1 for ln in buf.split(b"\n") if ln.strip() == b"ok")
+            return buf
     except OSError:
-        return neighbours
+        return b""
 
-    # First pass: map each neighbour's link-local IPv6 -> its mesh IPv4.
-    # A neighbour advertises its br-lan /24 (10.20.<id>.0/24) via its link-local
-    # address; the node's mesh IP is 10.20.1.<id> (see schema). We derive the
-    # IPv4 from that route so the UI can show a usable address, not fe80::.
-    #
-    # CRITICAL: the dump lists *every* route learned via a neighbour, including
-    # prefixes that neighbour is merely relaying from other nodes (multi-hop).
-    # Those re-advertised routes share the same "via <ll-ipv6>" as the
-    # neighbour's own prefix, so keying purely on `via` makes two neighbours
-    # collapse onto one IPv4 (the last one parsed wins). We must only accept the
-    # route a neighbour *originates*: `refmetric 0` means the via-neighbour is
-    # the origin of the prefix (its own br-lan /24), never a relayed route.
+
+def _via_to_ipv4(buf: bytes) -> dict[str, str]:
+    """Map each neighbour's link-local IPv6 -> its mesh IPv4 (10.20.1.<id>).
+
+    A neighbour advertises its br-lan /24 (10.20.<id>.0/24) via its link-local
+    address. Only the origin advertises refmetric 0; relayed (multi-hop) routes
+    share the same "via" but carry refmetric > 0, so keying on `via` alone would
+    collapse multiple neighbours onto one IPv4. We accept only originated routes.
+    """
     via_to_ipv4: dict[str, str] = {}
     for line in buf.decode(errors="replace").splitlines():
         parts = line.split()
-        # add route <id> prefix 10.20.<n>.0/24 ... refmetric <rm> via <ll> if <if>
         if len(parts) >= 4 and parts[0] == "add" and parts[1] == "route":
             try:
                 prefix = parts[parts.index("prefix") + 1]
@@ -62,14 +57,69 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
                 refmetric = parts[parts.index("refmetric") + 1]
             except (ValueError, IndexError):
                 continue
-            # Only the origin advertises refmetric 0; relayed routes are >0.
             if refmetric != "0":
                 continue
             octets = prefix.split("/")[0].split(".")
             if len(octets) == 4 and octets[0] == "10" and octets[1] == "20" \
                     and octets[3] == "0" and octets[2] not in ("1", "0"):
                 via_to_ipv4[via] = f"10.20.1.{octets[2]}"
+    return via_to_ipv4
 
+
+def babel_routes(port: int = 33123, timeout: float = 2.0) -> list[dict]:
+    """Parse installed Babel routes to every reachable mesh node.
+
+    Unlike babel_neighbours (1-hop only), this covers the whole mesh: one row
+    per node's br-lan /24 (10.20.<id>.0/24) that Babel has selected (installed).
+    Returns node IPv4, next-hop IPv4 (or None if direct), and raw metric.
+    """
+    routes: list[dict] = []
+    buf = _babel_dump(port, timeout)
+    if not buf:
+        return routes
+    via_to_ipv4 = _via_to_ipv4(buf)
+    for line in buf.decode(errors="replace").splitlines():
+        parts = line.split()
+        if not (len(parts) >= 4 and parts[0] == "add" and parts[1] == "route"):
+            continue
+        try:
+            prefix = parts[parts.index("prefix") + 1]
+            via = parts[parts.index("via") + 1]
+            metric = parts[parts.index("metric") + 1]
+            installed = parts[parts.index("installed") + 1]
+            refmetric = parts[parts.index("refmetric") + 1]
+        except (ValueError, IndexError):
+            continue
+        if installed != "yes":
+            continue
+        # Only mesh node br-lan prefixes (10.20.<id>.0/24), excluding self(1)/0.
+        octets = prefix.split("/")[0].split(".")
+        if not (len(octets) == 4 and octets[0] == "10" and octets[1] == "20"
+                and octets[3] == "0" and octets[2] not in ("1", "0")):
+            continue
+        try:
+            metric_int = int(metric)
+        except ValueError:
+            continue
+        direct = refmetric == "0"
+        routes.append({
+            "node": f"10.20.1.{octets[2]}",
+            "via": None if direct else via_to_ipv4.get(via, via),
+            "metric": metric_int,
+            "direct": direct,
+        })
+    routes.sort(key=lambda r: r["node"])
+    return routes
+
+
+def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
+    """Parse Babel's local read-only monitor socket for current neighbours."""
+    neighbours: list[dict] = []
+    buf = _babel_dump(port, timeout)
+    if not buf:
+        return neighbours
+
+    via_to_ipv4 = _via_to_ipv4(buf)
     for line in buf.decode(errors="replace").splitlines():
         parts = line.split()
         # Format: add neighbour <id> address <ip> if <iface> reach <hex>
@@ -153,6 +203,7 @@ def collect() -> dict:
         "interfaces": iface_addrs(),
         "services": unit_states(),
         "babel_neighbours": babel_neighbours(),
+        "babel_routes": babel_routes(),
         "meshtastic": {"services": unit_states(
             ("meshtasticd", "cot-bridge", "nucleus-meshtastic-init"))},
     }
