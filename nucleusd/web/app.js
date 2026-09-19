@@ -101,6 +101,9 @@ function msgUpsert(m) {
   const i = MSG_CACHE.findIndex((x) => x.id === m.id);
   if (i >= 0) MSG_CACHE[i] = m;
   else MSG_CACHE.push(m);
+  // Keep oldest→newest by ts: WS pushes, poll merges and late LoRa copies can
+  // arrive out of order. Stable tiebreak on id so equal-ts entries don't jitter.
+  MSG_CACHE.sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 // Voice state: channel list cache for the TUI voice page.
@@ -487,7 +490,8 @@ const PAGES = {
         ok = r.ok;
         if (ok) (r.d.messages || []).forEach(msgUpsert);
       }
-      let h = `<div class="content">`;
+      let h = `<div class="hint">Sends over WiFi + LoRa; the Via badge shows which transport delivered each message.</div>`;
+      h += `<div class="content">`;
       if (!ok) {
         h += `<div class="warn">messaging service unavailable</div>`;
       } else if (!MSG_CACHE.length) {
@@ -506,9 +510,10 @@ const PAGES = {
       return {
         items: [
           { type: "content", html: h },
-          { type: "ftext", key: "msg_text", label: "Message", value: "",
-            max: 200, onChange: (v) => MSG_DRAFT = v },
-          { type: "button", label: "» Send (WiFi + LoRa)", onEnter: sendMessage },
+          { type: "compose", key: "msg_text", value: MSG_DRAFT, max: 200,
+            placeholder: "Type a message",
+            sendLabel: "Send", onChange: (v) => MSG_DRAFT = v,
+            onSubmit: (S, text) => sendMessage(S, text) },
         ],
       };
     },
@@ -680,8 +685,8 @@ async function saveHeartbeat(S) {
   else S.msg("save failed: " + JSON.stringify(d.detail), false);
 }
 
-async function sendMessage(S) {
-  const text = (MSG_DRAFT || "").trim();
+async function sendMessage(S, text) {
+  text = (text != null ? text : MSG_DRAFT || "").trim();
   if (!text) return S.msg("type a message first", false);
   const { ok, d } = await jsend("POST", "/api/v1/messaging/messages", { text });
   if (!ok) return S.msg("send failed: " + (d.detail || "error"), false);

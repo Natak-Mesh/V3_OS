@@ -83,7 +83,7 @@ class MessageStore:
                 "transports": [transport],
                 "mine": bool(mine),
             }
-            self._messages.append(msg)
+            self._insert_ordered(msg)
             self._recent[key] = msg
             if len(self._messages) > self.history_limit:
                 drop = self._messages[: len(self._messages) - self.history_limit]
@@ -92,6 +92,23 @@ class MessageStore:
                     self._recent.pop(d["id"], None)
             self._save()
             return msg, True
+
+    def _insert_ordered(self, msg: dict) -> None:
+        """Insert msg keeping _messages sorted oldest→newest by ts.
+
+        A late LoRa/relay copy can arrive with an earlier ts than messages
+        already stored; place it by timestamp so history reads in order rather
+        than by arrival. Ties keep insertion order (bisect on ts only).
+        """
+        ts = msg["ts"]
+        lo, hi = 0, len(self._messages)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self._messages[mid]["ts"] <= ts:
+                lo = mid + 1
+            else:
+                hi = mid
+        self._messages.insert(lo, msg)
 
     def _expire(self, now: float) -> None:
         """Drop entries out of the dedupe window from the match index only.
@@ -120,6 +137,8 @@ class MessageStore:
                     m = json.loads(line)
                     self._messages.append(m)
                     self._recent[m["id"]] = m
+            # Persisted lines may be in arrival order; normalise to ts order.
+            self._messages.sort(key=lambda m: m["ts"])
             self._messages = self._messages[-self.history_limit:]
         except OSError:
             pass

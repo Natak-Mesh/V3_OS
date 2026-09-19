@@ -15,8 +15,12 @@
       <span><span class="k">mesh</span> <span class="v" id="h-mesh">—</span></span>
     </div>
 
-    <!-- Only this scrolls; header and control bar are fixed. -->
+    <!-- Only this scrolls; header, compose dock and control bar are fixed. -->
     <div id="view"></div>
+
+    <!-- Pinned compose dock: pages with a `compose` item render it here so the
+         input stays put and is never pushed around by the growing log. -->
+    <div id="compose-dock"></div>
 
     <!-- Fixed control set, identical on every page. -->
     <div id="ctrl">

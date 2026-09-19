@@ -32,7 +32,7 @@
   };
   window.__shell = S;
 
-  const selectable = (it) => it && it.type !== "content";
+  const selectable = (it) => it && it.type !== "content" && it.type !== "compose";
   function firstSelectable() {
     for (let i = 0; i < state.items.length; i++) if (selectable(state.items[i])) return i;
     return -1;
@@ -47,11 +47,15 @@
   }
 
   // ── Rendering ────────────────────────────────────────────────
+  const dock = document.getElementById("compose-dock");
+
   function render() {
     let html = `<div class="page-title">${(PAGES[state.page] || {}).title || ""}</div>`;
     html += `<div id="shell-msg" class="msg"></div>`;
+    let composeIdx = -1;
     state.items.forEach((it, idx) => {
       if (it.type === "content") { html += it.html || ""; return; }
+      if (it.type === "compose") { composeIdx = idx; return; }  // rendered in dock
       const sel = idx === state.sel;
       const editing = sel && state.editing;
       const cls = "row" + (sel ? " sel" : "") + (editing ? " editing" : "");
@@ -70,7 +74,14 @@
         `<span class="cur">${cur}</span>` +
         `<span class="label">${escHtml(it.label || "")}</span>${valHtml}</div></div>`;
     });
+
+    // Preserve focus + caret across rebuilds (dynamic refresh / WS push) so a
+    // live message arriving never interrupts what the operator is typing.
+    const ae = document.activeElement;
+    const composeWasFocused = ae && ae.id === "compose-input";
+    const caret = composeWasFocused ? ae.selectionStart : null;
     view.innerHTML = html;
+    renderDock(composeIdx, composeWasFocused, caret);
 
     // Row taps: select, then activate/edit (rows stay directly tappable).
     view.querySelectorAll(".row-wrap").forEach((el) => {
@@ -90,6 +101,37 @@
       if (inp) { inp.focus(); inp.select && inp.select(); }
     }
     scrollSelIntoView();
+  }
+
+  // Render the pinned compose dock outside the scrolling viewport. When the
+  // page has no compose item the dock is emptied and hidden.
+  function renderDock(composeIdx, wasFocused, caret) {
+    if (!dock) return;
+    if (composeIdx < 0) { dock.innerHTML = ""; dock.style.display = "none"; return; }
+    const it = state.items[composeIdx];
+    dock.style.display = "";
+    dock.innerHTML =
+      `<div class="compose-row">` +
+      `<input id="compose-input" class="compose-input"` +
+      ` value="${escAttr(it.value)}"` + (it.max ? ` maxlength="${it.max}"` : "") +
+      ` placeholder="${escAttr(it.placeholder || "")}">` +
+      `<button class="compose-send">${escHtml(it.sendLabel || "Send")}</button></div>`;
+    const compose = document.getElementById("compose-input");
+    compose.addEventListener("input", () => {
+      it.value = compose.value;
+      it.onChange && it.onChange(compose.value);
+    });
+    compose.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault(); ev.stopPropagation(); submitCompose(it);
+      }
+    });
+    const btn = dock.querySelector(".compose-send");
+    if (btn) btn.addEventListener("click", () => submitCompose(it));
+    if (wasFocused) {
+      compose.focus();
+      if (caret != null) try { compose.setSelectionRange(caret, caret); } catch (e) {}
+    }
   }
 
   function scrollSelIntoView() {
@@ -207,6 +249,17 @@
     }
     state.editing = false;
     render();
+  }
+
+  // Submit a compose row: fire onSubmit with the trimmed text, then clear.
+  function submitCompose(it) {
+    if (!it || it.type !== "compose") return;
+    const text = (it.value || "").trim();
+    it.value = "";
+    it.onChange && it.onChange("");
+    const inp = document.getElementById("compose-input");
+    if (inp) { inp.value = ""; inp.focus(); }
+    if (text && it.onSubmit) it.onSubmit(S, text);
   }
 
   // ── Controls: buttons + keyboard + hold-to-repeat ────────────

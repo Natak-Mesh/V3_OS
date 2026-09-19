@@ -66,6 +66,26 @@ def test_history_limit_trims_oldest():
     assert texts == ["msg2", "msg3", "msg4"]
 
 
+def test_out_of_order_arrival_sorted_by_ts():
+    # A late LoRa copy arrives after a newer message; history must read by ts,
+    # not by arrival order.
+    s = MessageStore(dedupe_window_secs=5, history_limit=100)
+    s.ingest("a", "first", "wifi", ts=1000.0)
+    s.ingest("b", "third", "wifi", ts=1002.0)
+    s.ingest("c", "second", "lora", ts=1001.0)   # arrives last, older ts
+    assert [m["text"] for m in s.history()] == ["first", "second", "third"]
+
+
+def test_persistence_reorders_arrival_order(tmp_path):
+    # JSONL persisted in arrival order must load normalised to ts order.
+    p = tmp_path / "messages.jsonl"
+    with open(p, "w") as f:
+        f.write('{"id":"x","sender":"a","text":"late","ts":1002.0,"transports":["wifi"],"mine":false}\n')
+        f.write('{"id":"y","sender":"b","text":"early","ts":1000.0,"transports":["wifi"],"mine":false}\n')
+    s = MessageStore(dedupe_window_secs=60, history_limit=100, persist_path=str(p))
+    assert [m["text"] for m in s.history()] == ["early", "late"]
+
+
 def test_persistence_roundtrip(tmp_path):
     p = tmp_path / "messages.jsonl"
     s = MessageStore(dedupe_window_secs=60, history_limit=100, persist_path=str(p))
