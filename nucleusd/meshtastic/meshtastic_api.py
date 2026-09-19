@@ -782,6 +782,37 @@ def config_join_peer(host: str):
     return {'success': True, 'started': True}
 
 
+# ── LoRa node visibility (does my radio hear the other radios?) ──
+# The cot-bridge writes /tmp/meshtastic_nodes.json every 15s from the
+# radio's live NodeDB (see cot_bridge._dump_nodes). Reading that file is
+# instant and needs no radio access, so it is safe to poll from the UI.
+NODES_DUMP_PATH = "/tmp/meshtastic_nodes.json"
+
+
+def nodes():
+    """Return LoRa nodes this radio has recently heard over RF.
+
+    Sourced from the cot-bridge's node dump (NodeDB snapshot), not a fresh
+    radio connection, so it never contends with the bridge for the radio.
+    Each node carries id, names, last_heard (epoch), snr and hops_away.
+
+    'bridge_running' tells the UI whether the dump is being refreshed; a
+    stale/missing file with the bridge down means we simply cannot know
+    what the radio hears (the bridge owns the radio exclusively).
+    """
+    data = None
+    try:
+        with open(NODES_DUMP_PATH) as f:
+            data = json.load(f)
+    except Exception:
+        data = None
+    return {
+        'nodes': (data or {}).get('nodes', []),
+        'dumped_at': (data or {}).get('timestamp'),
+        'bridge_running': _service_is_active(),
+    }
+
+
 # ── Exceptions the FastAPI router maps to HTTP status codes ─────
 class RadioBadRequest(Exception):
     """400 — bad input or no radio detected."""

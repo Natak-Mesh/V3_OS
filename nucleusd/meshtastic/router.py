@@ -76,6 +76,12 @@ def config_channel_url(body: ChannelUrlBody) -> dict:
     return _handle(mx.config_channel_url, body.url)
 
 
+@router.get("/nodes")
+def nodes() -> dict:
+    """LoRa nodes this radio has recently heard over RF (from the bridge dump)."""
+    return mx.nodes()
+
+
 @router.get("/peers")
 def peers() -> dict:
     return mx.peers()

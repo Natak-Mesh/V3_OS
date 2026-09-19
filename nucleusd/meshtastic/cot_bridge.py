@@ -200,6 +200,11 @@ def _read_mesh_conf():
             cfg["VOICE_LORA_STREAM_ENABLED"] = "true"
             cfg["VOICE_LORA_STREAM_PORTNUM"] = str(voice.get("stream_portnum", 256))
             cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("hop_limit", 0))
+        # Presence heartbeat: tiny periodic broadcast so peers stay visible in
+        # the node list even without ATAK traffic. Defaults on at 5 min.
+        hb = m.get("heartbeat", {}) or {}
+        cfg["HEARTBEAT_ENABLED"] = "true" if hb.get("enabled", True) else "false"
+        cfg["HEARTBEAT_INTERVAL"] = str(hb.get("interval_secs", 300))
     except OSError:
         pass
     except Exception as e:  # malformed YAML must not crash the bridge
@@ -754,7 +759,12 @@ def _extract_uid_callsign(cot_xml):
 
 NODE_DUMP_PATH = "/tmp/meshtastic_nodes.json"
 NODE_DUMP_INTERVAL = 15  # seconds
-NODE_MAX_AGE = 3600  # seconds — exclude nodes not heard in this long
+NODE_MAX_AGE = 900  # seconds (15 min) — exclude nodes not heard in this long
+
+# Presence heartbeat: tiny broadcast on a PRIVATE_APP portnum so peers keep
+# seeing this node in their list without any ATAK traffic. Receiving bridges
+# count ANY packet toward _node_last_seen, so no RX handling is needed.
+HEARTBEAT_PORTNUM = 258
 
 
 def _dump_nodes():
@@ -823,6 +833,22 @@ def _dump_nodes():
 
     except Exception as e:
         logger.warning(f"Node dump error: {e}")
+
+
+def _send_heartbeat():
+    """Broadcast a tiny presence packet so peers keep us in their node list.
+
+    Sent on HEARTBEAT_PORTNUM with no ACK and a 1-byte payload — cheap airtime.
+    Any received packet updates the peer's _node_last_seen, so this alone keeps
+    a node visible with no ATAK traffic.
+    """
+    if iface is None:
+        return
+    try:
+        iface.sendData(b"\x01", portNum=HEARTBEAT_PORTNUM, wantAck=False)
+        logger.info("Presence heartbeat sent")
+    except Exception as e:
+        logger.warning(f"Heartbeat TX error: {e}")
 
 
 def onConnection(interface, topic=pub.AUTO_TOPIC):
@@ -1075,6 +1101,7 @@ def main():
 
     # ── Keep alive ───────────────────────────────────────────
     last_node_dump = 0
+    last_heartbeat = 0
     try:
         while True:
             time.sleep(10)
@@ -1089,6 +1116,18 @@ def main():
                 if now - last_node_dump >= NODE_DUMP_INTERVAL:
                     _dump_nodes()
                     last_node_dump = now
+
+                # Presence heartbeat (re-read config each pass so a UI change
+                # takes effect without restarting the bridge).
+                _hb = _read_mesh_conf()
+                if _hb.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes"):
+                    try:
+                        _hb_iv = max(60, int(_hb.get("HEARTBEAT_INTERVAL", "300")))
+                    except ValueError:
+                        _hb_iv = 300
+                    if now - last_heartbeat >= _hb_iv:
+                        _send_heartbeat()
+                        last_heartbeat = now
 
                 # Periodic cleanup of expired RX UIDs
                 with _rx_lock:

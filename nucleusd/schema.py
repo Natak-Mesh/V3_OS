@@ -144,6 +144,21 @@ class Eth0Config(BaseModel):
 
 
 
+class HeartbeatConfig(BaseModel):
+    """Presence heartbeat sent by the CoT bridge.
+
+    A tiny periodic broadcast so peers keep this node in their LoRa node list
+    even when no ATAK traffic is flowing. Read live by cot-bridge (no restart
+    needed). Nodes drop off a peer's list after 15 min of silence.
+    """
+
+    enabled: bool = Field(True, description="Send the periodic presence heartbeat.")
+    interval_secs: int = Field(
+        300, ge=60, le=3600,
+        description="Seconds between heartbeats (60–3600). Default 300 (5 min).",
+    )
+
+
 class MeshtasticConfig(BaseModel):
     """Meshtastic LoRa radio (native meshtasticd) + ATAK CoT bridge.
 
@@ -168,6 +183,7 @@ class MeshtasticConfig(BaseModel):
     gps_serial_path: str = Field("/dev/ttyS0", description="Serial device for a UART GPS.")
     i2c_device: str = Field("/dev/i2c-1", description="I2C bus device for an I2C GPS.")
     cot_bridge: bool = Field(True, description="Run the ATAK CoT <-> LoRa bridge (cot-bridge.service).")
+    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig, description="Presence heartbeat settings.")
 
 
 class NucleusConfig(BaseModel):

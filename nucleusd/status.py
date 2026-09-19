@@ -39,6 +39,25 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     except OSError:
         return neighbours
 
+    # First pass: map each neighbour's link-local IPv6 -> its mesh IPv4.
+    # A neighbour advertises its br-lan /24 (10.20.<id>.0/24) via its link-local
+    # address; the node's mesh IP is 10.20.1.<id> (see schema). We derive the
+    # IPv4 from that route so the UI can show a usable address, not fe80::.
+    via_to_ipv4: dict[str, str] = {}
+    for line in buf.decode(errors="replace").splitlines():
+        parts = line.split()
+        # add route <id> prefix 10.20.<n>.0/24 ... via <ll-ipv6> if <iface>
+        if len(parts) >= 4 and parts[0] == "add" and parts[1] == "route":
+            try:
+                prefix = parts[parts.index("prefix") + 1]
+                via = parts[parts.index("via") + 1]
+            except (ValueError, IndexError):
+                continue
+            octets = prefix.split("/")[0].split(".")
+            if len(octets) == 4 and octets[0] == "10" and octets[1] == "20" \
+                    and octets[3] == "0" and octets[2] not in ("1", "0"):
+                via_to_ipv4[via] = f"10.20.1.{octets[2]}"
+
     for line in buf.decode(errors="replace").splitlines():
         parts = line.split()
         # Format: add neighbour <id> address <ip> if <iface> reach <hex>
@@ -47,6 +66,15 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
             entry = {"id": parts[2]}
             for i in range(3, len(parts) - 1, 2):
                 entry[parts[i]] = parts[i + 1]
+            # Resolve a human-usable IPv4 from the neighbour's advertised route.
+            entry["ipv4"] = via_to_ipv4.get(entry.get("address", ""))
+            # reach is a 16-bit hex history of recent hellos; expose it as a
+            # link-quality percentage (bits set / 16) instead of raw hex.
+            try:
+                bits = bin(int(entry.get("reach", "0"), 16)).count("1")
+                entry["link_pct"] = round(bits / 16 * 100)
+            except ValueError:
+                entry["link_pct"] = None
             neighbours.append(entry)
     return neighbours
 

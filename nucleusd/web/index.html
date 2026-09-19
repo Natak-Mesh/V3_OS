@@ -2,132 +2,31 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Nucleus V3</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; background: #0d1117; color: #c9d1d9; }
-    header { background: #161b22; padding: 12px 20px; border-bottom: 1px solid #30363d; }
-    h1 { font-size: 18px; margin: 0; }
-    main { padding: 20px; max-width: 900px; margin: 0 auto; }
-    section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; margin-top: 0; }
-    textarea { width: 100%; height: 320px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; font-family: monospace; font-size: 13px; padding: 8px; box-sizing: border-box; }
-    input, select { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-size: 13px; box-sizing: border-box; }
-    label { font-size: 13px; color: #8b949e; }
-    button { background: #238636; color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; margin-right: 8px; }
-    button.secondary { background: #21262d; border: 1px solid #30363d; }
-    pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; overflow: auto; font-size: 12px; }
-    .msg { margin-top: 8px; font-size: 13px; }
-    .ok { color: #3fb950; } .err { color: #f85149; }
-  </style>
+  <link rel="stylesheet" href="cli.css">
 </head>
 <body>
-  <header><h1>Nucleus V3 &mdash; Node Configuration</h1></header>
-  <main>
-    <section>
-      <h2>Configuration (config.yaml as JSON)</h2>
-      <textarea id="cfg" spellcheck="false"></textarea>
-      <div style="margin-top:12px">
-        <button onclick="saveCfg()">Save</button>
-        <button class="secondary" onclick="applyCfg(true)">Dry-run Apply</button>
-        <button onclick="applyCfg(false)">Apply</button>
-        <button class="secondary" onclick="loadCfg()">Reload</button>
-      </div>
-      <div id="msg" class="msg"></div>
-    </section>
-    <section>
-      <h2>Meshtastic Radio</h2>
-      <div id="mesh-status" class="msg">&mdash;</div>
-      <div style="margin-top:10px">
-        <button class="secondary" onclick="meshRefresh()">Refresh</button>
-        <button class="secondary" onclick="meshReadConfig()">Read Radio Config</button>
-      </div>
-      <div id="mesh-cfg" style="margin-top:12px; display:none">
-        <div style="display:grid; grid-template-columns:auto 1fr; gap:8px 12px; align-items:center; max-width:520px">
-          <label>Long name</label><input id="m-owner" maxlength="39">
-          <label>Short name</label><input id="m-owner-short" maxlength="4">
-          <label>Modem preset</label>
-          <select id="m-modem">
-            <option>LONG_FAST</option><option>LONG_SLOW</option><option>LONG_MODERATE</option>
-            <option>MEDIUM_FAST</option><option>MEDIUM_SLOW</option>
-            <option>SHORT_FAST</option><option>SHORT_SLOW</option><option>SHORT_TURBO</option>
-          </select>
-          <label>Frequency slot</label><input id="m-slot" type="number" min="0" max="104" placeholder="0 = auto">
-          <label style="color:#58a6ff">Channel name</label><input id="m-chan" maxlength="11">
-          <label style="color:#58a6ff">Encryption key</label>
-          <select id="m-psk-mode">
-            <option value="keep">Keep current key</option>
-            <option value="random">Generate new random key</option>
-            <option value="default">Default key (public)</option>
-            <option value="none">No encryption</option>
-            <option value="custom">Enter key…</option>
-          </select>
-          <label id="m-psk-custom-label" style="color:#58a6ff; display:none">Key (base64)</label>
-          <input id="m-psk-custom" placeholder="base64:..." style="display:none">
-          <label style="color:#58a6ff">Region</label>
-          <select id="m-region">
-            <option>US</option><option>EU_433</option><option>EU_868</option>
-            <option>ANZ</option><option>CN</option><option>JP</option>
-            <option>KR</option><option>TW</option><option>RU</option>
-            <option>IN</option><option>NZ_865</option><option>TH</option>
-            <option>UA_433</option><option>UA_868</option><option>LORA_24</option>
-          </select>
-          <label style="color:#d29922">Hop limit</label><input id="m-hop" type="number" min="1" max="7">
-          <label style="color:#d29922">TX power (dBm)</label><input id="m-tx" type="number" min="0" max="30">
-          <label style="color:#d29922">Role</label>
-          <select id="m-role">
-            <option>CLIENT</option><option>CLIENT_MUTE</option><option>CLIENT_HIDDEN</option>
-            <option>TRACKER</option><option>TAK</option><option>TAK_TRACKER</option>
-            <option>SENSOR</option><option>ROUTER</option><option>ROUTER_CLIENT</option>
-            <option>ROUTER_LATE</option><option>REPEATER</option>
-          </select>
-        </div>
-        <div style="margin-top:6px; font-size:12px; color:#8b949e">
-          <span style="color:#58a6ff">Blue</span> = channel identity (must match across nodes) ·
-          <span style="color:#d29922">Amber</span> = this node only
-        </div>
-        <div style="margin-top:12px">
-          <button onclick="meshApplyConfig()">Apply to Radio</button>
-        </div>
-        <div style="margin-top:16px">
-          <label style="font-size:13px; color:#8b949e">Channel share URL</label>
-          <input id="m-url" style="width:100%; margin-top:4px" placeholder="paste a channel URL to import, or read config to view this node's">
-          <div style="margin-top:8px">
-            <button class="secondary" onclick="meshApplyUrl()">Import URL</button>
-            <button class="secondary" onclick="meshShowQr()">Show QR</button>
-          </div>
-          <div id="m-qr" style="margin-top:12px; background:#fff; display:inline-block; padding:8px; border-radius:6px"></div>
-        </div>
-      </div>
-      <div id="mesh-msg" class="msg"></div>
-    </section>
-    <section>
-      <h2>Mesh Peers</h2>
-      <div style="font-size:13px; color:#8b949e; margin-bottom:8px">
-        Nodes reachable over the wifi mesh. Join copies a peer's channel
-        identity (name, key, region, preset, slot) to this radio — no URL
-        copy/paste. This node's role, TX power and hop limit are untouched.
-      </div>
-      <button class="secondary" onclick="meshLoadPeers()">Discover Peers</button>
-      <table id="peers-table" style="display:none; width:100%; border-collapse:collapse; font-size:13px; margin-top:12px">
-        <thead>
-          <tr style="text-align:left; color:#8b949e; border-bottom:1px solid #30363d">
-            <th style="padding:6px">Node IP</th><th style="padding:6px">Channel</th>
-            <th style="padding:6px">Key</th><th style="padding:6px">Region</th>
-            <th style="padding:6px">Preset</th><th style="padding:6px">Slot</th>
-            <th style="padding:6px">Match</th><th style="padding:6px"></th>
-          </tr>
-        </thead>
-        <tbody id="peers-body"></tbody>
-      </table>
-      <div id="peers-msg" class="msg"></div>
-    </section>
-    <section>
-      <h2>Status</h2>
-      <button class="secondary" onclick="loadStatus()">Refresh</button>
-      <pre id="status">&mdash;</pre>
-    </section>
-  </main>
+  <div id="shell">
+    <!-- Persistent status header: node id · mesh IP · mesh state · version -->
+    <div id="hdr">
+      <span><span class="k">node</span> <span class="v" id="h-node">—</span></span>
+      <span><span class="k">ip</span> <span class="v" id="h-ip">—</span></span>
+      <span><span class="k">mesh</span> <span class="v" id="h-mesh">—</span></span>
+    </div>
+
+    <!-- Only this scrolls; header and control bar are fixed. -->
+    <div id="view"></div>
+
+    <!-- Fixed control set, identical on every page. -->
+    <div id="ctrl">
+      <button id="c-up" title="Up (↑)">&#9650;</button>
+      <button id="c-enter" title="Enter (Enter)">ENTER</button>
+      <button id="c-down" title="Down (↓)">&#9660;</button>
+      <button id="c-back" title="Back (Esc)">BACK</button>
+    </div>
+  </div>
   <script src="app.js"></script>
+  <script src="cli.js"></script>
 </body>
 </html>
