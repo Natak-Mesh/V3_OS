@@ -58,6 +58,9 @@ log "repo: $REPO_DIR"
 # --- environment checks ------------------------------------------------------
 [ -d "$REPO_DIR" ] || fail 8 "repo directory not found: $REPO_DIR"
 cd "$REPO_DIR" || fail 8 "cannot cd into repo: $REPO_DIR"
+# This script runs as root (via systemd-run) but the repo is owned by natak;
+# without this exception git refuses every op with "dubious ownership".
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$REPO_DIR"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 8 "$REPO_DIR is not a git repository"
 
 # --- step 1: pre-flight WAN reachability ------------------------------------

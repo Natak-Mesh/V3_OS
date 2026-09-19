@@ -45,9 +45,14 @@ RC_MESSAGES = {
 
 
 def _git(*args: str, timeout: int = 25) -> subprocess.CompletedProcess:
-    """Run a git command inside REPO_DIR, capturing output (never raises)."""
+    """Run a git command inside REPO_DIR, capturing output (never raises).
+
+    nucleusd runs as root while the repo is owned by natak; without a
+    safe.directory exception git refuses every operation ("dubious ownership")
+    before it ever reaches the network.
+    """
     return subprocess.run(
-        ["git", "-C", str(REPO_DIR), *args],
+        ["git", "-c", f"safe.directory={REPO_DIR}", "-C", str(REPO_DIR), *args],
         capture_output=True, text=True, check=False, timeout=timeout,
     )
 
@@ -85,11 +90,18 @@ def version_info() -> dict:
 
     info["local_head"] = _git("rev-parse", "--short", "HEAD").stdout.strip() or None
 
-    # Contact the remote. A failure here means offline — report and stop.
+    # Contact the remote. Distinguish a genuine network failure (offline) from
+    # a local git/config error (e.g. dubious ownership) so the UI reports the
+    # right cause instead of blaming the network.
     fetched = _git("fetch", "--quiet", "origin", BRANCH, timeout=30)
     if fetched.returncode != 0:
-        info["offline"] = True
-        info["error"] = (fetched.stderr or "git fetch failed").strip()
+        err = (fetched.stderr or "git fetch failed").strip()
+        info["error"] = err
+        low = err.lower()
+        info["offline"] = not any(s in low for s in (
+            "dubious ownership", "safe.directory", "not a git repository",
+            "permission denied",
+        ))
         return info
 
     ref = f"origin/{BRANCH}"
