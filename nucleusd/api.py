@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import config as cfgio
 from . import status as statusmod
+from . import update as updatemod
 from .apply import apply as apply_config
 from .schema import NucleusConfig
 
@@ -77,6 +78,24 @@ def post_apply(dry_run: bool = False) -> dict:
 def get_status() -> dict:
     """Live runtime status: interfaces, services, Babel neighbours."""
     return statusmod.collect()
+
+
+@app.get("/api/v1/update/check")
+def get_update_check() -> dict:
+    """Compare the installed (running) version with the git remote."""
+    return updatemod.version_info()
+
+
+@app.post("/api/v1/update/start")
+def post_update_start() -> dict:
+    """Launch the node update in the background (detached via systemd-run)."""
+    return updatemod.start_update()
+
+
+@app.get("/api/v1/update/progress")
+def get_update_progress() -> dict:
+    """Stream update status + log from the on-disk state files."""
+    return updatemod.progress()
 
 
 # --- Web UI (mounted last so it doesn't shadow /api routes) -----------------

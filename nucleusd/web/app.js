@@ -126,6 +126,7 @@ const PAGES = {
           { type: "nav", label: "MESHTASTIC RADIO", to: "meshtastic" },
           { type: "nav", label: "SYSTEM", to: "system" },
           { type: "nav", label: "CONFIG", to: "config" },
+          { type: "nav", label: "UPDATE", to: "update" },
         ],
       };
     },
@@ -388,6 +389,58 @@ const PAGES = {
       return { items };
     },
   },
+
+  // Update: compares the installed (running) version with the git remote and
+  // launches nucleus-update.sh. Keeps git/live separate — the running version
+  // only changes after the update pulls, reinstalls the venv and restarts.
+  update: {
+    title: "Update",
+    async build() {
+      const { d: v } = await jget("/api/v1/update/check");
+      const installed = v.installed || "?";
+      let statusHtml, canUpdate = false, note = "";
+
+      if (v.error && !v.offline) {
+        statusHtml = `<span class="off">${esc(v.error)}</span>`;
+      } else if (v.offline) {
+        statusHtml = `<span class="warn">offline — cannot reach git remote</span>`;
+      } else {
+        const avail = v.available || "?";
+        const behind = v.behind;
+        if (behind === 0) {
+          statusHtml = `<span class="ok">up to date</span>`;
+        } else if (behind > 0) {
+          statusHtml = `<span class="warn">update available` +
+            ` (${behind} commit${behind === 1 ? "" : "s"} behind)</span>`;
+          canUpdate = true;
+        } else {
+          statusHtml = `<span class="warn">local ahead / diverged</span>`;
+        }
+        note = `<div class="kv"><span>installed <b>${esc(installed)}</b>` +
+          ` (${esc(v.local_head || "?")})</span><span> → available <b>${esc(avail)}</b>` +
+          ` (${esc(v.remote_head || "?")})</span></div>`;
+      }
+
+      if (v.dirty) {
+        note += `<div class="off">working tree has uncommitted changes —` +
+          ` update is blocked until they are resolved</div>`;
+        canUpdate = false;
+      }
+
+      const items = [{
+        type: "content",
+        html: `<div class="content"><div class="kv"><span>${statusHtml}</span></div>` +
+          note + `</div>`,
+      }];
+
+      if (canUpdate) {
+        items.push({ type: "button", label: "» Update now (pulls, reinstalls, restarts)", onEnter: startUpdate });
+      }
+      items.push({ type: "button", label: "» Refresh", onEnter: (S) => S.reload() });
+      items.push({ type: "content", html: `<div id="upd-log"></div>` });
+      return { items };
+    },
+  },
 };
 
 
@@ -526,5 +579,36 @@ async function applyCfg(S, dry) {
   if (!d.changed.length) return S.msg("no changes — system in sync");
   S.msg((dry ? "would change " : "changed ") + d.changed.length +
     " file(s); units: " + (d.units_restarted.join(", ") || "none"));
+}
+
+// Launch the node update, then poll progress. The update restarts nucleusd
+// mid-run, so the API may briefly drop; the on-disk status file is the source
+// of truth and survives the restart, so we tolerate transient fetch failures.
+async function startUpdate(S) {
+  if (!confirm("Update this node? Pulls the latest code, reinstalls, and " +
+    "restarts services. The web UI may briefly disconnect.")) return;
+  S.msg("starting update…");
+  const { ok, d } = await jsend("POST", "/api/v1/update/start");
+  if (!(ok && d.started)) return S.msg("start failed: " + (d.detail || "error"), false);
+
+  const logEl = () => document.getElementById("upd-log");
+  for (let i = 0; i < 300; i++) {          // up to ~10 min
+    await new Promise((r) => setTimeout(r, 2000));
+    let p;
+    try { p = (await jget("/api/v1/update/progress")).d; }
+    catch (e) { S.msg("update running… (web UI restarting)"); continue; }
+    const el = logEl();
+    if (el && p.log) {
+      el.innerHTML = `<div class="content"><pre class="log">` +
+        esc(p.log.join("\n")) + `</pre></div>`;
+    }
+    if (p.status === "finished") {
+      const good = p.rc === 0 || p.rc === 1;
+      S.msg(p.message || ("finished (rc " + p.rc + ")"), good);
+      return;
+    }
+    S.msg(`updating… (${(i + 1) * 2}s)`);
+  }
+  S.msg("update still running — check again shortly", false);
 }
 

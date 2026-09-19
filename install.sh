@@ -103,6 +103,12 @@ natak ALL=(root) NOPASSWD: /usr/bin/systemctl stop cot-bridge.service, /usr/bin/
 EOF
 chmod 440 /etc/sudoers.d/nucleus-meshtastic
 
+echo "==> node update tooling"
+# Update script the web UI (UPDATE page) launches to pull + reinstall + restart.
+install -m 755 "$REPO/system/bin/nucleus-update.sh" "$OPT/bin/nucleus-update.sh"
+# Let the web UI user launch it detached, as root, without a password.
+install -m 440 "$REPO/system/sudoers.d/nucleus-update" /etc/sudoers.d/nucleus-update
+
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
 if [ ! -f /etc/nucleus/config.yaml ]; then

@@ -1,0 +1,6 @@
+# Allow the web UI user 'natak' to launch the node update, detached, as root.
+# nucleusd runs as natak; the update script must run as root (install.sh,
+# nucleusctl apply, systemctl restart) and must survive nucleusd being
+# restarted mid-update, so it is launched via systemd-run into its own unit.
+# sudo matches by resolved absolute path.
+natak ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit=nucleus-update --collect /opt/nucleus/bin/nucleus-update.sh
