@@ -56,7 +56,7 @@ Run as root (hidraw access). Designed to run via nucleus-voice.service.
 Safe on nodes WITHOUT an OpenVLM: the mesh + WS (phone) paths run regardless;
 the OpenVLM front-end attaches/detaches with the USB device.
 
-See: docs/voice.md
+See: docs/manual/voice-internals.md
 """
 
 import base64

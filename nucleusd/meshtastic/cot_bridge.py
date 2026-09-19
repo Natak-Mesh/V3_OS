@@ -98,7 +98,7 @@ STREAM_SILENCE_TIMEOUT = 0.5              # s of no input = PTT released
 # Meshtastic radios/phones on the same channel interoperate. The bridge owns
 # the radio, so the messaging daemon hands us UTF-8 text over localhost UDP and
 # we sendText() it; inbound text packets are forwarded back to the daemon.
-# See docs/messaging.md
+# See docs/manual/messaging-internals.md
 TEXT_MESSAGE_PORTNUM = 1
 TEXT_RELAY_LISTEN = ("127.0.0.1", 5560)    # messaging daemon -> bridge -> LoRa TX
 TEXT_RELAY_FORWARD = ("127.0.0.1", 5561)   # LoRa RX -> bridge -> messaging daemon

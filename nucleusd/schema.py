@@ -194,7 +194,7 @@ class VoiceConfig(BaseModel):
       * Hardware PTT — OpenVLM CM108 tactical headset (hot-plug), and
       * Soft PTT     — a phone/browser on the node AP, via the /voice page (WS).
     An optional LoRa voice-text path (Vosk STT → one Meshtastic text packet →
-    Piper TTS) is relayed through the CoT bridge. See docs/voice.md.
+    Piper TTS) is relayed through the CoT bridge. See docs/manual/voice-internals.md.
     """
 
     enabled: bool = Field(True, description="Run the mesh PTT voice daemon (nucleus-voice.service).")
@@ -233,7 +233,7 @@ class MessagingConfig(BaseModel):
                  interoperate transparently.
     Inbound messages from either transport (including Meshtastic-only radios)
     land in the same store and are de-duplicated by (sender, text) within a
-    short window. See docs/messaging.md.
+    short window. See docs/manual/messaging-internals.md.
     """
 
     enabled: bool = Field(True, description="Run the text messaging service (nucleus-messaging.service).")

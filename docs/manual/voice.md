@@ -2,7 +2,7 @@
 
 Mesh push-to-talk voice. The TUI **Voice** page shows daemon state and switches
 channel; the full soft-PTT handset is a standalone page at `/voice`. For the
-audio/transport internals see [voice.md](../voice.md).
+audio/transport internals see [voice.md](voice-internals.md).
 
 ## TUI Voice page
 

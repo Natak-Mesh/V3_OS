@@ -3,7 +3,7 @@
 One conversation, delivered over WiFi + LoRa into a single message store. A
 message from a plain Meshtastic radio appears here like any other; a per-message
 badge shows which transport(s) delivered it. For the transport/store internals
-see [messaging.md](../messaging.md).
+see [messaging.md](messaging-internals.md).
 
 A hint at the top notes that messages send over WiFi + LoRa and the Via badge
 shows which transport delivered each one.

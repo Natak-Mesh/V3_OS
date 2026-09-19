@@ -22,7 +22,7 @@ Control socket (UDP 127.0.0.1:5562, one JSON request per datagram, JSON reply):
     {"cmd":"status"}                     -> {"ok":true,...}
 
 Config comes from /etc/nucleus/config.yaml (messaging.* + node identity).
-Run via nucleus-messaging.service. See docs/messaging.md.
+Run via nucleus-messaging.service. See docs/manual/messaging-internals.md.
 """
 
 from __future__ import annotations
