@@ -18,6 +18,8 @@ dependencies = [
     # TAK protocol V1 parser (Natak fork) + TAKPacketV2 compression SDK.
     "takproto @ git+https://github.com/Natak-Mesh/takproto.git",
     "meshtastic_tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git@v0.9.1#subdirectory=python",
+    # --- Reticulum cryptographic networking stack (rnsd) ---
+    "rns>=0.7",                  # provides the rnsd daemon (rnsd.service)
 ]
 
 [project.optional-dependencies]

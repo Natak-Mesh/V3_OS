@@ -25,7 +25,7 @@ apt-get update -qq
 apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip git curl gpg \
     babeld smcroute hostapd wpasupplicant iw \
-    nftables network-manager \
+    nftables network-manager ufw \
     nginx avahi-daemon avahi-utils openssl
 
 echo "==> meshtasticd (native, from the Meshtastic apt repo)"
@@ -93,6 +93,7 @@ install -m 644 "$REPO/system/systemd/cot-bridge.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-meshtastic-init.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-messaging.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-voice.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/rnsd.service" /etc/systemd/system/
 install -m 644 "$REPO/system/udev/60-meshtastic.rules" /etc/udev/rules.d/
 mkdir -p /etc/NetworkManager/conf.d
 install -m 644 "$REPO/system/networkmanager/unmanaged-devices.conf" \
@@ -120,6 +121,25 @@ else
     echo "    /etc/nucleus/config.yaml exists — left untouched"
 fi
 
+echo "==> seed Reticulum config (only if missing)"
+# rnsd runs as user 'natak'; its config lives in ~natak/.reticulum/config.
+# Seed the Natak default (AutoInterface wlan1, TCPServer br-lan:4242, public-IP
+# entry node) only if absent, so a re-install never clobbers local edits.
+RETI_DIR=/home/natak/.reticulum
+if [ ! -f "$RETI_DIR/config" ]; then
+    install -d -o natak -g natak -m 700 "$RETI_DIR"
+    install -o natak -g natak -m 644 "$REPO/system/reticulum/config" "$RETI_DIR/config"
+    echo "    seeded $RETI_DIR/config"
+else
+    echo "    $RETI_DIR/config exists — left untouched"
+fi
+
+echo "==> Tailscale (installed, left logged-out; run 'tailscale up' to activate)"
+if ! command -v tailscale >/dev/null 2>&1; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+fi
+systemctl enable tailscaled
+
 echo "==> enable services"
 systemctl daemon-reload
 # Debian ships hostapd masked by default; unmask before enabling (idempotent).
@@ -136,7 +156,7 @@ fi
 # avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
 # :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
 systemctl enable avahi-daemon nginx
-systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service
+systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
 
 # Restart the always-on app daemons so a code-only re-install (new package in the
 # venv) actually takes effect — enabling alone won't reload a running process.

@@ -1,0 +1,18 @@
+[Unit]
+Description=Reticulum Network Stack Daemon
+After=nucleus-mesh.service network-online.target
+Wants=nucleus-mesh.service network-online.target
+
+[Service]
+Type=simple
+User=natak
+Group=natak
+ExecStartPre=/bin/sleep 10
+ExecStart=/opt/nucleus/venv/bin/rnsd
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/rnsd.log
+StandardError=append:/var/log/rnsd.log
+
+[Install]
+WantedBy=multi-user.target
