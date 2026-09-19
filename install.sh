@@ -138,6 +138,13 @@ fi
 systemctl enable avahi-daemon nginx
 systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service
 
+# Restart the always-on app daemons so a code-only re-install (new package in the
+# venv) actually takes effect — enabling alone won't reload a running process.
+# These own the API/web UI, messaging and voice; the mesh/network units are
+# reconciled by `nucleusctl apply`, so they're deliberately left to that path.
+echo "==> restart app daemons (pick up new code)"
+systemctl restart nucleusd.service nucleus-messaging.service nucleus-voice.service
+
 echo
 echo "Install complete. Next:"
 echo "  1. edit /etc/nucleus/config.yaml  (set node.id etc.)"

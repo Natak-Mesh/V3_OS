@@ -119,4 +119,11 @@ if WEB_DIR.exists():
     def index() -> FileResponse:
         return FileResponse(str(WEB_DIR / "index.html"))
 
+    # The UI links to /voice (extension-less); StaticFiles won't serve that
+    # without .html, so map it explicitly. Defined before the mount so it isn't
+    # shadowed.
+    @app.get("/voice")
+    def voice_page() -> FileResponse:
+        return FileResponse(str(WEB_DIR / "voice.html"))
+
     app.mount("/", StaticFiles(directory=str(WEB_DIR)), name="web")

@@ -1,196 +1,115 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Voice — Natak Mesh</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <style>
-        .dash { max-width: 480px; margin: 0 auto; padding: 12px; font-family: monospace; }
-        .top-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-        .top-bar .logo { height: 40px; width: auto; }
-        .page-title { font-size: 20px; font-weight: bold; color: #1A09f1; }
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Nucleus V3 — Voice</title>
+  <link rel="stylesheet" href="cli.css">
+  <style>
+    /* Page-scoped extras for the soft-PTT handset. This is the one standalone
+       page (not driven by cli.js): hold-to-talk / Spacebar-PTT can't be
+       expressed in the shell's cursor/ENTER item model, and audio flows over
+       /voice-ws to the voice daemon, not the REST API. It still wears the
+       standard shell (cli.css tokens only — no bespoke palette). */
+    .ptt-wrap { text-align: center; padding: 20px 14px 8px; }
+    .ptt-btn {
+      width: 200px; height: 200px; border-radius: 50%;
+      border: 4px solid var(--border-color);
+      background: var(--bg-card); color: var(--text-primary);
+      font-family: inherit; font-size: 20px; font-weight: bold;
+      cursor: pointer; user-select: none; -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent; touch-action: none;
+      display: inline-flex; align-items: center; justify-content: center;
+      text-align: center; line-height: 1.3; transition: transform .08s, background .08s;
+    }
+    .ptt-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .ptt-btn.talking { background: var(--off); border-color: var(--text-primary);
+      color: var(--text-primary); transform: scale(.97); }
+    .ptt-hint { color: var(--text-secondary); font-size: 12px; padding: 8px 14px 0; text-align: center; }
 
-        .status-line {
-            display: flex; gap: 18px; font-size: 14px;
-            margin-bottom: 14px; padding: 8px 0;
-            border-bottom: 1px solid var(--border-color); flex-wrap: wrap;
-        }
-        .st-up { color: var(--color-connected); }
-        .st-down { color: var(--color-disconnected); }
-        .st-warn { color: var(--color-warning); }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag { padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: bold;
+      background: var(--ok); color: #05121f; }
 
-        .section-hdr {
-            font-size: 13px; color: var(--text-primary); font-weight: bold;
-            text-transform: uppercase; letter-spacing: 1px; margin: 16px 0 8px 0;
-            padding: 6px 8px; background: rgba(255,255,255,0.05);
-            border-left: 3px solid var(--accent-primary); border-radius: 2px;
-        }
+    .warn-box { margin: 4px 14px; padding: 8px 12px; border-radius: 6px;
+      border: 1px solid var(--warn); color: var(--text-primary); font-size: 13px; }
 
-        /* Transport toggle */
-        .transport-row { display: flex; gap: 8px; margin-bottom: 8px; }
-        .transport-btn {
-            flex: 1; padding: 10px 8px; background: rgba(255,255,255,0.05);
-            border: 1px solid var(--border-color); border-radius: 8px;
-            color: var(--text-secondary); font-size: 13px; font-family: monospace;
-            cursor: pointer; min-height: 44px; transition: all 0.15s;
-        }
-        .transport-btn.active {
-            background: rgba(26, 9, 241, 0.25); border-color: #1A09f1;
-            color: var(--text-primary); font-weight: bold;
-        }
-        .transport-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        .lora-meta { font-size: 12px; color: var(--text-secondary); margin: 4px 0 0 2px; }
-
-        /* Channel picker */
-        .chan-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-        .chan-btn {
-            padding: 10px 16px; background: rgba(255,255,255,0.05);
-            border: 1px solid var(--border-color); border-radius: 20px;
-            color: var(--text-secondary); font-size: 14px; font-family: monospace;
-            cursor: pointer; min-height: 44px; transition: all 0.15s;
-        }
-        .chan-btn.active {
-            background: rgba(26, 9, 241, 0.25); border-color: #1A09f1;
-            color: var(--text-primary); font-weight: bold;
-        }
-
-        /* PTT button */
-        .ptt-wrap { text-align: center; margin: 24px 0; }
-        .ptt-btn {
-            width: 220px; height: 220px; border-radius: 50%;
-            border: 6px solid var(--border-color);
-            background: rgba(255,255,255,0.06); color: var(--text-primary);
-            font-size: 22px; font-family: monospace; font-weight: bold;
-            cursor: pointer; user-select: none; -webkit-user-select: none;
-            -webkit-tap-highlight-color: transparent; touch-action: none;
-            transition: all 0.08s; display: inline-flex; align-items: center;
-            justify-content: center; text-align: center; line-height: 1.3;
-        }
-        .ptt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .ptt-btn.talking {
-            background: var(--color-disconnected); border-color: #fff;
-            color: #fff; transform: scale(0.97);
-        }
-        .ptt-hint { font-size: 12px; color: var(--text-secondary); margin-top: 10px; }
-
-        /* Voice-text message log (LoRa transport) */
-        .msg-log {
-            max-height: 220px; overflow-y: auto; font-size: 13px;
-            border: 1px solid var(--border-color); border-radius: 6px;
-            padding: 6px 8px; background: rgba(255,255,255,0.03);
-        }
-        .msg-row { padding: 4px 2px; border-bottom: 1px solid rgba(255,255,255,0.06); }
-        .msg-row:last-child { border-bottom: none; }
-        .msg-meta { color: var(--text-secondary); font-size: 11px; }
-        .msg-tx .msg-meta { color: #7a9cff; }
-        .msg-rx .msg-meta { color: var(--color-connected); }
-        .msg-text { color: var(--text-primary); word-break: break-word; }
-        .msg-failed .msg-text { color: var(--text-secondary); font-style: italic; }
-
-        .talkers { min-height: 24px; }
-        .talker-tag {
-            display: inline-block; padding: 4px 10px; margin: 3px;
-            background: var(--color-connected); color: #000; border-radius: 12px;
-            font-size: 13px; font-weight: bold;
-        }
-        .empty-msg { color: var(--text-secondary); font-size: 14px; padding: 6px 0; }
-
-        nav { max-width: 480px; margin: 0 auto; padding: 12px 12px 0 12px; }
-        .nav-btn {
-            padding: 8px 14px; background: rgba(255,255,255,0.05);
-            border: 1px solid var(--border-color); border-radius: 6px;
-            color: var(--text-secondary); font-size: 13px; font-family: monospace;
-            cursor: pointer;
-        }
-        .nav-btn:hover { background: rgba(26, 9, 241, 0.2); border-color: #1A09f1;
-            color: var(--text-primary); }
-
-        #banner {
-            display: none; padding: 10px; border-radius: 6px; margin-bottom: 12px;
-            font-size: 13px; background: rgba(255,180,0,0.15);
-            border: 1px solid var(--color-warning); color: var(--text-primary);
-        }
-    </style>
+    /* Selectable-looking rows reused for transport + channel picks. These are
+       directly tappable (no cursor), mirroring cli.css .row visuals. */
+    .pick { display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+      min-height: 48px; cursor: pointer; border-bottom: 1px solid var(--border-color);
+      font-family: inherit; font-size: 15px; width: 100%; text-align: left;
+      background: transparent; color: var(--text-primary); }
+    .pick .cur { width: 12px; flex: 0 0 12px; color: var(--accent); }
+    .pick.active { background: var(--accent); color: #05121f; }
+    .pick.active .cur { color: #05121f; }
+    .pick:disabled { opacity: .4; cursor: not-allowed; }
+    .pick .sub { color: var(--text-secondary); font-size: 12px; margin-left: auto; }
+    .pick.active .sub { color: #05121f; }
+  </style>
 </head>
 <body>
-<nav>
-    <button class="nav-btn" onclick="goBack(event)">← Back to Menu</button>
-</nav>
-<main>
-<div class="dash">
-
-    <div class="top-bar">
-        <img src="{{ url_for('static', filename='images/NatakMeshsecondary-overlay.png') }}" alt="Natak Mesh" class="logo">
-        <div class="page-title">Voice PTT</div>
+  <div id="shell">
+    <!-- Persistent status header: node id · headset · voice-ws link state. -->
+    <div id="hdr">
+      <span class="title">VOICE</span>
+      <span><span class="k">node</span> <span class="v" id="h-node">—</span></span>
+      <span><span class="k">headset</span> <span class="v" id="h-hw">—</span></span>
+      <span><span class="k">link</span> <span class="v" id="h-ws">…</span></span>
     </div>
 
-    <div id="banner"></div>
-    <div id="ptt-warn" style="display:none; margin:8px 0; padding:8px 12px; border:1px solid var(--color-warning); color:var(--text-primary); border-radius:4px;"></div>
+    <!-- Only this scrolls; header and control bar are fixed. -->
+    <div id="view">
+      <div id="ptt-warn" class="warn-box" style="display:none"></div>
+      <div id="banner" class="warn-box" style="display:none"></div>
 
-    <div class="status-line">
-        <span id="node-status">Node: --</span>
-        <span id="hw-status"></span>
-    </div>
-
-    <div class="section-hdr">Transport</div>
-    <div class="transport-row">
-        <button class="transport-btn active" id="tp-ip">IP Mesh<br>(streaming)</button>
-        <button class="transport-btn" id="tp-lora" disabled>LoRa<br>(voice&rarr;text)</button>
-        <button class="transport-btn" id="tp-stream" disabled>LoRa<br>(streaming)</button>
-    </div>
-    <div class="lora-meta" id="lora-meta"></div>
-
-    <div class="section-hdr">Channel</div>
-    <div class="chan-grid" id="chan-grid">
-        <div class="empty-msg">Loading channels…</div>
-    </div>
-
-    <div class="ptt-wrap">
+      <div class="ptt-wrap">
         <button class="ptt-btn" id="ptt-btn" disabled>TALK</button>
-        <div class="ptt-hint" id="ptt-hint">Press &amp; hold to talk · (or hold Spacebar)</div>
+      </div>
+      <div class="ptt-hint">Press &amp; hold to talk · (or hold Spacebar)</div>
+
+      <div class="page-title">Transport</div>
+      <div id="tp-list"></div>
+
+      <div class="page-title">Channel</div>
+      <div id="chan-list"><div class="hint">Loading channels…</div></div>
+
+      <div class="page-title">Receiving</div>
+      <div class="content"><div class="tags" id="talkers">
+        <span class="hint">No one talking</span></div></div>
     </div>
 
-    <div class="section-hdr">Receiving</div>
-    <div class="talkers" id="talkers">
-        <div class="empty-msg">No one talking</div>
+    <!-- Handset is standalone: the only control is BACK (to the TUI VOICE page). -->
+    <div id="ctrl">
+      <button id="c-back" title="Back (Esc)" style="grid-area: back;">BACK</button>
     </div>
-
-    <div class="section-hdr">Messages (LoRa voice&rarr;text)</div>
-    <div class="msg-log" id="msg-log">
-        <div class="empty-msg">No messages yet</div>
-    </div>
-
-</div>
-</main>
+  </div>
 
 <script>
 // ── Force onto HTTPS/443 before anything else ──────────────────────────────
 // Voice needs a secure context (mic access) AND the /voice-ws WebSocket proxy,
-// both of which live only on the nginx HTTPS vhost (port 443). If this page
-// was opened over http or on the Flask dev port (:5000), redirect to
-// https://<same-host>/voice so it works whether reached by IP or .local.
+// both of which live only on the nginx HTTPS vhost (port 443). If this page was
+// opened over http, redirect to https://<same-host>/voice so it works whether
+// reached by IP or .local.
 (function () {
-    if (location.protocol !== 'https:' || location.port === '5000') {
+    if (location.protocol !== 'https:') {
         location.replace('https://' + location.hostname + '/voice');
     }
 })();
 
-// Back to dashboard. Prefer browser history (the dashboard the user came
-// from); fall back to the dashboard root on the same host+scheme. Using
-// history avoids landing on OTS's page when the node was reached by IP.
+// BACK: return to the dashboard we came from (the TUI VOICE page), or the shell
+// root on the same host+scheme if there's no history.
 function goBack(e) {
     if (e) e.preventDefault();
     if (window.history.length > 1) { window.history.back(); }
     else { location.href = location.protocol + '//' + location.host + '/'; }
 }
-
+document.getElementById('c-back').addEventListener('click', goBack);
 
 // ── OpenVLM mesh voice — browser soft-PTT handset ──────────────────────────
 // Audio: 16 kHz mono S16_LE, 20 ms frames (320 samples / 640 bytes) matching
 // the daemon. Mic is captured at the device rate and downsampled to 16 kHz;
 // received frames are upsampled back to the AudioContext rate for playback.
-
 
 const FRAME_SAMPLES = 320;         // 20 ms @ 16 kHz
 const FRAME_BYTES = FRAME_SAMPLES * 2;
@@ -202,12 +121,8 @@ let wsReady = false;
 let talking = false;
 let currentChannel = null;
 let channels = [];
-let transport = 'ip';              // 'ip' | 'lora' | 'stream' (mirrors daemon)
-let loraInfo = { enabled: false, ready: false, max_secs: 0 };
+let transport = 'ip';              // 'ip' | 'stream' (mirrors daemon)
 let streamInfo = { enabled: false, ready: false };
-let clipTimer = null;              // countdown interval while keyed in LoRa mode
-let clipDeadline = 0;
-let messages = [];                 // voice-text history (newest last)
 
 // Audio capture
 let audioCtx = null;
@@ -235,18 +150,26 @@ function wsUrl() {
     return proto + '//' + location.host + '/voice-ws';
 }
 
+function setLink(up) {
+    const el = document.getElementById('h-ws');
+    el.textContent = up ? 'up' : 'down';
+    el.className = 'v ' + (up ? 'up' : 'down');
+}
+
 function connect() {
     ws = new WebSocket(wsUrl());
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
         wsReady = true;
+        setLink(true);
         document.getElementById('ptt-btn').disabled = false;
         ws.send(JSON.stringify({ type: 'hello' }));
     };
 
     ws.onclose = () => {
         wsReady = false;
+        setLink(false);
         document.getElementById('ptt-btn').disabled = true;
         setTimeout(connect, 1500);
     };
@@ -255,10 +178,7 @@ function connect() {
 
     ws.onmessage = (ev) => {
         if (typeof ev.data === 'string') {
-            const msg = JSON.parse(ev.data);
-            if (msg.type === 'text') { addMessage(msg.item); }
-            else if (msg.type === 'texts') { messages = msg.items || []; renderMessages(); }
-            else { handleStatus(msg); }
+            handleStatus(JSON.parse(ev.data));
         } else {
             handleAudio(ev.data);
         }
@@ -268,12 +188,12 @@ function connect() {
 function handleStatus(s) {
     if (!s || s.ok === false) return;
     if (s.node_id !== undefined) {
-        document.getElementById('node-status').textContent = 'Node: ' + s.node_id;
+        document.getElementById('h-node').textContent = s.node_id;
     }
     if (s.hardware !== undefined) {
-        const hw = document.getElementById('hw-status');
-        hw.textContent = s.hardware ? 'Headset: attached' : '';
-        hw.className = s.hardware ? 'st-up' : '';
+        const hw = document.getElementById('h-hw');
+        hw.textContent = s.hardware ? 'attached' : 'phone only';
+        hw.className = 'v ' + (s.hardware ? 'up' : '');
     }
     const pw = document.getElementById('ptt-warn');
     if (s.wrong_ptt) {
@@ -292,145 +212,61 @@ function handleStatus(s) {
         markActiveChannel();
     }
     if (s.transport !== undefined) transport = s.transport;
-    if (s.lora !== undefined) loraInfo = s.lora;
     if (s.stream !== undefined) streamInfo = s.stream;
     renderTransport();
     renderTalkers(s.sources || []);
 }
 
-// ── Transport toggle ────────────────────────────────────────────────────────
+// ── Transport picker ────────────────────────────────────────────────────────
 function renderTransport() {
-    const ipBtn = document.getElementById('tp-ip');
-    const loraBtn = document.getElementById('tp-lora');
-    const streamBtn = document.getElementById('tp-stream');
-    const meta = document.getElementById('lora-meta');
-    ipBtn.classList.toggle('active', transport === 'ip');
-    loraBtn.classList.toggle('active', transport === 'lora');
-    streamBtn.classList.toggle('active', transport === 'stream');
-    loraBtn.disabled = !(loraInfo.enabled && loraInfo.ready);
-    streamBtn.disabled = !(streamInfo.enabled && streamInfo.ready);
-    if (transport === 'lora') {
-        meta.textContent = loraInfo.max_secs + 's max per message';
-    } else if (!loraInfo.enabled && !streamInfo.enabled) {
-        meta.textContent = 'LoRa voice not enabled on this node';
-    } else if (loraInfo.enabled && !loraInfo.ready) {
-        meta.textContent = 'LoRa voice\u2192text starting\u2026';
-    } else {
-        meta.textContent = '';
-    }
+    const list = document.getElementById('tp-list');
+    const modes = [
+        { id: 'ip', label: 'IP Mesh (streaming)', enabled: true, sub: '' },
+        { id: 'stream', label: 'LoRa (streaming)',
+          enabled: streamInfo.enabled && streamInfo.ready, sub: '' },
+    ];
+    list.innerHTML = '';
+    modes.forEach(m => {
+        const b = document.createElement('button');
+        b.className = 'pick' + (transport === m.id ? ' active' : '');
+        b.disabled = !m.enabled;
+        b.innerHTML = '<span class="cur">' + (transport === m.id ? '&gt;' : '') +
+            '</span><span>' + m.label + '</span>' +
+            (m.sub ? '<span class="sub">' + m.sub + '</span>' : '');
+        b.onclick = () => setTransport(m.id);
+        list.appendChild(b);
+    });
 }
 
 function setTransport(mode) {
     if (!wsReady || talking) return;
-    if (mode === 'lora' && !(loraInfo.enabled && loraInfo.ready)) return;
     if (mode === 'stream' && !(streamInfo.enabled && streamInfo.ready)) return;
     ws.send(JSON.stringify({ type: 'transport', mode: mode }));
     transport = mode;   // optimistic; status push will confirm
     renderTransport();
 }
 
-document.getElementById('tp-ip').onclick = () => setTransport('ip');
-document.getElementById('tp-lora').onclick = () => setTransport('lora');
-document.getElementById('tp-stream').onclick = () => setTransport('stream');
-
-// ── Voice-text message log ──────────────────────────────────────────────────
-function fmtTime(ts) {
-    const d = new Date(ts * 1000);
-    return ('0' + d.getHours()).slice(-2) + ':' +
-           ('0' + d.getMinutes()).slice(-2) + ':' +
-           ('0' + d.getSeconds()).slice(-2);
-}
-
-function msgRowHtml(m) {
-    // m.node is the sender's short name when known, else a numeric id.
-    const who = (typeof m.node === 'string') ? m.node : 'Node ' + m.node;
-    const dir = m.dir === 'tx' ? 'SENT' : who;
-    const cls = 'msg-row msg-' + m.dir + (m.sent === false ? ' msg-failed' : '');
-    const trunc = m.truncated ? ' \u00B7 truncated' : '';
-    const air = m.airtime_ms ? ' \u00B7 ' + m.airtime_ms + ' ms air' : '';
-    const div = document.createElement('div');
-    div.className = cls;
-    const meta = document.createElement('div');
-    meta.className = 'msg-meta';
-    meta.textContent = fmtTime(m.ts) + ' \u00B7 ' + dir + ' \u00B7 ch ' + m.channel + air + trunc;
-    const text = document.createElement('div');
-    text.className = 'msg-text';
-    text.textContent = m.text;
-    div.appendChild(meta);
-    div.appendChild(text);
-    return div;
-}
-
-function renderMessages() {
-    const el = document.getElementById('msg-log');
-    el.innerHTML = '';
-    if (!messages.length) {
-        el.innerHTML = '<div class="empty-msg">No messages yet</div>';
-        return;
-    }
-    messages.forEach(m => el.appendChild(msgRowHtml(m)));
-    el.scrollTop = el.scrollHeight;
-}
-
-function addMessage(item) {
-    if (!item) return;
-    messages.push(item);
-    if (messages.length > 50) messages.splice(0, messages.length - 50);
-    renderMessages();
-    // Own transcript confirms the send: clear the SENDING… state early.
-    if (item.dir === 'tx') {
-        const btn = document.getElementById('ptt-btn');
-        if (!talking && btn.textContent !== 'TALK') btn.textContent = 'TALK';
-    }
-}
-
-// ── LoRa clip countdown (while keyed in voice-text mode) ────────────────────
-function startClipCountdown() {
-    if (transport !== 'lora' || !loraInfo.max_secs) return;
-    clipDeadline = Date.now() + loraInfo.max_secs * 1000;
-    updateClipCountdown();
-    clipTimer = setInterval(updateClipCountdown, 100);
-}
-
-function updateClipCountdown() {
-    const remain = Math.max(0, (clipDeadline - Date.now()) / 1000);
-    const btn = document.getElementById('ptt-btn');
-    if (remain <= 0) {
-        btn.textContent = 'SENT';   // daemon auto-sent at the clip limit
-        clearInterval(clipTimer); clipTimer = null;
-    } else {
-        btn.textContent = remain.toFixed(1) + 's';
-    }
-}
-
-function stopClipCountdown(sent) {
-    if (clipTimer) { clearInterval(clipTimer); clipTimer = null; }
-    const btn = document.getElementById('ptt-btn');
-    if (sent && transport === 'lora') {
-        btn.textContent = 'SENDING\u2026';   // cleared by the tx text event
-        setTimeout(() => { if (!talking) btn.textContent = 'TALK'; }, 3000);
-    } else {
-        btn.textContent = 'TALK';
-    }
-}
-
+// ── Channel picker ──────────────────────────────────────────────────────────
 function renderChannels() {
-    const grid = document.getElementById('chan-grid');
-    if (!channels.length) { grid.innerHTML = '<div class="empty-msg">No channels</div>'; return; }
-    grid.innerHTML = '';
+    const list = document.getElementById('chan-list');
+    if (!channels.length) { list.innerHTML = '<div class="hint">No channels</div>'; return; }
+    list.innerHTML = '';
     channels.forEach(ch => {
         const b = document.createElement('button');
-        b.className = 'chan-btn' + (ch.n === currentChannel ? ' active' : '');
-        b.textContent = ch.n + ': ' + ch.label;
+        b.className = 'pick' + (ch.n === currentChannel ? ' active' : '');
         b.dataset.n = ch.n;
+        b.innerHTML = '<span class="cur">' + (ch.n === currentChannel ? '&gt;' : '') +
+            '</span><span>' + ch.n + ': ' + esc(ch.label) + '</span>';
         b.onclick = () => selectChannel(ch.n);
-        grid.appendChild(b);
+        list.appendChild(b);
     });
 }
 
 function markActiveChannel() {
-    document.querySelectorAll('.chan-btn').forEach(b => {
-        b.classList.toggle('active', parseInt(b.dataset.n, 10) === currentChannel);
+    document.querySelectorAll('#chan-list .pick').forEach(b => {
+        const on = parseInt(b.dataset.n, 10) === currentChannel;
+        b.classList.toggle('active', on);
+        b.querySelector('.cur').innerHTML = on ? '&gt;' : '';
     });
 }
 
@@ -443,7 +279,7 @@ function selectChannel(n) {
 
 function renderTalkers(sources) {
     const el = document.getElementById('talkers');
-    if (!sources.length) { el.innerHTML = '<div class="empty-msg">No one talking</div>'; return; }
+    if (!sources.length) { el.innerHTML = '<span class="hint">No one talking</span>'; return; }
     el.innerHTML = sources.map(id => {
         let label;
         if (id === 'lora') { label = 'LoRa voice'; }
@@ -453,8 +289,13 @@ function renderTalkers(sources) {
             label = (/^\d+$/.test(who) ? 'Node ' + who : who) + ' (LoRa)';
         }
         else { label = 'Node ' + id; }
-        return '<span class="talker-tag">' + label + '</span>';
+        return '<span class="tag">' + esc(label) + '</span>';
     }).join('');
+}
+
+function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // ── Playback (mixed RX audio from the mesh) ─────────────────────────────────
@@ -591,7 +432,6 @@ async function pttDown() {
     captureAccum = [];
     document.getElementById('ptt-btn').classList.add('talking');
     ws.send(JSON.stringify({ type: 'ptt', down: true }));
-    startClipCountdown();
 }
 
 function pttUp() {
@@ -600,7 +440,7 @@ function pttUp() {
     talking = false;
     document.getElementById('ptt-btn').classList.remove('talking');
     if (ws && wsReady) ws.send(JSON.stringify({ type: 'ptt', down: false }));
-    stopClipCountdown(true);
+    document.getElementById('ptt-btn').textContent = 'TALK';
 }
 
 const pttBtn = document.getElementById('ptt-btn');
