@@ -848,7 +848,34 @@ def _send_heartbeat():
         iface.sendData(b"\x01", portNum=HEARTBEAT_PORTNUM, wantAck=False)
         logger.info("Presence heartbeat sent")
     except Exception as e:
-        logger.warning(f"Heartbeat TX error: {e}")
+        # A send failure means the link to meshtasticd is broken (e.g. it
+        # restarted). Flag it so the main loop reconnects instead of silently
+        # writing heartbeats into a dead socket.
+        logger.warning(f"Heartbeat TX error, flagging radio disconnect: {e}")
+        _radio_disconnected.set()
+
+
+def _radio_is_alive():
+    """Cheap, read-only liveness check for the meshtasticd connection.
+
+    The meshtastic library does not reliably publish 'connection.lost' when
+    meshtasticd restarts under a TCP link — writes can succeed into a dead
+    socket without raising. We inspect the library's own local state only (no
+    traffic over the wire): the TCP socket must exist and the receive thread
+    must still be running. Serial links have no socket, so they are treated as
+    alive here and rely on the library's own disconnect signalling.
+    """
+    if iface is None:
+        return False
+    # TCP link: the interface exposes a `.socket` attribute (None once dropped).
+    if _use_tcp:
+        if getattr(iface, "socket", None) is None:
+            return False
+    # Both transports: the background reader thread must still be alive.
+    rx = getattr(iface, "_rxThread", None)
+    if rx is not None and not rx.is_alive():
+        return False
+    return True
 
 
 def onConnection(interface, topic=pub.AUTO_TOPIC):
@@ -1108,7 +1135,11 @@ def main():
             try:
                 now = time.time()
 
-                # Reconnect if the radio connection dropped
+                # Reconnect if the radio connection dropped. The library's
+                # 'connection.lost' event is unreliable when meshtasticd
+                # restarts under TCP, so also probe local link state directly.
+                if not _radio_is_alive():
+                    _radio_disconnected.set()
                 if _radio_disconnected.is_set():
                     _reconnect_radio(args.port)
 
