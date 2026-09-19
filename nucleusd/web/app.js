@@ -85,6 +85,8 @@ const PSK_MODES = ["keep", "random", "default", "none"];
 let M = null;
 // Working copy of the presence-heartbeat node config (separate from radio).
 let HB = null;
+// Working copy of the full node config, edited on the CONFIG page.
+let CFG = null;
 
 function meshFillFrom(cfg) {
   M = {
@@ -122,7 +124,6 @@ const PAGES = {
         items: [
           { type: "nav", label: "MONITOR", to: "monitor" },
           { type: "nav", label: "MESHTASTIC RADIO", to: "meshtastic" },
-          { type: "nav", label: "MESH PEERS / JOIN", to: "peers" },
           { type: "nav", label: "SYSTEM", to: "system" },
           { type: "nav", label: "CONFIG", to: "config" },
         ],
@@ -252,6 +253,15 @@ const PAGES = {
           { type: "button", label: "» Import channel URL", onEnter: meshImportUrl },
           { type: "button", label: "» Show QR code", onEnter: meshShowQr },
           { type: "content", html: `<div id="m-qr-slot"></div>` },
+          { type: "content", html: `<div class="content"><div class="page-title" ` +
+            `style="padding-left:0">Join a peer's Meshtastic channel</div><div class="hint" ` +
+            `style="padding-left:0">Queries other Nucleus devices over the 802.11s wifi mesh ` +
+            `and compares their Meshtastic channel settings (channel name, encryption key, ` +
+            `region, modem preset, frequency slot) to this device's. Join copies those ` +
+            `settings to this device's Meshtastic radio so both LoRa radios share the channel. ` +
+            `Role, TX power and hop limit are untouched. The Meshtastic radio reboots after ` +
+            `joining.</div><div id="peers-slot" class="content"></div></div>` },
+          { type: "button", label: "» Query Nucleus peers for Meshtastic channels", onEnter: loadPeers },
         );
       }
 
@@ -277,41 +287,105 @@ const PAGES = {
     },
   },
 
-  // Mesh peers discovered over wifi; one-click channel join.
-  peers: {
-    title: "Mesh Peers / Join",
-    async build() {
-      return {
-        items: [
-          { type: "content", html: `<div class="hint" style="padding-left:0">` +
-            `Nodes reachable over the wifi mesh. Join copies a peer's channel identity ` +
-            `(name, key, region, preset, slot) to this radio. Your role, TX power and ` +
-            `hop limit are untouched.</div><div id="peers-slot" class="content"></div>` },
-          { type: "button", label: "» Discover peers", onEnter: loadPeers },
-        ],
-      };
-    },
-  },
-
-  // Config: raw config.yaml as JSON (schema-driven field list is future work).
+  // Config: schema-driven form. Operators set primitives; the header line of
+  // each section shows the DERIVED values the schema computes from them.
   config: {
     title: "Config",
     async build() {
+      // First open (or after Reload) loads a working copy; edits mutate CFG and
+      // are saved as one read-modify-write PUT, matching saveHeartbeat's model.
       const { d } = await jget("/api/v1/config");
+      const der = d._derived || {};
       delete d._derived;
-      const json = esc(JSON.stringify(d, null, 2));
-      return {
-        items: [
-          { type: "content", html:
-            `<div class="content"><textarea id="cfg" spellcheck="false" ` +
-            `style="width:100%;height:300px;background:#111;color:#fff;border:1px solid #333;` +
-            `border-radius:6px;font-family:inherit;font-size:13px;padding:8px">${json}</textarea></div>` },
-          { type: "button", label: "» Save (not applied)", onEnter: saveCfg },
-          { type: "button", label: "» Dry-run apply", onEnter: (S) => applyCfg(S, true) },
-          { type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) },
-          { type: "button", label: "» Reload", onEnter: (S) => S.reload() },
-        ],
-      };
+      CFG = d;
+      const node = CFG.node = CFG.node || {};
+      const mesh = CFG.mesh = CFG.mesh || {};
+      const brlan = CFG.br_lan = CFG.br_lan || {};
+      const ap = CFG.ap = CFG.ap || {};
+      const eth0 = CFG.eth0 = CFG.eth0 || {};
+      const mt = CFG.meshtastic = CFG.meshtastic || {};
+
+      const head = (title, sub) => ({ type: "content", html:
+        `<div class="content"><div class="page-title" style="padding-left:0">${esc(title)}</div>` +
+        (sub ? `<div class="hint" style="padding-left:0">${sub}</div>` : "") + `</div>` });
+
+      const items = [
+        head("Node", `hostname <b>${esc(der.hostname || "—")}</b> · ` +
+          `mesh IP <b>${esc(der.mesh_ip || "—")}</b>`),
+        { type: "fnum", label: "Node id (blank=hostname)", value: node.id ?? "",
+          min: 1, max: 254, onChange: (v) => node.id = v },
+        { type: "ftext", label: "Name (hostname override)", value: node.name || "",
+          onChange: (v) => node.name = v },
+
+        head("Wifi Mesh", `subnet <b>${esc(der.mesh_subnet || "—")}</b>`),
+        { type: "ftext", label: "SSID", value: mesh.ssid || "",
+          onChange: (v) => mesh.ssid = v },
+        { type: "fnum", label: "Channel (2.4GHz)", value: mesh.channel ?? 3,
+          min: 1, max: 13, onChange: (v) => mesh.channel = v },
+        { type: "ftext", label: "Password (min 8)", value: mesh.password || "",
+          onChange: (v) => mesh.password = v },
+        { type: "ftext", label: "Subnet prefix", value: mesh.subnet_prefix || "",
+          onChange: (v) => mesh.subnet_prefix = v },
+        { type: "ftext", label: "Country", value: mesh.country || "US",
+          onChange: (v) => mesh.country = v },
+        { type: "fnum", label: "mcast TTL", value: mesh.mcast_ttl ?? 8,
+          min: 0, max: 64, onChange: (v) => mesh.mcast_ttl = v },
+        { type: "fnum", label: "802.11s TTL", value: mesh.mesh_802_ttl ?? 8,
+          min: 0, max: 31, onChange: (v) => mesh.mesh_802_ttl = v },
+        { type: "fnum", label: "RTS threshold (0=off)", value: mesh.rts_threshold ?? 500,
+          min: 0, max: 2347, onChange: (v) => mesh.rts_threshold = v },
+
+        head("Access Point", `SSID <b>${esc(der.ap_name || "—")}</b>`),
+        { type: "fnum", label: "Channel (5GHz)", value: ap.channel ?? 36,
+          min: 1, max: 165, onChange: (v) => ap.channel = v },
+        { type: "ftext", label: "Password (min 8)", value: ap.password || "",
+          onChange: (v) => ap.password = v },
+        { type: "ftext", label: "SSID override", value: ap.name || "",
+          onChange: (v) => ap.name = v },
+
+        head("br-lan", `IP <b>${esc(der.br_lan_ip || "—")}</b>`),
+        { type: "ftext", label: "Subnet prefix (blank=auto)", value: brlan.subnet_prefix || "",
+          onChange: (v) => brlan.subnet_prefix = v },
+        { type: "fnum", label: "DHCP pool offset", value: brlan.dhcp_pool_offset ?? 10,
+          min: 0, max: 254, onChange: (v) => brlan.dhcp_pool_offset = v },
+        { type: "fnum", label: "DHCP pool size", value: brlan.dhcp_pool_size ?? 50,
+          min: 1, max: 254, onChange: (v) => brlan.dhcp_pool_size = v },
+        { type: "ftext", label: "DNS", value: brlan.dns || "8.8.8.8",
+          onChange: (v) => brlan.dns = v },
+
+        head("eth0"),
+        { type: "fselect", label: "Mode", options: ["wan", "lan"],
+          value: eth0.mode || "wan", onChange: (v) => eth0.mode = v },
+        { type: "fnum", label: "DHCP pool offset", value: eth0.dhcp_pool_offset ?? 10,
+          min: 0, max: 254, onChange: (v) => eth0.dhcp_pool_offset = v },
+        { type: "fnum", label: "DHCP pool size", value: eth0.dhcp_pool_size ?? 100,
+          min: 1, max: 254, onChange: (v) => eth0.dhcp_pool_size = v },
+
+        head("Meshtastic Radio"),
+        { type: "fselect", label: "Enabled", options: ["on", "off"],
+          value: mt.enabled !== false ? "on" : "off",
+          onChange: (v) => mt.enabled = (v === "on") },
+        { type: "fselect", label: "Region", options: REGIONS,
+          value: mt.region || "US", onChange: (v) => mt.region = v },
+        { type: "fselect", label: "HAT / slot",
+          options: ["rak6421-slot1", "rak6421-slot2", "auto"],
+          value: mt.hat || "rak6421-slot1", onChange: (v) => mt.hat = v },
+        { type: "fselect", label: "GPS", options: ["off", "uart", "i2c"],
+          value: mt.gps || "uart", onChange: (v) => mt.gps = v },
+        { type: "ftext", label: "GPS serial path", value: mt.gps_serial_path || "/dev/ttyS0",
+          onChange: (v) => mt.gps_serial_path = v },
+        { type: "ftext", label: "I2C device", value: mt.i2c_device || "/dev/i2c-1",
+          onChange: (v) => mt.i2c_device = v },
+        { type: "fselect", label: "CoT bridge", options: ["on", "off"],
+          value: mt.cot_bridge !== false ? "on" : "off",
+          onChange: (v) => mt.cot_bridge = (v === "on") },
+
+        { type: "button", label: "» Save (not applied)", onEnter: saveCfg },
+        { type: "button", label: "» Dry-run apply", onEnter: (S) => applyCfg(S, true) },
+        { type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) },
+        { type: "button", label: "» Reload", onEnter: (S) => { CFG = null; return S.reload(); } },
+      ];
+      return { items };
     },
   },
 };
@@ -374,17 +448,17 @@ async function meshShowQr(S) {
 
 async function loadPeers(S) {
   const slot = document.getElementById("peers-slot");
-  if (slot) slot.innerHTML = `<div class="hint">scanning mesh for peers…</div>`;
+  if (slot) slot.innerHTML = `<div class="hint">querying Nucleus devices on the wifi mesh for Meshtastic configs…</div>`;
   const { d } = await jget(MB + "/peers");
   const L = d.local || {};
   const peers = d.peers || [];
-  if (!peers.length) { if (slot) slot.innerHTML = `<div class="off">no mesh peers found</div>`; return; }
-  let h = `<table><tr><th>Node IP</th><th>Channel</th><th>Key</th><th>Region</th>` +
+  if (!peers.length) { if (slot) slot.innerHTML = `<div class="off">no other Nucleus devices reachable on the wifi mesh</div>`; return; }
+  let h = `<table><tr><th>Nucleus IP</th><th>Channel</th><th>Key</th><th>Region</th>` +
     `<th>Preset</th><th>Slot</th><th>Match</th></tr>`;
   const cell = (v, match) => `<td class="${match ? "ok" : "off"}">${esc(v === "" || v == null ? "—" : v)}</td>`;
   peers.forEach((p) => {
     if (!p.reachable) {
-      h += `<tr><td>${esc(p.ip)}</td><td class="warn" colspan="6">unreachable / no config</td></tr>`;
+      h += `<tr><td>${esc(p.ip)}</td><td class="warn" colspan="6">unreachable / no Meshtastic config</td></tr>`;
       return;
     }
     const match = p.channel_name === L.channel_name && p.psk_fingerprint === L.psk_fingerprint &&
@@ -406,8 +480,9 @@ async function loadPeers(S) {
 
 // Exposed for the inline Join button rendered above.
 window.joinPeer = async function (ip) {
-  if (!confirm(`Join ${ip}'s LoRa channel? Copies its channel name, key, region, ` +
-    `preset and slot to this radio (your role, TX power, hop limit unchanged). Radio reboots.`)) return;
+  if (!confirm(`Join ${ip}'s Meshtastic channel? Copies its channel name, key, region, ` +
+    `preset and slot to this device's Meshtastic radio (role, TX power, hop limit unchanged). ` +
+    `Meshtastic radio reboots.`)) return;
   const S = window.__shell;
   await radioOp(S, MB + "/config/join-peer", { host: ip }, "join");
   loadPeers(S);
@@ -429,9 +504,17 @@ async function saveHeartbeat(S) {
 }
 
 async function saveCfg(S) {
-  let body;
-  try { body = JSON.parse(document.getElementById("cfg").value); }
-  catch (e) { return S.msg("invalid JSON: " + e.message, false); }
+  if (!CFG) return S.msg("nothing to save", false);
+  // Deep copy so we can strip empty optionals without mutating the live form.
+  const body = JSON.parse(JSON.stringify(CFG));
+  delete body._derived;
+  // Empty string / null optionals => omit so schema defaults + derivation apply.
+  const prune = (obj, keys) => keys.forEach((k) => {
+    if (obj && (obj[k] === "" || obj[k] == null)) delete obj[k];
+  });
+  prune(body.node, ["id", "name"]);
+  prune(body.br_lan, ["subnet_prefix"]);
+  prune(body.ap, ["name"]);
   const { ok, d } = await jsend("PUT", "/api/v1/config", body);
   if (ok) S.msg("saved (" + d.hostname + ") — not yet applied");
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);

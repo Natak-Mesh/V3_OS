@@ -153,17 +153,22 @@ def _service_is_enabled():
 def _radio_detected():
     """Check if a Meshtastic radio is available.
 
-    For meshtasticd (TCP): check if the TCP port is accepting connections.
+    For meshtasticd (TCP): report whether the meshtasticd service is active.
+    We must NOT open a TCP connection to localhost:4403 here — meshtasticd
+    treats every new API connection as a client and force-closes the
+    cot-bridge's connection, silently dropping any packet (e.g. presence
+    heartbeat) the bridge sends while its socket is dead. The bridge owns the
+    radio connection exclusively; liveness is inferred from the service state.
     For USB serial: check if /dev/ttyACM* exists.
     """
     if _is_meshtasticd():
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            s.connect((MESHTASTICD_HOST, MESHTASTICD_PORT))
-            s.close()
-            return True
-        except (OSError, socket.timeout):
+            result = subprocess.run(
+                ['systemctl', 'is-active', 'meshtasticd.service'],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.stdout.strip() == 'active'
+        except Exception:
             return False
     return bool(glob.glob('/dev/ttyACM*'))
 
