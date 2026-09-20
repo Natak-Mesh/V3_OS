@@ -46,6 +46,14 @@ try:
 except Exception:
     pass
 
+# Tailscale connection control (on/off, tailnet switch) — thin layer over the
+# tailscale CLI. Outside the config pipeline (see nucleusd/tailscale.py).
+try:
+    from .tailscale_router import router as tailscale_router
+    app.include_router(tailscale_router)
+except Exception:
+    pass
+
 
 @app.get("/api/v1/version")
 def get_version() -> dict:

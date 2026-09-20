@@ -59,6 +59,30 @@ nft list chain ip nat POSTROUTING 2>/dev/null | grep -q 'oifname "eth0" masquera
 }
 {% endif %}
 
+# --- Host firewall (UFW) ----------------------------------------------------
+# Trust internal interfaces (WPA3 mesh + local LAN + tailscale); default-deny
+# everything arriving on eth0 EXCEPT ssh, so ethernet admin access survives.
+# Idempotent: `ufw allow`/`default` are no-ops if the rule already exists.
+ufw --force default deny incoming
+ufw --force default allow outgoing
+ufw --force default deny routed
+ufw allow in on wlan1
+ufw allow in on br-lan
+ufw allow in on tailscale0
+ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
+{% if eth0_mode == "wan" %}
+# WAN mode: let LAN/mesh clients route OUT to the internet via eth0. NAT
+# masquerade for these is set up in the WAN block above; inbound-from-internet
+# forwarding stays denied by the default deny-routed policy (established replies
+# are still permitted by conntrack).
+ufw route allow in on br-lan out on eth0
+ufw route allow in on wlan1 out on eth0
+{% endif %}
+# Always allow mesh <-> LAN forwarding regardless of eth0 mode.
+ufw route allow in on br-lan out on wlan1
+ufw route allow in on wlan1 out on br-lan
+ufw --force enable
+
 {% if mesh_mcast_ttl > 0 %}
 # Bump multicast TTL on br-lan ingress. ATAK emits CoT/discovery/voice with
 # TTL=1; the kernel won't forward multicast unless TTL>1, so smcroute could not

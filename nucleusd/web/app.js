@@ -109,6 +109,10 @@ function msgUpsert(m) {
 // Voice state: channel list cache for the TUI voice page.
 let VOICE_CH = null;
 
+// Tailscale page state: auth-key input draft + selected tailnet profile.
+let TS_AUTHKEY = "";
+let TS_ACCT = null;
+
 function meshFillFrom(cfg) {
   M = {
     owner: cfg.owner || "",
@@ -148,6 +152,7 @@ const PAGES = {
           { type: "nav", label: "VOICE (PTT)", to: "voice" },
           { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
           { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
+          { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
           { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
           { type: "nav", label: "SYSTEM UPDATE", to: "update" },
         ],
@@ -233,8 +238,74 @@ const PAGES = {
     },
   },
 
-  // Meshtastic radio: field list + read/apply/import/QR actions.
-  meshtastic: {
+  // Tailscale (VPN): live connection control. On/off, browser-login for a new
+  // tailnet (or paste an auth key), and switch between already-authenticated
+  // tailnets. Outside the config pipeline — drives the tailscale CLI directly.
+  tailscale: {
+    title: "Tailscale",
+    dynamic: 5000,
+    async build() {
+      const { ok, d: s } = await jget("/api/v1/tailscale/status");
+      const items = [];
+
+      if (!ok || !s.installed) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">tailscale is not installed on this node</div></div>` });
+        return { items };
+      }
+
+      const state = s.running ? "connected" : (s.logged_in ? "disconnected" : "logged out");
+      const cls = s.running ? "ok" : (s.logged_in ? "warn" : "off");
+      let head = `<div class="content"><div class="kv">` +
+        `<span>status <span class="${cls}">${esc(state)}</span></span></div>`;
+      if (s.running) {
+        head += `<div class="kv"><span>tailnet <b>${esc(s.tailnet || "—")}</b></span>` +
+          `<span>ip <b>${esc(s.self_ip || "—")}</b></span>` +
+          `<span>peers <b>${s.peers}</b></span></div>`;
+      }
+      head += `<div id="ts-auth"></div></div>`;
+      items.push({ type: "content", html: head });
+
+      // Connect / disconnect.
+      if (s.running) {
+        items.push({ type: "button", label: "» Disconnect", onEnter: tsDown });
+      } else {
+        items.push({ type: "button",
+          label: s.logged_in ? "» Connect" : "» Connect (browser login)",
+          onEnter: tsUp });
+      }
+
+      // Join a different tailnet: paste an auth key (or leave blank + Connect
+      // above for browser login), or log out of the current one.
+      items.push(
+        { type: "ftext", key: "ts_authkey", label: "Auth key (optional)",
+          value: TS_AUTHKEY, onChange: (v) => TS_AUTHKEY = v },
+        { type: "button", label: "» Join with auth key", onEnter: tsUpKey },
+      );
+      if (s.logged_in) {
+        items.push({ type: "button", label: "» Log out", onEnter: tsLogout });
+      }
+
+      // Switch between already-authenticated tailnets (multiple profiles).
+      const { d: ad } = await jget("/api/v1/tailscale/accounts");
+      const accts = (ad && ad.accounts) || [];
+      if (accts.length > 1) {
+        if (!TS_ACCT) TS_ACCT = (accts.find((a) => a.active) || accts[0]).account;
+        const opts = accts.map((a) => a.account);
+        items.push(
+          { type: "content", html: `<div class="content"><div class="page-title" ` +
+            `style="padding-left:0">Switch tailnet</div></div>` },
+          { type: "fselect", key: "ts_acct", label: "Tailnet", options: opts,
+            value: TS_ACCT, onChange: (v) => TS_ACCT = v },
+          { type: "button", label: "» Switch", onEnter: tsSwitch },
+        );
+      }
+
+      return { items };
+    },
+  },
+
+
     title: "Meshtastic Radio",
     async build() {
       const { d: s } = await jget(MB + "/status");
@@ -770,6 +841,63 @@ async function applyCfg(S, dry) {
   if (!d.changed.length) return S.msg("no changes — system in sync");
   S.msg((dry ? "would change " : "changed ") + d.changed.length +
     " file(s); units: " + (d.units_restarted.join(", ") || "none"));
+}
+
+// ── Tailscale (VPN) actions ────────────────────────────────────
+// Show a browser-login URL in the page (auth slot) so an operator can complete
+// login on any device. Cleared on the next successful connect.
+function tsShowAuthUrl(url) {
+  const el = document.getElementById("ts-auth");
+  if (el) el.innerHTML = `<div class="kv"><span>login: ` +
+    `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></span></div>`;
+}
+
+async function tsUp(S) {
+  S.msg("connecting…");
+  const { ok, d } = await jsend("POST", "/api/v1/tailscale/up", {});
+  if (!ok) return S.msg("connect failed: " + (d.detail || "error"), false);
+  if (d.auth_url) { tsShowAuthUrl(d.auth_url); return S.msg("open the login URL to authenticate", false); }
+  S.msg("connected");
+  return S.reload();
+}
+
+async function tsUpKey(S) {
+  const key = (TS_AUTHKEY || "").trim();
+  if (!key) return S.msg("paste an auth key first (or use Connect for browser login)", false);
+  S.msg("joining tailnet…");
+  const { ok, d } = await jsend("POST", "/api/v1/tailscale/up", { authkey: key });
+  if (!ok) return S.msg("join failed: " + (d.detail || "error"), false);
+  TS_AUTHKEY = "";
+  if (d.auth_url) { tsShowAuthUrl(d.auth_url); return S.msg("open the login URL to authenticate", false); }
+  S.msg("connected");
+  return S.reload();
+}
+
+async function tsDown(S) {
+  S.msg("disconnecting…");
+  const { ok, d } = await jsend("POST", "/api/v1/tailscale/down");
+  if (!ok) return S.msg("disconnect failed: " + (d.detail || "error"), false);
+  S.msg("disconnected");
+  return S.reload();
+}
+
+async function tsLogout(S) {
+  if (!confirm("Log out of the current tailnet? You'll need an auth key or " +
+    "browser login to reconnect.")) return;
+  const { ok, d } = await jsend("POST", "/api/v1/tailscale/logout");
+  if (!ok) return S.msg("logout failed: " + (d.detail || "error"), false);
+  TS_ACCT = null;
+  S.msg("logged out");
+  return S.reload();
+}
+
+async function tsSwitch(S) {
+  if (!TS_ACCT) return S.msg("pick a tailnet first", false);
+  S.msg("switching…");
+  const { ok, d } = await jsend("POST", "/api/v1/tailscale/switch", { account: TS_ACCT });
+  if (!ok) return S.msg("switch failed: " + (d.detail || "error"), false);
+  S.msg("switched to " + TS_ACCT);
+  return S.reload();
 }
 
 // Launch the node update, then poll progress. The update restarts nucleusd

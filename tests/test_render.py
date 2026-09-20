@@ -103,6 +103,35 @@ def test_meshup_sets_params():
     assert "masquerade" in m  # eth0 wan NAT
 
 
+def test_meshup_firewall_rules():
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    # Default-deny inbound, but ssh over ethernet must survive.
+    assert "ufw --force default deny incoming" in m
+    assert "ufw allow in on eth0 to any port 22 proto tcp" in m
+    # Internal interfaces trusted.
+    assert "ufw allow in on wlan1" in m
+    assert "ufw allow in on br-lan" in m
+    assert "ufw allow in on tailscale0" in m
+    # WAN mode (default eth0 mode) routes clients out to the internet.
+    assert "ufw route allow in on br-lan out on eth0" in m
+    assert "ufw --force enable" in m
+
+
+def test_meshup_no_wan_route_in_lan_mode():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "eth0": {"mode": "lan", "static_ip": "10.10.9.1"},
+    })
+    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    # No internet egress routing when eth0 is a LAN port, but ssh + mesh<->lan
+    # forwarding still apply.
+    assert "ufw route allow in on br-lan out on eth0" not in m
+    assert "ufw allow in on eth0 to any port 22 proto tcp" in m
+    assert "ufw route allow in on br-lan out on wlan1" in m
+
+
 def test_hostapd_bridges_brlan():
     h = rendered()["/etc/hostapd/hostapd.conf"]
     assert "bridge=br-lan" in h

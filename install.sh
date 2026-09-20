@@ -133,10 +133,24 @@ echo "==> Reticulum config is rendered by 'nucleusctl apply'"
 # rendered artifact now (templates/reticulum-config.j2), produced from the one
 # config.yaml like every other generated file — no seeding here.
 
-echo "==> Tailscale (installed, left logged-out; run 'tailscale up' to activate)"
-if ! command -v tailscale >/dev/null 2>&1; then
-    curl -fsSL https://tailscale.com/install.sh | sh
+echo "==> Tailscale (installed from Tailscale's apt repo, left logged-out)"
+# Tailscale ships its own apt repo (pkgs.tailscale.com), one suite per Debian
+# codename. We add it directly here — same pattern as the meshtastic repo above —
+# rather than piping their curl|sh installer, which spawns its OWN apt-get and
+# collides with this script over the dpkg lock. All package installs stay in one
+# apt sequence. Run 'tailscale up' (or use the web UI) to activate.
+TSREPO=/etc/apt/sources.list.d/tailscale.list
+if [ ! -f "$TSREPO" ]; then
+    . /etc/os-release
+    CODENAME="${VERSION_CODENAME:-trixie}"
+    mkdir -p /usr/share/keyrings
+    curl -fsSL "https://pkgs.tailscale.com/stable/debian/${CODENAME}.noarmor.gpg" \
+        -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+    curl -fsSL "https://pkgs.tailscale.com/stable/debian/${CODENAME}.tailscale-keyring.list" \
+        -o "$TSREPO"
 fi
+apt-get update -qq
+apt-get install -y -o DPkg::Lock::Timeout=120 tailscale
 systemctl enable tailscaled
 
 echo "==> enable services"
