@@ -305,7 +305,8 @@ const PAGES = {
     },
   },
 
-
+  // Meshtastic radio: field list + read/apply/import/QR actions.
+  meshtastic: {
     title: "Meshtastic Radio",
     async build() {
       const { d: s } = await jget(MB + "/status");
