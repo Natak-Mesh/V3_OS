@@ -58,6 +58,25 @@ def cmd_status(_args) -> None:
     print(json.dumps(statusmod.collect(), indent=2))
 
 
+def cmd_tak_config(_args) -> None:
+    """Emit the TAK block + derived PKI names as JSON.
+
+    Consumed by the one-shot provisioning script (nucleus-tak-setup.sh) so it
+    reads every value through the validated schema — same single source of truth
+    as every other consumer, no second parser of config.yaml.
+    """
+    cfg = _load_or_die()
+    print(json.dumps({
+        "variant": cfg.tak.variant,
+        "enrollment_validity_days": cfg.tak.enrollment_validity_days,
+        "keystore_pass": cfg.tak.keystore_pass,
+        "cert": cfg.tak.cert.model_dump(),
+        "root_ca_name": cfg.tak_root_ca_name,
+        "intermediate_ca_name": cfg.tak_intermediate_ca_name,
+        "hostname": cfg.node.hostname,
+    }))
+
+
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="nucleusctl", description="Nucleus V3 OS control")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -73,6 +92,10 @@ def main(argv=None) -> None:
     pa.set_defaults(func=cmd_apply)
 
     sub.add_parser("status", help="live runtime status as JSON").set_defaults(func=cmd_status)
+
+    sub.add_parser(
+        "tak-config", help="emit TAK block + derived PKI names as JSON (for nucleus-tak-setup.sh)"
+    ).set_defaults(func=cmd_tak_config)
 
     args = p.parse_args(argv)
     args.func(args)

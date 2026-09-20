@@ -298,6 +298,47 @@ class ReticulumConfig(BaseModel):
     kiss_speed: int = Field(115200, ge=1, description="KISS serial baud rate.")
 
 
+class TakCertConfig(BaseModel):
+    """X.509 metadata baked into the TAK Server PKI (cert-metadata.sh).
+
+    These values are substituted verbatim into /opt/tak/certs/cert-metadata.sh
+    before the CA/server/webadmin certs are generated. CA common names are
+    derived from the node hostname (no spaces allowed), not set here.
+    """
+
+    country: str = Field("US", description="X.509 C — 2-letter country code.")
+    state: str = Field("FL", description="X.509 ST — state / province.")
+    city: str = Field("Tampa", description="X.509 L — city / locality.")
+    organization: str = Field("NATAK", description="X.509 O — organization.")
+    organizational_unit: str = Field("TAK", description="X.509 OU — org unit.")
+
+
+class TakConfig(BaseModel):
+    """Official TAK Server (+ MediaMTX) — optional, off on most nodes.
+
+    This block is consumed by the one-shot provisioning script
+    (nucleus-tak-setup.sh), NOT the `nucleusctl apply` render loop: installing
+    the tak.gov .deb and generating PKI are irreversible, per-node-optional
+    actions that don't belong in the idempotent apply pipeline. The script reads
+    these values to run unattended (cert metadata, CA names, enrollment config).
+    """
+
+    variant: str = Field(
+        "none",
+        pattern="^(none|official)$",
+        description="TAK Server variant: none (default) | official (tak.gov .deb).",
+    )
+    cert: TakCertConfig = Field(default_factory=TakCertConfig)
+    enrollment_validity_days: int = Field(
+        365, ge=1, le=3650,
+        description="Validity (days) of client certs issued via auto-enrollment.",
+    )
+    keystore_pass: str = Field(
+        "atakatak",
+        description="Signing keystore password (cert-metadata CAPASS + CoreConfig).",
+    )
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -310,6 +351,7 @@ class NucleusConfig(BaseModel):
     messaging: MessagingConfig = Field(default_factory=MessagingConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     reticulum: ReticulumConfig = Field(default_factory=ReticulumConfig)
+    tak: TakConfig = Field(default_factory=TakConfig)
 
     @field_validator("node", mode="before")
     @classmethod
@@ -352,6 +394,15 @@ class NucleusConfig(BaseModel):
     @property
     def ap_name(self) -> str:
         return self.ap.name or f"{self.node.short}-nucleus-ap"
+
+    # ---- TAK PKI names (derived from hostname; CN cannot contain spaces) ----
+    @property
+    def tak_root_ca_name(self) -> str:
+        return f"{self.node.hostname}-root"
+
+    @property
+    def tak_intermediate_ca_name(self) -> str:
+        return f"{self.node.hostname}-ca"
 
     @model_validator(mode="after")
     def _no_subnet_collision(self) -> "NucleusConfig":

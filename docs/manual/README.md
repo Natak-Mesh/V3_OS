@@ -40,6 +40,7 @@ AP via this web UI (or the same REST API / `nucleusctl`).
 | nucleus-messaging | WiFi mcast + LoRa → one deduped message store | [Messaging](messaging.md) | [messaging-internals.md](messaging-internals.md) |
 | nucleus-voice | UDP-mcast PTT voice; optional LoRa STT/TTS | [Voice](voice.md) | [voice-internals.md](voice-internals.md) |
 | nucleusd | Always-on FastAPI: config/apply/status, REST API, serves this UI | [System](system.md) | [API.md](../API.md) |
+| takserver *(optional)* | Official TAK Server (tak.gov) + MediaMTX; off by default, provisioned per-node | — | [takserver.md](takserver.md) |
 
 ### Config pipeline
 
@@ -80,6 +81,8 @@ Selectable item types: navigation links, action buttons, and editable fields
 | INTERFACES AND SERVICES | [System](system.md) |
 | RADIO CONFIGURATION | [Config](config.md) |
 | SYSTEM UPDATE | [Update](update.md) |
+
+Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md).
 
 For subsystem internals see [messaging-internals.md](messaging-internals.md), [voice-internals.md](voice-internals.md)
 and [API.md](../API.md).

@@ -119,6 +119,18 @@ install -m 755 "$REPO/system/bin/nucleus-update.sh" "$OPT/bin/nucleus-update.sh"
 # Let the web UI user launch it detached, as root, without a password.
 install -m 440 "$REPO/system/sudoers.d/nucleus-update" /etc/sudoers.d/nucleus-update
 
+echo "==> TAK Server provisioning tooling (inert unless tak.variant=official)"
+# One-shot official TAK Server provisioner. NOT wired into apply — it's a manual
+# per-node action (see README §4). Copied to every node so it's ready when
+# needed; it no-ops unless config.yaml sets tak.variant=official.
+install -m 755 "$REPO/system/bin/nucleus-tak-setup.sh" "$OPT/bin/nucleus-tak-setup.sh"
+ln -sf "$OPT/bin/nucleus-tak-setup.sh" /usr/local/bin/nucleus-tak-setup.sh
+# Boot-ordering drop-in for takserver.service. Inert on nodes without takserver
+# installed — systemd only applies a drop-in whose base unit exists.
+mkdir -p /etc/systemd/system/takserver.service.d
+install -m 644 "$REPO/system/systemd/takserver.service.d/override.conf" \
+    /etc/systemd/system/takserver.service.d/override.conf
+
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
 if [ ! -f /etc/nucleus/config.yaml ]; then

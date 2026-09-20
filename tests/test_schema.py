@@ -20,6 +20,29 @@ def cfg(**over):
     return NucleusConfig.model_validate(d)
 
 
+def test_tak_defaults_off():
+    # Most nodes never touch TAK: the block defaults to variant=none and is
+    # inert (no apply-loop targets, script no-ops).
+    c = cfg()
+    assert c.tak.variant == "none"
+    assert c.tak.enrollment_validity_days == 365
+    assert c.tak.keystore_pass == "atakatak"
+    assert c.tak.cert.organization == "NATAK"
+
+
+def test_tak_ca_names_derive_from_hostname():
+    # CA common names are derived (no spaces) from the hostname, mirroring the
+    # rest of the derived-addressing scheme.
+    c = cfg()
+    assert c.tak_root_ca_name == "0009-nucleus-root"
+    assert c.tak_intermediate_ca_name == "0009-nucleus-ca"
+
+
+def test_tak_variant_rejects_unknown():
+    with pytest.raises(ValidationError):
+        cfg(tak={"variant": "opentakserver"})
+
+
 def test_derived_addressing():
     c = cfg()
     assert c.mesh_ip == "10.20.1.9"

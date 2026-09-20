@@ -78,6 +78,20 @@ reticulum:
   # kiss_port: /dev/rfcomm0
   # kiss_speed: 115200
 
+tak:
+  # Official TAK Server (+ MediaMTX) — OFF on most nodes. Set variant: official,
+  # drop the tak.gov .deb in ~natak, then run:  sudo nucleus-tak-setup.sh
+  # This block is consumed by that one-shot script, NOT by 'nucleusctl apply'.
+  variant: none            # none | official
+  enrollment_validity_days: 365   # validity of certs issued via auto-enrollment
+  keystore_pass: atakatak  # signing keystore password (TAK default)
+  cert:                    # X.509 metadata baked into the PKI
+    country: US
+    state: FL
+    city: Tampa
+    organization: NATAK
+    organizational_unit: TAK
+
 voice:
   enabled: true            # run the mesh PTT voice daemon (nucleus-voice.service)
   channel: 1               # startup voice channel (multicast group 239.10.10.N)
