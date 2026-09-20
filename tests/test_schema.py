@@ -35,6 +35,22 @@ def test_br_lan_prefix_override():
     assert c.br_lan_ip == "10.20.200.1"
 
 
+def test_reticulum_defaults():
+    r = cfg().reticulum
+    assert r.enabled is True
+    assert r.transport is True
+    assert r.auto_device == "wlan1"
+    assert r.tcp_server_port == 4242
+    assert r.entry_node_host == "173.230.150.24"
+    assert r.entry_node_port == 4243
+    assert r.kiss_enabled is False
+
+
+def test_reticulum_loglevel_bounds():
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"loglevel": 8})
+
+
 def test_frequency_matches_channel():
     assert cfg(mesh={"password": "52235223", "channel": 3}).mesh.frequency == 2422
 

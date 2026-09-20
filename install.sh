@@ -85,6 +85,13 @@ exec "$VENV/bin/python" -m nucleusd.cli "\$@"
 EOF
 chmod +x /usr/local/bin/nucleusctl
 
+echo "==> Reticulum CLI launchers"
+# rns ships its tools in the venv; symlink them onto PATH so operators can run
+# `rnstatus` etc. directly instead of the full venv path.
+for t in rnstatus rnpath rnprobe rnid rncp rnx rnsd; do
+    ln -sf "$VENV/bin/$t" "/usr/local/bin/$t"
+done
+
 echo "==> static system files"
 install -m 644 "$REPO/system/systemd/nucleus-mesh.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/brlan-setup.service" /etc/systemd/system/
@@ -121,18 +128,10 @@ else
     echo "    /etc/nucleus/config.yaml exists — left untouched"
 fi
 
-echo "==> seed Reticulum config (only if missing)"
-# rnsd runs as user 'natak'; its config lives in ~natak/.reticulum/config.
-# Seed the Natak default (AutoInterface wlan1, TCPServer br-lan:4242, public-IP
-# entry node) only if absent, so a re-install never clobbers local edits.
-RETI_DIR=/home/natak/.reticulum
-if [ ! -f "$RETI_DIR/config" ]; then
-    install -d -o natak -g natak -m 700 "$RETI_DIR"
-    install -o natak -g natak -m 644 "$REPO/system/reticulum/config" "$RETI_DIR/config"
-    echo "    seeded $RETI_DIR/config"
-else
-    echo "    $RETI_DIR/config exists — left untouched"
-fi
+echo "==> Reticulum config is rendered by 'nucleusctl apply'"
+# rnsd runs as user 'natak' and reads ~natak/.reticulum/config. That file is a
+# rendered artifact now (templates/reticulum-config.j2), produced from the one
+# config.yaml like every other generated file — no seeding here.
 
 echo "==> Tailscale (installed, left logged-out; run 'tailscale up' to activate)"
 if ! command -v tailscale >/dev/null 2>&1; then

@@ -1,0 +1,52 @@
+# Rendered by nucleusd — DO NOT EDIT. Source: /etc/nucleus/config.yaml
+# Reticulum daemon (rnsd) config. Regenerate with `nucleusctl apply`.
+
+[reticulum]
+  enable_transport = {{ "Yes" if reti_transport else "No" }}
+  share_instance = Yes
+  instance_name = default
+
+[logging]
+  loglevel = {{ reti_loglevel }}
+
+[interfaces]
+
+{% if reti_auto_interface %}
+  [[Mesh AutoInterface]]
+    type = AutoInterface
+    enabled = Yes
+    devices = {{ reti_auto_device }}
+
+{% endif %}
+{% if reti_tcp_server %}
+  [[LAN TCP Server]]
+    type = TCPServerInterface
+    enabled = Yes
+    device = {{ reti_tcp_server_device }}
+    listen_port = {{ reti_tcp_server_port }}
+
+{% endif %}
+{% if reti_entry_node %}
+  [[Entry Node]]
+    type = TCPClientInterface
+    enabled = Yes
+    target_host = {{ reti_entry_node_host }}
+    target_port = {{ reti_entry_node_port }}
+
+{% endif %}
+{% if reti_kiss_enabled %}
+  [[KISS TNC]]
+    type = KISSInterface
+    enabled = Yes
+    port = {{ reti_kiss_port }}
+    speed = {{ reti_kiss_speed }}
+    databits = 8
+    parity = none
+    stopbits = 1
+    preamble = 150
+    txtail = 10
+    persistence = 200
+    slottime = 20
+    flow_control = false
+
+{% endif %}

@@ -253,6 +253,51 @@ class MessagingConfig(BaseModel):
     )
 
 
+class ReticulumConfig(BaseModel):
+    """Reticulum Network Stack daemon (rnsd).
+
+    rnsd runs as user 'natak' (its config lives in ~natak/.reticulum/config),
+    providing a cryptographic mesh transport that rides on top of the 802.11s
+    WiFi mesh (AutoInterface on wlan1) and, optionally, reaches off-mesh peers
+    over TCP. Like every other subsystem here the operator sets primitives and
+    the rendered config is produced by `nucleusctl apply` — the file is an
+    artifact, never hand-edited.
+
+    Transports:
+      * AutoInterface on wlan1 — auto-peers with other Reticulum nodes on the
+        802.11s mesh over IPv6 link-local (no IP infra needed).
+      * TCPServer on br-lan — lets wired/AP-side clients attach over TCP.
+      * TCPClient entry node — an optional uplink to a public-IP Reticulum node
+        so the local mesh joins the wider network.
+      * KISS — optional packet-radio TNC on a serial device (off by default).
+    """
+
+    enabled: bool = Field(True, description="Run the Reticulum daemon (rnsd.service).")
+    transport: bool = Field(
+        True,
+        description="Act as a Reticulum transport node (route/relay for peers). Suits always-on nodes.",
+    )
+    loglevel: int = Field(4, ge=0, le=7, description="rnsd log verbosity (0=critical .. 7=extreme).")
+
+    # AutoInterface over the 802.11s WiFi mesh.
+    auto_interface: bool = Field(True, description="AutoInterface peering on the wlan1 mesh.")
+    auto_device: str = Field("wlan1", description="Interface AutoInterface peers over.")
+
+    # TCPServer on br-lan for wired/AP-side clients.
+    tcp_server: bool = Field(True, description="Expose a TCPServerInterface on br-lan.")
+    tcp_server_port: int = Field(4242, ge=1, le=65535, description="Listen port for the br-lan TCPServer.")
+
+    # Optional uplink to a public-IP entry node.
+    entry_node: bool = Field(True, description="Connect out to a public-IP Reticulum entry node over TCP.")
+    entry_node_host: str = Field("173.230.150.24", description="Entry node hostname / IP.")
+    entry_node_port: int = Field(4243, ge=1, le=65535, description="Entry node TCP port.")
+
+    # Optional KISS packet-radio TNC (off by default).
+    kiss_enabled: bool = Field(False, description="Enable a KISSInterface on a serial TNC.")
+    kiss_port: str = Field("/dev/rfcomm0", description="Serial device for the KISS TNC.")
+    kiss_speed: int = Field(115200, ge=1, description="KISS serial baud rate.")
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -264,6 +309,7 @@ class NucleusConfig(BaseModel):
     meshtastic: MeshtasticConfig = Field(default_factory=MeshtasticConfig)
     messaging: MessagingConfig = Field(default_factory=MessagingConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    reticulum: ReticulumConfig = Field(default_factory=ReticulumConfig)
 
     @field_validator("node", mode="before")
     @classmethod
@@ -360,4 +406,19 @@ class NucleusConfig(BaseModel):
             "mesh_cot_bridge": self.meshtastic.cot_bridge,
             "mesh_owner": self.node.hostname,
             "mesh_owner_short": self.node.short,
+            # --- Reticulum (rnsd) ---
+            "reti_enabled": self.reticulum.enabled,
+            "reti_transport": self.reticulum.transport,
+            "reti_loglevel": self.reticulum.loglevel,
+            "reti_auto_interface": self.reticulum.auto_interface,
+            "reti_auto_device": self.reticulum.auto_device,
+            "reti_tcp_server": self.reticulum.tcp_server,
+            "reti_tcp_server_device": "br-lan",
+            "reti_tcp_server_port": self.reticulum.tcp_server_port,
+            "reti_entry_node": self.reticulum.entry_node,
+            "reti_entry_node_host": self.reticulum.entry_node_host,
+            "reti_entry_node_port": self.reticulum.entry_node_port,
+            "reti_kiss_enabled": self.reticulum.kiss_enabled,
+            "reti_kiss_port": self.reticulum.kiss_port,
+            "reti_kiss_speed": self.reticulum.kiss_speed,
         }

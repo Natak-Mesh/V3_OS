@@ -11,9 +11,14 @@ apply logic exists in exactly one place.
 
 from __future__ import annotations
 
+import pwd
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Reticulum daemon (rnsd) runs as this user; its config lives in ~/.reticulum.
+RETI_USER = "natak"
+RETI_CONFIG = Path(f"/home/{RETI_USER}/.reticulum/config")
 
 # nginx reverse-proxy paths (port-less .local + by-IP access to the :8080 UI).
 NGINX_VHOST = Path("/etc/nginx/sites-available/nucleus")
@@ -52,6 +57,9 @@ TARGETS: list[Target] = [
     Target("smcroute.conf.j2", Path("/etc/smcroute.conf"), ("smcroute",)),
     Target("hostapd.conf.j2", Path("/etc/hostapd/hostapd.conf"), ("hostapd",)),
     Target("meshtasticd-config.yaml.j2", Path("/etc/meshtasticd/config.yaml"), ("meshtasticd",)),
+    # rnsd is enable/disable-driven like meshtasticd (handled in apply()), and
+    # the file must land owned by RETI_USER — see _write_reticulum below.
+    Target("reticulum-config.j2", RETI_CONFIG, ("rnsd",)),
     # nginx reverse proxy — reload (not restart) handled specially in apply().
     Target("nginx-nucleus.conf.j2", NGINX_VHOST, ()),
 ]
@@ -129,6 +137,31 @@ def _reconcile_meshtastic(cfg: NucleusConfig) -> list[str]:
     _set_service("cot-bridge", m.enabled and m.cot_bridge)
     touched.append("cot-bridge")
     return touched
+
+
+def _chown_reticulum() -> None:
+    """Give the rnsd config (and its dir) back to RETI_USER.
+
+    apply() runs as root, but rnsd runs as RETI_USER and must own its config
+    directory (0700) and file, or it refuses to read them. Idempotent.
+    """
+    try:
+        ent = pwd.getpwnam(RETI_USER)
+    except KeyError:
+        return  # user absent (e.g. off-box test host); nothing to own
+    import os
+    d = RETI_CONFIG.parent
+    d.mkdir(parents=True, exist_ok=True)
+    os.chown(d, ent.pw_uid, ent.pw_gid)
+    d.chmod(0o700)
+    if RETI_CONFIG.exists():
+        os.chown(RETI_CONFIG, ent.pw_uid, ent.pw_gid)
+
+
+def _reconcile_reticulum(cfg: NucleusConfig) -> list[str]:
+    """Enable/disable rnsd to match reticulum.enabled. Returns units touched."""
+    _set_service("rnsd", cfg.reticulum.enabled)
+    return ["rnsd"]
 
 
 def _global_ipv4s() -> list[str]:
@@ -235,6 +268,9 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # unit state via _reconcile_meshtastic below, so drop it from the plain
     # restart set to avoid starting a unit we're about to disable.
     units_to_restart.discard("meshtasticd")
+    # rnsd is enable/disable-driven too; reconcile below after chowning its
+    # config so we never start it against a root-owned file it can't read.
+    units_to_restart.discard("rnsd")
 
     if dry_run:
         return result
@@ -251,6 +287,13 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     result.units_restarted += _reconcile_meshtastic(cfg)
     if str(Path("/etc/meshtasticd/config.yaml")) in result.changed and cfg.meshtastic.enabled:
         _restart(["meshtasticd"])
+
+    # Reticulum: ensure rnsd owns its config, reconcile enabled-state, and
+    # restart it if its rendered config changed (and it's enabled).
+    _chown_reticulum()
+    result.units_restarted += _reconcile_reticulum(cfg)
+    if str(RETI_CONFIG) in result.changed and cfg.reticulum.enabled:
+        _restart(["rnsd"])
 
     # nginx reverse proxy: ensure the self-signed cert matches current SANs,
     # enable our vhost, drop the stock default site, and reload if anything

@@ -16,8 +16,49 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 12
+    assert len(r) == 13
     assert all(v.strip() for v in r.values())
+
+
+def test_reticulum_config_defaults():
+    r = rendered()["/home/natak/.reticulum/config"]
+    assert "enable_transport = Yes" in r
+    assert "loglevel = 4" in r
+    # AutoInterface on the wlan1 mesh.
+    assert "type = AutoInterface" in r
+    assert "devices = wlan1" in r
+    # TCPServer on br-lan.
+    assert "type = TCPServerInterface" in r
+    assert "device = br-lan" in r
+    assert "listen_port = 4242" in r
+    # Entry-node uplink.
+    assert "type = TCPClientInterface" in r
+    assert "target_host = 173.230.150.24" in r
+    assert "target_port = 4243" in r
+    # KISS off by default.
+    assert "KISSInterface" not in r
+
+
+def test_reticulum_config_minimal():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {
+            "transport": False,
+            "tcp_server": False,
+            "entry_node": False,
+            "kiss_enabled": True,
+            "kiss_port": "/dev/ttyUSB0",
+        },
+    })
+    r = render_all(cfg)["/home/natak/.reticulum/config"]
+    assert "enable_transport = No" in r
+    assert "TCPServerInterface" not in r
+    assert "TCPClientInterface" not in r
+    assert "type = AutoInterface" in r          # still on by default
+    assert "type = KISSInterface" in r
+    assert "port = /dev/ttyUSB0" in r
 
 
 def test_meshtasticd_config():

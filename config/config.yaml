@@ -63,6 +63,21 @@ messaging:
   dedupe_window_secs: 60   # window to match the LoRa + WiFi copies of one message
   history_limit: 500       # max messages retained / returned to the UI
 
+reticulum:
+  enabled: true            # run the Reticulum daemon (rnsd.service)
+  transport: true          # act as a transport node (route/relay for peers)
+  loglevel: 4              # rnsd verbosity 0=critical .. 7=extreme
+  auto_interface: true     # AutoInterface peering on the wlan1 802.11s mesh
+  auto_device: wlan1
+  tcp_server: true         # TCPServerInterface on br-lan for wired/AP clients
+  tcp_server_port: 4242
+  entry_node: true         # uplink to a public-IP Reticulum entry node
+  entry_node_host: 173.230.150.24
+  entry_node_port: 4243
+  kiss_enabled: false      # optional KISS packet-radio TNC on a serial device
+  # kiss_port: /dev/rfcomm0
+  # kiss_speed: 115200
+
 voice:
   enabled: true            # run the mesh PTT voice daemon (nucleus-voice.service)
   channel: 1               # startup voice channel (multicast group 239.10.10.N)
