@@ -80,6 +80,7 @@ Selectable item types: navigation links, action buttons, and editable fields
 | MESHTASTIC | [Meshtastic Radio](meshtastic.md) |
 | INTERFACES AND SERVICES | [System](system.md) |
 | RADIO CONFIGURATION | [Config](config.md) |
+| TAK SERVER *(optional)* | [TAK Server](takserver.md) |
 | SYSTEM UPDATE | [Update](update.md) |
 
 Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md).

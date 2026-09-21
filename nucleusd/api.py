@@ -103,6 +103,39 @@ def get_status() -> dict:
     return statusmod.collect()
 
 
+# --- TAK Server (optional; provisioned by nucleus-tak-setup.sh) --------------
+# Outside the config pipeline like tailscale: presence is detected live, and the
+# cert downloads serve the files nucleus-tak-setup.sh staged.
+TAK_CERT_DIR = Path("/opt/nucleus/tak-certs")
+TAK_DIR = Path("/opt/tak")
+
+
+@app.get("/api/v1/tak/status")
+def get_tak_status() -> dict:
+    """TAK Server presence + service state + downloadable certs."""
+    import subprocess
+    installed = TAK_DIR.is_dir()
+    service = "not installed"
+    if installed:
+        r = subprocess.run(["systemctl", "is-active", "takserver.service"],
+                           capture_output=True, text=True, check=False)
+        service = r.stdout.strip() or "unknown"
+    certs = sorted(p.name for p in TAK_CERT_DIR.glob("*.p12")) \
+        if TAK_CERT_DIR.is_dir() else []
+    return {"installed": installed, "service": service, "certs": certs}
+
+
+@app.get("/api/v1/tak/certs/{name}")
+def get_tak_cert(name: str) -> FileResponse:
+    """Download a staged TAK cert (webadmin.p12 / intermediate truststore)."""
+    # Basename-only: no path traversal out of the staging dir.
+    path = TAK_CERT_DIR / Path(name).name
+    if not path.is_file() or path.suffix != ".p12":
+        raise HTTPException(status_code=404, detail="no such cert")
+    return FileResponse(str(path), media_type="application/x-pkcs12",
+                        filename=path.name)
+
+
 @app.get("/api/v1/update/check")
 def get_update_check() -> dict:
     """Compare the installed (running) version with the git remote."""

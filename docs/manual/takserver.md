@@ -84,6 +84,20 @@ Client certificates are issued via enrollment — the script does **not**
 pre-generate per-client certs. Revoke/inspect issued certs under
 **Administrative → Client Certificates**; restart `takserver` after revoking.
 
+## Web UI page
+
+The **TAK SERVER** page appears in the Nucleus web UI on nodes where TAK Server
+is installed (it shows "not installed" otherwise). It provides:
+
+- **Status** — the `takserver` service state (also shown on the System page's
+  Services table when installed).
+- **Web admin pointer** — the TAK admin console URL (`https://<node-ip>:8443`,
+  TAK's own port, not the Nucleus UI). Import `webadmin.p12` into your browser
+  first, then open it to manage users and certificates.
+- **Download certificates** — a button per staged cert
+  (`/opt/nucleus/tak-certs/`): `webadmin.p12` and the intermediate truststore,
+  for pulling onto connected devices.
+
 ## Ports
 
 | Port | Service |

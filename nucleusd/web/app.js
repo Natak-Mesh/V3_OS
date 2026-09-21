@@ -154,6 +154,7 @@ const PAGES = {
           { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
           { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
           { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
+          { type: "nav", label: "TAK SERVER", to: "tak" },
           { type: "nav", label: "SYSTEM UPDATE", to: "update" },
         ],
       };
@@ -232,9 +233,61 @@ const PAGES = {
       Object.entries(st.services || {}).forEach(([u, s]) => {
         h += `<tr><td>${esc(u)}</td><td class="${s === "active" ? "ok" : "off"}">${esc(s)}</td></tr>`;
       });
+      // TAK Server is optional; show a row only when it's installed.
+      const { d: tak } = await jget("/api/v1/tak/status");
+      if (tak && tak.installed) {
+        h += `<tr><td>takserver</td><td class="${tak.service === "active" ? "ok" : "off"}">${esc(tak.service)}</td></tr>`;
+      }
       h += `</table></div>`;
 
       return { items: [{ type: "content", html: h }] };
+    },
+  },
+
+  // TAK Server (optional): client-cert downloads + web-admin pointer. Only
+  // meaningful on nodes provisioned with nucleus-tak-setup.sh; hidden otherwise.
+  tak: {
+    title: "TAK Server",
+    dynamic: 5000,
+    async build() {
+      const { ok, d: s } = await jget("/api/v1/tak/status");
+      const items = [];
+
+      if (!ok || !s.installed) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">TAK Server is not installed on this node</div></div>` });
+        return { items };
+      }
+
+      const cls = s.service === "active" ? "ok" : "off";
+      let head = `<div class="content"><div class="kv">` +
+        `<span>status <span class="${cls}">${esc(s.service)}</span></span></div>`;
+      // Web admin lives on TAK's own port (8443), not the Nucleus UI. Point the
+      // operator there and remind them the admin cert must be imported first.
+      const host = location.hostname;
+      head += `<div class="kv"><span>web admin ` +
+        `<b>https://${esc(host)}:8443</b></span></div>` +
+        `<div class="off">Import webadmin.p12 into your browser first, ` +
+        `then open the web admin to manage users and certificates. ` +
+        `Client devices connect on port 8089.</div></div>`;
+      items.push({ type: "content", html: head });
+
+      // One download button per staged cert (webadmin.p12 + intermediate
+      // truststore). The button just navigates the browser to the download URL.
+      const certs = s.certs || [];
+      if (!certs.length) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="warn">no certs staged in /opt/nucleus/tak-certs</div></div>` });
+      } else {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="page-title" style="padding-left:0">Download certificates</div></div>` });
+        certs.forEach((name) => {
+          items.push({ type: "button", label: "» " + name,
+            onEnter: () => takDownload(name) });
+        });
+      }
+
+      return { items };
     },
   },
 
@@ -842,6 +895,18 @@ async function applyCfg(S, dry) {
   if (!d.changed.length) return S.msg("no changes — system in sync");
   S.msg((dry ? "would change " : "changed ") + d.changed.length +
     " file(s); units: " + (d.units_restarted.join(", ") || "none"));
+}
+
+// ── TAK Server actions ─────────────────────────────────────────
+// Trigger a browser download of a staged client cert. The API serves the .p12
+// as an attachment; a hidden anchor click starts the download on the device.
+function takDownload(name) {
+  const a = document.createElement("a");
+  a.href = "/api/v1/tak/certs/" + encodeURIComponent(name);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 // ── Tailscale (VPN) actions ────────────────────────────────────
