@@ -41,6 +41,15 @@ def cmd_render(args) -> None:
 
 
 def cmd_apply(args) -> None:
+    # Persist schema defaults for any keys the live config omits, so a code
+    # update brings new features online without a manual config edit. Skip on
+    # dry-run (must not write) and never let a rewrite failure block apply.
+    if not args.dry_run:
+        try:
+            if cfgio.normalize():
+                print(f"normalized config: added missing defaults to {cfgio.CONFIG_PATH}")
+        except Exception as e:
+            print(f"warning: config normalize skipped: {e}", file=sys.stderr)
     cfg = _load_or_die()
     result = apply_config(cfg, dry_run=args.dry_run)
     tag = "would change" if args.dry_run else "changed"

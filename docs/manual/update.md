@@ -25,3 +25,44 @@ update is **blocked** until they are resolved.
   web UI may briefly disconnect; the on-disk status survives the restart, so
   transient fetch failures are tolerated while polling progress.
 - **Refresh** — re-check the version status.
+
+## Config default merge
+
+Updates ship new code, but `install.sh` never touches an existing
+`/etc/nucleus/config.yaml` (it seeds that file only if absent). Without a merge
+step, a new feature's config keys never reach an already-provisioned node, so the
+feature stays off even after a successful update. This gap is closed by
+`config.normalize()`:
+
+- `nucleusctl apply` (already run by the update, as root) calls
+  `config.normalize()` first: it loads the live config — the schema fills in any
+  key the file omits with that key's default — and writes the fully-populated
+  model back. Any key **missing** from the live file gains its schema default;
+  operator-set values are **never** changed (they override defaults on load).
+- The write goes through `config.py` — the one module that does YAML I/O — using
+  its atomic save, so a crash mid-update cannot brick boot.
+- Operators override any merged default afterwards via the CONFIG page / API,
+  exactly as before.
+- The rewrite is schema-normalized YAML, so hand-written comments/ordering in the
+  live file are not preserved. The repo `config/config.yaml` keeps the commented
+  reference copy.
+
+### How this obeys the README pattern (Option A)
+
+- **One contract.** `schema.py` is the single source of truth for defaults;
+  normalize just persists what the schema already computes on load.
+- **Config stays operator-owned state.** Normalize only fills gaps; it never
+  clobbers a value an operator set — consistent with "seed only if absent".
+- **Idempotent apply.** Re-running with nothing missing rewrites nothing
+  (`normalize()` returns False), so it is safe to run on every apply.
+
+### Result: the update path is self-contained
+
+1. User clicks **Update now** in the web UI.
+2. Script git-pulls the latest repo.
+3. `install.sh` installs apt packages + pip deps (new features' system deps).
+4. `nucleusctl apply` merges missing config defaults, then renders configs.
+5. Services restart.
+
+No post-update manual commands are needed to bring a new feature online on an
+existing node.

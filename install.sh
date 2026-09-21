@@ -24,6 +24,7 @@ echo "==> apt packages"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip git curl gpg \
+    build-essential python3-dev libcodec2-dev \
     babeld smcroute hostapd wpasupplicant iw \
     nftables network-manager ufw \
     nginx avahi-daemon avahi-utils openssl

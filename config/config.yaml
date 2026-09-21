@@ -108,5 +108,5 @@ voice:
   # stt_grammar:           # optional phrase-list file (vosk only)
   stt_cleanup: true        # HPF + WebRTC noise-suppression on the STT mic tap
   # --- live Codec2 voice stream over LoRa (advanced) ---
-  stream_enabled: false
+  stream_enabled: true
   stream_portnum: 256
