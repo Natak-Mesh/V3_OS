@@ -24,6 +24,9 @@ FILES="$CERTS/files"
 LOG="$TAK/logs/takserver-messaging.log"
 EXPORT_USER=natak
 EXPORT_HOME="/home/$EXPORT_USER"
+# Web-UI-served copy: the download page points here so operators can pull the
+# client certs onto connected devices (webadmin.p12 + intermediate truststore).
+CERT_WEB_DIR=/opt/nucleus/tak-certs
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "must run as root (sudo nucleus-tak-setup.sh)" >&2
@@ -131,7 +134,15 @@ CORE="$TAK/CoreConfig.example.xml"
 echo "==> point truststore at intermediate CA"
 sed -i "s/truststore-root/truststore-${INT_CA}/g" "$CORE"
 
-if ! grep -q "<certificateSigning" "$CORE"; then
+# Re-run guard: skip only if an ACTIVE (uncommented) certificateSigning block
+# exists. The example file ships a commented-out sample of this block, so a
+# plain grep for the tag matches it and would wrongly skip insertion.
+if ! python3 - "$CORE" <<'PY'
+import re, sys
+xml = re.sub(r"<!--.*?-->", "", open(sys.argv[1]).read(), flags=re.S)
+sys.exit(0 if "<certificateSigning" in xml else 1)
+PY
+then
     echo "==> enable certificate auto-enrollment in CoreConfig"
     # Insert the certificateSigning block (equivalent to the UI's "Enable
     # Certificate Enrollment" -> TAK Server CA) before </Configuration>.
@@ -160,24 +171,30 @@ else
     echo "==> certificateSigning already in CoreConfig — skipping"
 fi
 
-# ---- 7. Start the server; poll the log for a clean start --------------------
+# ---- 7. Start the server; wait for the client TLS port to listen ------------
+# On a Pi the Java/Ignite/Postgres stack can take many minutes to come up. Wait
+# for TCP 8089 (client connector) to listen — the log has no reliable "started"
+# string in 5.7 — then give a short settle before touching UserManager.
 echo "==> enable + start takserver"
 systemctl enable takserver.service
 systemctl restart takserver.service
-echo "    waiting for messaging server (up to 180s)..."
-for i in $(seq 1 60); do
-    if grep -q "Started Netty Server" "$LOG" 2>/dev/null; then
-        echo "    takserver up (Netty on 8089)"
+echo "    waiting for client port 8089 (up to 15 min)..."
+UP=0
+for i in $(seq 1 180); do
+    if ss -tln 2>/dev/null | grep -q ':8089 '; then
+        echo "    takserver up (8089 listening)"
+        UP=1
+        sleep 30   # settle: Ignite services register after the port opens
         break
     fi
-    sleep 3
-    if [ "$i" -eq 60 ]; then
-        echo "WARNING: didn't see 'Started Netty Server' in $LOG — check logs" >&2
-    fi
+    sleep 5
 done
+if [ "$UP" -ne 1 ]; then
+    echo "WARNING: 8089 never came up — check $LOG; skipping admin cert" >&2
+fi
 
 # ---- 8. Admin certificate ---------------------------------------------------
-if [ ! -f "$FILES/webadmin.p12" ]; then
+if [ "$UP" -eq 1 ] && [ ! -f "$FILES/webadmin.p12" ]; then
     echo "==> create + authorize webadmin cert"
     sudo -u tak bash -c "
         set -e
@@ -196,6 +213,13 @@ cp -v "$FILES/truststore-${INT_CA}.p12" "$EXPORT_HOME/"
 chown "$EXPORT_USER:$EXPORT_USER" \
     "$EXPORT_HOME/webadmin.p12" "$EXPORT_HOME/truststore-${INT_CA}.p12"
 
+# Also stage them where the web UI serves downloads to connected devices.
+echo "==> stage certs for web UI download ($CERT_WEB_DIR)"
+mkdir -p "$CERT_WEB_DIR"
+cp -v "$FILES/webadmin.p12" "$CERT_WEB_DIR/"
+cp -v "$FILES/truststore-${INT_CA}.p12" "$CERT_WEB_DIR/"
+chown -R "$EXPORT_USER:$EXPORT_USER" "$CERT_WEB_DIR"
+
 cat <<EOF
 
 TAK Server provisioning complete.
@@ -205,4 +229,5 @@ TAK Server provisioning complete.
                truststore-${INT_CA}.p12 + username/password.
   Exported   : $EXPORT_HOME/webadmin.p12
                $EXPORT_HOME/truststore-${INT_CA}.p12
+  Web UI     : same two files staged in $CERT_WEB_DIR for device download.
 EOF

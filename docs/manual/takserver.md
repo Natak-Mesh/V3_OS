@@ -15,7 +15,18 @@ the boot-ordering drop-in and setup script are inert unless enabled.
 - The TAK Server `.deb` from <https://tak.gov> (auth-walled — it cannot be
   downloaded automatically). Place it in `~natak`, e.g.
   `takserver_5.7-RELEASE32_all.deb`.
-- `tak.variant: official` set in `config.yaml` (see below).
+- `tak.variant: official` in `/etc/nucleus/config.yaml`. **On an existing node
+  the `tak:` block does not exist in the file** — `install.sh` only seeds
+  `config.yaml` when it is absent, so it never adds the block to a live node.
+  You must add it by hand:
+
+  ```yaml
+  tak:
+    variant: official
+  ```
+
+  All other `tak.*` fields fall back to schema defaults (see the table below),
+  so only `variant` is required to enable setup.
 
 ## Configuration (`tak:` block)
 
@@ -54,7 +65,7 @@ skipped, so a re-run never regenerates a CA or clobbers a live server. Phases:
 | CoreConfig | Points the truststore at the intermediate CA and injects the certificate auto-enrollment block. |
 | Start | Enables + starts `takserver.service`, waits for a clean messaging-server start. |
 | Admin | Creates the `webadmin` client cert and authorizes it as administrator. |
-| Export | Copies `webadmin.p12` + the intermediate truststore to `~natak`. |
+| Export | Copies `webadmin.p12` + the intermediate truststore to `~natak`, and stages the same two files in `/opt/nucleus/tak-certs/` (owned by `natak`) for the web UI to serve to connected devices. |
 
 ## After setup
 
@@ -63,6 +74,8 @@ skipped, so a re-run never regenerates a CA or clobbers a live server. Phases:
 2. Create each end user and place them in the appropriate group.
 3. Give the user the intermediate cert (`~natak/truststore-<hostname>-ca.p12`)
    plus their username/password.
+   Both files are also staged in `/opt/nucleus/tak-certs/` so they can be
+   downloaded to connected devices from the web UI.
 4. On ATAK/WinTAK: install the intermediate cert, check **Enroll for Client
    Certificate** + **User Authentication**, and connect on port **8089**.
    (iTAK does not support this enrollment method.)
