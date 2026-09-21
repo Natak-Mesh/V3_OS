@@ -2,7 +2,7 @@
 
 Reference for every HTTP endpoint the node serves. Current version: **0.8.0**.
 
-## For the newbie: how to use this
+## API use 
 
 The node runs one always-on web server (`nucleusd`, a Python/FastAPI app). It
 serves two things from the same place:
