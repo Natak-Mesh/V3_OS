@@ -62,7 +62,9 @@ feature stays off even after a successful update. This gap is closed by
 2. Script git-pulls the latest repo.
 3. `install.sh` installs apt packages + pip deps (new features' system deps).
 4. `nucleusctl apply` merges missing config defaults, then renders configs.
-5. Services restart.
+5. `nucleus-voice` / `nucleus-messaging` restart (they read config.yaml
+   directly, so they must restart *after* the merge to pick up new keys in the
+   same run), then `nucleusd` restarts.
 
 No post-update manual commands are needed to bring a new feature online on an
 existing node.

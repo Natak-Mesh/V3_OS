@@ -14,7 +14,8 @@
 #   3. Refuse to continue on a dirty working tree (uncommitted edits)
 #   4. git pull --ff-only  (exit 1 if already up to date)
 #   5. install.sh          (rebuilds venv from the new code, idempotent)
-#   6. nucleusctl apply    (re-render system configs)
+#   6. nucleusctl apply    (normalize config + re-render system configs)
+#   6b. restart nucleus-voice / nucleus-messaging (config-reading daemons)
 #   7. systemctl restart nucleusd.service  (edits are not live until this)
 #
 # This script does NOT reboot. Reboot is a separate operator action.
@@ -107,6 +108,16 @@ log "running nucleusctl apply..."
 if ! nucleusctl apply 2>&1 | tee -a "$LOG_FILE"; then
     fail 6 "nucleusctl apply failed"
 fi
+
+# --- step 6b: restart config-reading app daemons ----------------------------
+# nucleus-voice / nucleus-messaging read /etc/nucleus/config.yaml directly (not
+# through nucleusd). install.sh already restarted them, but that ran BEFORE step
+# 6's `nucleusctl apply` normalized the config (persisting new schema defaults),
+# so restart them again here to pick up the freshly-merged keys in this same run.
+# Non-fatal: a failure here shouldn't abort an otherwise-successful update.
+log "restarting config-reading app daemons (nucleus-voice, nucleus-messaging)..."
+systemctl restart nucleus-voice.service nucleus-messaging.service 2>&1 | tee -a "$LOG_FILE" \
+    || log "WARNING: app daemon restart failed (non-fatal); a reboot will apply changes"
 
 # --- step 7: restart nucleusd (edits are not live until this) ---------------
 log "restarting nucleusd.service..."
