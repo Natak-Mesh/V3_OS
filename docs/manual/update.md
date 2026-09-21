@@ -47,6 +47,23 @@ feature stays off even after a successful update. This gap is closed by
   live file are not preserved. The repo `config/config.yaml` keeps the commented
   reference copy.
 
+### Self-updating update script
+
+The running update script is the copy `install.sh` placed at
+`/opt/nucleus/bin/nucleus-update.sh` — installed *before* the current pull, so it
+predates any change in that pull. Without a handoff, an improvement to the update
+procedure itself would not take effect until the *next* update (one release
+behind). To avoid that: right after the pull, if the freshly-pulled
+`system/bin/nucleus-update.sh` differs from the running copy, the script
+re-exec's the new copy with `--resume` (which skips the reachability/dirty/pull
+steps already done and continues from `install.sh`). The current run therefore
+always executes the newest update logic.
+
+This is a one-time bootstrap cost: nodes running a copy that predates the
+self-update feature run their old script for that one update, so a
+procedure-only change (e.g. an added service restart) may need a manual nudge
+that single time; every update after is fully automatic.
+
 ### How this obeys the README pattern (Option A)
 
 - **One contract.** `schema.py` is the single source of truth for defaults;

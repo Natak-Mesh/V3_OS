@@ -62,6 +62,10 @@ def save(cfg: NucleusConfig, path: Path | None = None) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+        # mkstemp creates the temp file 0600; the live config must stay
+        # world-readable (0644) so non-root consumers (web UI, nucleusctl run as
+        # natak, the voice/messaging daemons) can read it after an atomic rewrite.
+        os.chmod(tmp, 0o644)
         os.replace(tmp, p)
     finally:
         if os.path.exists(tmp):

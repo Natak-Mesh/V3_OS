@@ -73,6 +73,18 @@ def test_normalize_respects_explicit_opt_out(tmp_path):
     assert config.load(p).voice.stream_enabled is False
 
 
+def test_save_keeps_config_world_readable(tmp_path):
+    # normalize()/save() must not leave the config 0600 (mkstemp's default), or
+    # non-root consumers (web UI, natak-run nucleusctl, voice daemon) lose read
+    # access after an atomic rewrite.
+    import stat
+
+    p = _write(tmp_path, _LEGACY)
+    config.normalize(p)
+    mode = stat.S_IMODE(p.stat().st_mode)
+    assert mode == 0o644
+
+
 def test_normalized_key_reaches_voice_daemon(tmp_path, monkeypatch):
     # The daemon reads config.yaml directly (not via schema), so the persisted
     # key is what actually enables streaming on the node.

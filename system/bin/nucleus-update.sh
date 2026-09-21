@@ -13,6 +13,8 @@
 #   2. Record current git HEAD
 #   3. Refuse to continue on a dirty working tree (uncommitted edits)
 #   4. git pull --ff-only  (exit 1 if already up to date)
+#   4b. self-update        (if the pull changed THIS script, exec the new copy
+#                           with --resume so the run uses the newest update logic)
 #   5. install.sh          (rebuilds venv from the new code, idempotent)
 #   6. nucleusctl apply    (normalize config + re-render system configs)
 #   6b. restart nucleus-voice / nucleus-messaging (config-reading daemons)
@@ -29,11 +31,21 @@ REPO_DIR="${NUCLEUS_REPO_DIR:-/home/natak/V3_OS}"
 LOG_FILE="/var/log/nucleus-update.log"
 STATUS_FILE="/var/log/nucleus-update.status"
 
+# --resume: set when this process was re-exec'd by an earlier run after the pull
+# (see "self-update" below). It means "the pull already happened and the working
+# tree is at the new HEAD — skip the reachability/dirty/pull steps and continue
+# from install.sh", and it also means "append to the existing log, don't truncate
+# it" so the pre- and post-handoff halves form one continuous record.
+RESUME=0
+if [ "${1:-}" = "--resume" ]; then
+    RESUME=1
+fi
+
 # --- logging: fall back to a user-writable path if /var/log is not writable --
 if ! touch "$LOG_FILE" 2>/dev/null; then
     LOG_FILE="$HOME/nucleus-update.log"
 fi
-: > "$LOG_FILE"    # truncate: each run's log stands alone
+[ "$RESUME" -eq 1 ] || : > "$LOG_FILE"    # truncate on a fresh run; append on resume
 if ! touch "$STATUS_FILE" 2>/dev/null; then
     STATUS_FILE="$(dirname "$LOG_FILE")/nucleus-update.status"
 fi
@@ -64,37 +76,57 @@ cd "$REPO_DIR" || fail 8 "cannot cd into repo: $REPO_DIR"
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$REPO_DIR"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail 8 "$REPO_DIR is not a git repository"
 
-# --- step 1: pre-flight WAN reachability ------------------------------------
-log "checking network reachability to git remote..."
-if ! timeout 20 git ls-remote origin >/dev/null 2>&1; then
-    log "git remote unreachable"
-    log "===== update ABORTED (offline) ====="
-    exit 2
-fi
-log "network OK"
+if [ "$RESUME" -eq 1 ]; then
+    # Re-exec'd after the pull by an earlier (older) copy of this script. The
+    # working tree is already at the new HEAD; jump straight to install.sh.
+    log "===== nucleus-update resumed (post-pull, newest script) ====="
+else
+    # --- step 1: pre-flight WAN reachability --------------------------------
+    log "checking network reachability to git remote..."
+    if ! timeout 20 git ls-remote origin >/dev/null 2>&1; then
+        log "git remote unreachable"
+        log "===== update ABORTED (offline) ====="
+        exit 2
+    fi
+    log "network OK"
 
-# --- step 2: record HEAD -----------------------------------------------------
-BEFORE_HEAD="$(git rev-parse HEAD 2>/dev/null)"
-log "current git HEAD: $BEFORE_HEAD"
+    # --- step 2: record HEAD ------------------------------------------------
+    BEFORE_HEAD="$(git rev-parse HEAD 2>/dev/null)"
+    log "current git HEAD: $BEFORE_HEAD"
 
-# --- step 3: dirty working tree check ---------------------------------------
-if [ -n "$(git status --porcelain)" ]; then
-    log "working tree has uncommitted changes:"
-    git status --short | tee -a "$LOG_FILE"
-    fail 3 "repository has local modifications - stopping. Resolve them, then re-run."
-fi
+    # --- step 3: dirty working tree check -----------------------------------
+    if [ -n "$(git status --porcelain)" ]; then
+        log "working tree has uncommitted changes:"
+        git status --short | tee -a "$LOG_FILE"
+        fail 3 "repository has local modifications - stopping. Resolve them, then re-run."
+    fi
 
-# --- step 4: git pull --------------------------------------------------------
-log "pulling latest code..."
-if ! git pull --ff-only 2>&1 | tee -a "$LOG_FILE"; then
-    fail 4 "git pull failed"
-fi
-AFTER_HEAD="$(git rev-parse HEAD 2>/dev/null)"
-log "git HEAD after pull: $AFTER_HEAD"
-if [ "$BEFORE_HEAD" = "$AFTER_HEAD" ]; then
-    log "already up to date - no new code pulled"
-    log "===== update finished (no changes) ====="
-    exit 1
+    # --- step 4: git pull ---------------------------------------------------
+    log "pulling latest code..."
+    if ! git pull --ff-only 2>&1 | tee -a "$LOG_FILE"; then
+        fail 4 "git pull failed"
+    fi
+    AFTER_HEAD="$(git rev-parse HEAD 2>/dev/null)"
+    log "git HEAD after pull: $AFTER_HEAD"
+    if [ "$BEFORE_HEAD" = "$AFTER_HEAD" ]; then
+        log "already up to date - no new code pulled"
+        log "===== update finished (no changes) ====="
+        exit 1
+    fi
+
+    # --- self-update: hand off to the just-pulled script --------------------
+    # This running process is the OLD copy (installed at /opt before the pull).
+    # If the pull changed the update script itself, exec the fresh repo copy so
+    # the REST of this run uses the newest update logic — otherwise any change
+    # to the update procedure would always be one release behind. --resume tells
+    # the new copy the pull is done. exec replaces this process image (it does
+    # NOT exit), so the EXIT trap does not fire a premature "finished" status
+    # write here; the new copy installs its own trap and owns the final status.
+    REPO_SCRIPT="$REPO_DIR/system/bin/nucleus-update.sh"
+    if [ -f "$REPO_SCRIPT" ] && ! cmp -s "$0" "$REPO_SCRIPT"; then
+        log "update script changed in this pull — re-exec'ing the new version"
+        exec bash "$REPO_SCRIPT" --resume
+    fi
 fi
 
 # --- step 5: install.sh (rebuilds the venv from the new code) ----------------
