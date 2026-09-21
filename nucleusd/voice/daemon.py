@@ -200,7 +200,7 @@ SHERPA_MODEL_CANDIDATES = [
 
 # STT mic cleanup (VOICE_STT_CLEANUP, default on): streaming conditioning of
 # the recognizer's audio only — never the live IP voice path. Zero added
-# pipeline delay; see SttAudioCleanup.
+# pipeline delay; see MicCleanup.
 STT_HPF_HZ = 100.0    # high-pass corner (Hz): below speech, above rumble
 STT_NS_LEVEL = 2      # WebRTC noise suppression aggressiveness (0..4)
 
@@ -357,6 +357,7 @@ def load_config():
     if v.get("stt_grammar"):
         cfg["VOICE_STT_GRAMMAR"] = str(v["stt_grammar"])
     cfg["VOICE_STT_CLEANUP"] = _b(v.get("stt_cleanup", True))
+    cfg["VOICE_TX_CLEANUP"] = _b(v.get("tx_cleanup", True))
     cfg["VOICE_LORA_STREAM_ENABLED"] = _b(v.get("stream_enabled", False))
     cfg["VOICE_LORA_STREAM_PORTNUM"] = str(v.get("stream_portnum", 256))
     return cfg
@@ -492,28 +493,36 @@ def mix_frames(frames):
 
 
 # ---------------------------------------------------------------------------
-# STT audio cleanup (LoRa voice-text mic tap)
+# Mic audio cleanup (streaming HPF + WebRTC noise suppression)
 # ---------------------------------------------------------------------------
 
-class SttAudioCleanup:
-    """Streaming mic conditioning for the STT tap (VOICE_STT_CLEANUP).
+class MicCleanup:
+    """Streaming mic conditioning shared by the STT tap and the live TX path.
 
     Two stages, both per-frame streaming filters — ZERO added pipeline delay
     and well under 1 ms of CPU per 20 ms frame on a Pi 4, so the "transcript
-    ready at PTT release" property is untouched:
+    ready at PTT release" property (STT) and low-latency live TX are untouched:
 
       1. High-pass at STT_HPF_HZ (2nd-order Butterworth biquad, pure
          Python) — removes rumble/handling/wind noise below the speech band.
       2. WebRTC noise suppression (optional `webrtc-noise-gain` package) —
          the same NS used in browsers/VoIP, real-time by design. Runs on
          10 ms sub-frames; skipped (high-pass only) if not installed.
+         Resident cost is ~1-2 MB RAM per instance.
 
     State is reset at each PTT press so a clip never inherits the previous
-    clip's filter history. The live IP voice path never sees any of this.
-    See docs/VoIP/lora_voice/lora_voice_text.md (STT audio path + cleanup).
+    clip's filter history. `label` only tags the log lines (e.g. "STT",
+    "TX") so operators can tell the two instances apart.
+
+    STT tap: cleans the recognizer's audio only (VOICE_STT_CLEANUP).
+    TX path: cleans live outbound mic for the IP + Codec2 stream transports
+    before send/encode (VOICE_TX_CLEANUP) — cleaning ahead of the Codec2
+    vocoder matters most, since noise corrupts its pitch/LSP estimation.
+    See docs/manual/voice-internals.md and docs/VoIP/lora_voice/.
     """
 
-    def __init__(self):
+    def __init__(self, label="STT"):
+        self.label = label
         # Butterworth high-pass biquad coefficients (Audio EQ Cookbook).
         w0 = 2.0 * math.pi * STT_HPF_HZ / RATE
         cosw, sinw = math.cos(w0), math.sin(w0)
@@ -529,14 +538,15 @@ class SttAudioCleanup:
             from webrtc_noise_gain import AudioProcessor
             # auto_gain_dbfs=0 disables AGC — we only want the suppressor.
             self._ns = AudioProcessor(0, STT_NS_LEVEL)
-            log("LORA: STT cleanup active (HPF {} Hz + WebRTC NS level {})"
-                .format(int(STT_HPF_HZ), STT_NS_LEVEL))
+            log("{}: cleanup active (HPF {} Hz + WebRTC NS level {})"
+                .format(self.label, int(STT_HPF_HZ), STT_NS_LEVEL))
         except ImportError:
-            log("LORA: STT cleanup: webrtc-noise-gain not installed — "
-                "high-pass only (pip3 install webrtc-noise-gain)")
+            log("{}: cleanup: webrtc-noise-gain not installed — "
+                "high-pass only (pip3 install webrtc-noise-gain)"
+                .format(self.label))
         except Exception as e:
-            log("LORA: STT cleanup: WebRTC NS unavailable ({}) — "
-                "high-pass only".format(e))
+            log("{}: cleanup: WebRTC NS unavailable ({}) — "
+                "high-pass only".format(self.label, e))
         self.reset()
 
     def reset(self):
@@ -569,8 +579,8 @@ class SttAudioCleanup:
             return (self._ns.Process10ms(frame[:half]).audio +
                     self._ns.Process10ms(frame[half:]).audio)
         except Exception as e:
-            log("LORA: WebRTC NS failed ({}) — high-pass only from here"
-                .format(e))
+            log("{}: WebRTC NS failed ({}) — high-pass only from here"
+                .format(self.label, e))
             self._ns = None
             return frame
 
@@ -1117,9 +1127,17 @@ class VoiceDaemon:
                                               / FRAME_MS))
         self.lora_ready = False            # True once the STT model is loaded
         # Mic conditioning for the STT tap (HPF + WebRTC NS). LoRa mode
-        # only; the live IP voice path never sees it. See SttAudioCleanup.
+        # only; the live IP voice path never sees it. See MicCleanup.
         self.stt_cleanup = cfg.get("VOICE_STT_CLEANUP",
                                    "true").lower() in ("true", "1", "yes")
+        # Live TX mic conditioning (HPF + WebRTC NS) for the IP + Codec2
+        # stream transports. One resident instance (~1-2 MB); cleaning ahead
+        # of the Codec2 vocoder removes noise that would corrupt its
+        # pitch/LSP estimation. State reset on each PTT down. See MicCleanup.
+        self.tx_cleanup_enabled = cfg.get("VOICE_TX_CLEANUP",
+                                          "true").lower() in ("true", "1", "yes")
+        self.tx_cleanup = MicCleanup("TX") if self.tx_cleanup_enabled else None
+        self.tx_cleanup_lock = threading.Lock()
         # STT engine: "vosk" (fielded default) or "sherpa" (opt-in upgrade).
         self.stt_engine = None
         if self.lora_enabled:
@@ -1343,6 +1361,7 @@ class VoiceDaemon:
             "hardware": self.card is not None,
             "wrong_ptt": self.wrong_ptt,
             "transport": self.transport,
+            "tx_cleanup": self.tx_cleanup is not None,
             "lora": {
                 "enabled": self.lora_enabled,
                 "ready": self.lora_ready,
@@ -1434,9 +1453,17 @@ class VoiceDaemon:
             self._lora_buffer_frame(frame)
             return
         if self.transport == "stream":
-            # RAW frame here too: clipping wrecks Codec2 just like STT.
+            # RAW frame (no TX gain: clipping wrecks Codec2 just like STT),
+            # but conditioned first — noise corrupts the vocoder most.
+            if self.tx_cleanup is not None:
+                with self.tx_cleanup_lock:
+                    frame = self.tx_cleanup.process(frame)
             self._stream_put(("frame", frame))
             return
+        # IP transport: condition the mic, then apply playback gain.
+        if self.tx_cleanup is not None:
+            with self.tx_cleanup_lock:
+                frame = self.tx_cleanup.process(frame)
         if gain and abs(gain - 1.0) >= 0.01:
             frame = apply_gain(frame, gain)
         if self.tx_sock is None:
@@ -1482,8 +1509,13 @@ class VoiceDaemon:
             log("LORA: STT queue full — dropping audio")
 
     def lora_ptt_pressed(self):
-        """PTT down edge (LoRa transports). voice-text: start a fresh
-        streaming recognizer. stream: reset the Codec2 encoder state."""
+        """PTT down edge (all transports). Reset the live TX cleanup filter
+        so a transmission never inherits the previous one's history.
+        voice-text: start a fresh streaming recognizer. stream: reset the
+        Codec2 encoder state."""
+        if self.tx_cleanup is not None:
+            with self.tx_cleanup_lock:
+                self.tx_cleanup.reset()
         if self.transport == "stream":
             self._stream_put(("start", None))
             return
@@ -1685,7 +1717,7 @@ class VoiceDaemon:
             self.broadcast_status()
             return
         # Mic conditioning for the STT tap only (never the IP voice path).
-        cleanup = SttAudioCleanup() if self.stt_cleanup else None
+        cleanup = MicCleanup("STT") if self.stt_cleanup else None
         active = False
         while not self.stop.is_set():
             try:

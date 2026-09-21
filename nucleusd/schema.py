@@ -217,6 +217,7 @@ class VoiceConfig(BaseModel):
     stt_model: str = Field("", description="STT model override (dir name under the model dir, or abs path).")
     stt_grammar: str = Field("", description="Optional phrase-list file constraining the recognizer (vosk only).")
     stt_cleanup: bool = Field(True, description="HPF + WebRTC noise-suppression on the STT mic tap.")
+    tx_cleanup: bool = Field(True, description="HPF + WebRTC noise-suppression on the live TX mic (IP + Codec2 stream).")
     # Live Codec2 voice stream over LoRa (VLoRa-compatible) — advanced/off.
     stream_enabled: bool = Field(True, description="Enable live Codec2 voice streaming over LoRa.")
     stream_portnum: int = Field(256, ge=1, le=511, description="Meshtastic app portnum for the Codec2 stream.")

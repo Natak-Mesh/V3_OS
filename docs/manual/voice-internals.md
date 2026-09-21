@@ -36,7 +36,10 @@ fragmented. Needs the Vosk/Piper models installed on the node.
 
 `enabled`, `channel`, `channels`, `jitter_ms`, `tx_gain`, plus LoRa voice-text
 (`lora_enabled`, `lora_max_secs`, `lora_portnum`, `lora_hop_limit`,
-`stt_engine`, `stt_model`, `stt_grammar`, `stt_cleanup`) and the advanced
+`stt_engine`, `stt_model`, `stt_grammar`, `stt_cleanup`), the live TX mic
+cleanup (`tx_cleanup`, default on: HPF + WebRTC noise suppression on outbound
+audio for the IP and Codec2 stream transports; ~1-2 MB RAM, HPF-only fallback
+if `webrtc-noise-gain` is absent) and the advanced
 Codec2 stream (`stream_enabled`, `stream_portnum`). Validated by
 `nucleusd.schema.VoiceConfig`. There is **no separate .conf file** — this is the
 single node config, edited via the web UI / `PUT /api/v1/config` /

@@ -23,6 +23,8 @@ dependencies = [
     # --- live Codec2 voice stream over LoRa (nucleus-voice STREAM transport) ---
     "numpy",                     # frame math for the Codec2 stream encoder/decoder
     "pycodec2",                  # Codec2 3200 bps codec (builds against libcodec2-dev)
+    # --- live mic cleanup (nucleus-voice STT tap + TX path, MicCleanup) ---
+    "webrtc-noise-gain",         # WebRTC noise suppression (~1-2 MB/instance); HPF-only fallback if absent
 ]
 
 [project.optional-dependencies]

@@ -107,6 +107,7 @@ voice:
   # stt_model:             # optional model override (dir name or abs path)
   # stt_grammar:           # optional phrase-list file (vosk only)
   stt_cleanup: true        # HPF + WebRTC noise-suppression on the STT mic tap
+  tx_cleanup: true         # HPF + WebRTC noise-suppression on live TX (IP + Codec2 stream)
   # --- live Codec2 voice stream over LoRa (advanced) ---
   stream_enabled: true
   stream_portnum: 256
