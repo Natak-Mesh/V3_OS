@@ -340,6 +340,33 @@ class TakConfig(BaseModel):
     )
 
 
+class WebConfig(BaseModel):
+    """Web UI access control.
+
+    The UI is reachable without a password from trusted source networks (the
+    802.11s mesh, the local br-lan, the node's own AP, Tailscale, and
+    localhost). Requests arriving from any other source — in practice, anything
+    coming in over eth0 (a home LAN, or a public network) — must authenticate
+    with HTTP Basic auth (user `admin`, password below). See the manual to
+    change the default.
+
+    The password is stored in clear text here, as an operator-set primitive:
+    config.yaml is root-owned, and anyone with root already has the rendered
+    htpasswd file. The derived artifact (the htpasswd line nginx reads) is
+    produced by `nucleusctl apply`.
+    """
+
+    user: str = Field("admin", description="HTTP Basic auth username for eth0 access.")
+    password: str = Field(
+        "52235223", min_length=6,
+        description="HTTP Basic auth password for web UI access over eth0.",
+    )
+    eth0_access: bool = Field(
+        True,
+        description="Allow the web UI on eth0 (port 80), password-protected. Off = eth0 fully denied.",
+    )
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -353,6 +380,7 @@ class NucleusConfig(BaseModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     reticulum: ReticulumConfig = Field(default_factory=ReticulumConfig)
     tak: TakConfig = Field(default_factory=TakConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     @field_validator("node", mode="before")
     @classmethod
@@ -404,6 +432,28 @@ class NucleusConfig(BaseModel):
     @property
     def tak_intermediate_ca_name(self) -> str:
         return f"{self.node.hostname}-ca"
+
+    @property
+    def web_htpasswd(self) -> str:
+        """htpasswd line for nginx auth_basic_user_file.
+
+        Uses nginx's `{SHA}` scheme (base64 of SHA-1) rather than crypt: it is
+        deterministic (same password -> same line), so re-rendering with an
+        unchanged password produces an identical file and apply stays
+        idempotent. crypt() was also removed from the stdlib in Python 3.13.
+        """
+        import base64
+        digest = hashlib.sha1(self.web.password.encode()).digest()
+        return f"{self.web.user}:{{SHA}}{base64.b64encode(digest).decode()}"
+
+    @property
+    def web_trusted_cidrs(self) -> list[str]:
+        """Source networks that skip web auth (mesh, br-lan, tailscale)."""
+        return [
+            f"{self.mesh.subnet_prefix}.0/24",   # 802.11s mesh (wlan1)
+            f"{self.br_lan_prefix}.0/24",        # br-lan (AP + wired LAN)
+            "100.64.0.0/10",                     # Tailscale (CGNAT range)
+        ]
 
     @model_validator(mode="after")
     def _no_subnet_collision(self) -> "NucleusConfig":
@@ -473,4 +523,8 @@ class NucleusConfig(BaseModel):
             "reti_kiss_enabled": self.reticulum.kiss_enabled,
             "reti_kiss_port": self.reticulum.kiss_port,
             "reti_kiss_speed": self.reticulum.kiss_speed,
+            # --- Web UI auth (nginx) ---
+            "web_htpasswd": self.web_htpasswd,
+            "web_trusted_cidrs": self.web_trusted_cidrs,
+            "web_eth0_access": self.web.eth0_access,
         }

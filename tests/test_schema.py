@@ -74,6 +74,32 @@ def test_reticulum_loglevel_bounds():
         cfg(reticulum={"loglevel": 8})
 
 
+def test_web_defaults():
+    w = cfg().web
+    assert w.user == "admin"
+    assert w.password == "52235223"
+    assert w.eth0_access is True
+
+
+def test_web_short_password_rejected():
+    with pytest.raises(ValidationError):
+        cfg(web={"password": "12345"})
+
+
+def test_web_htpasswd_deterministic():
+    # {SHA} scheme, stable for a given password (apply idempotence).
+    c = cfg()
+    assert c.web_htpasswd.startswith("admin:{SHA}")
+    assert cfg().web_htpasswd == c.web_htpasswd
+
+
+def test_web_trusted_cidrs_derive():
+    c = cfg()
+    assert "10.20.1.0/24" in c.web_trusted_cidrs   # mesh
+    assert "10.20.9.0/24" in c.web_trusted_cidrs   # br-lan (id 9)
+    assert "100.64.0.0/10" in c.web_trusted_cidrs  # tailscale
+
+
 def test_frequency_matches_channel():
     assert cfg(mesh={"password": "52235223", "channel": 3}).mesh.frequency == 2422
 

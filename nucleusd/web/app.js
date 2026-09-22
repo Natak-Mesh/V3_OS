@@ -462,6 +462,7 @@ const PAGES = {
       const ap = CFG.ap = CFG.ap || {};
       const eth0 = CFG.eth0 = CFG.eth0 || {};
       const mt = CFG.meshtastic = CFG.meshtastic || {};
+      const web = CFG.web = CFG.web || {};
 
       const head = (title, sub) => ({ type: "content", html:
         `<div class="content"><div class="page-title" style="padding-left:0">${esc(title)}</div>` +
@@ -537,6 +538,15 @@ const PAGES = {
         { type: "fselect", label: "CoT bridge", options: ["on", "off"],
           value: mt.cot_bridge !== false ? "on" : "off",
           onChange: (v) => mt.cot_bridge = (v === "on") },
+
+        head("Web UI", "Password only required over the ethernet port; " +
+          "mesh/AP/Tailscale clients are trusted. Change the default (see manual)."),
+        { type: "ftext", label: "Web password (min 6)", value: web.password || "",
+          onChange: (v) => web.password = v },
+        { type: "fselect", label: "Allow web UI over ethernet",
+          options: ["on", "off"],
+          value: web.eth0_access !== false ? "on" : "off",
+          onChange: (v) => web.eth0_access = (v === "on") },
 
         { type: "button", label: "» Save (not applied)", onEnter: saveCfg },
         { type: "button", label: "» Dry-run apply", onEnter: (S) => applyCfg(S, true) },

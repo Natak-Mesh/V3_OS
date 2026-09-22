@@ -70,6 +70,22 @@ Header: derived br-lan IP.
 | I2C device | Default `/dev/i2c-1`. |
 | CoT bridge | `on` / `off`. |
 
+## Web UI
+
+Controls access to this web interface. Clients on the mesh, the access point,
+the local wired LAN (br-lan), Tailscale, or the node itself reach the UI with
+**no password**. A client connecting over the **ethernet port** (e.g. the node
+plugged into a home or office network) must log in.
+
+| Field | Notes |
+|-------|-------|
+| Web password (min 6) | HTTP Basic password for access over ethernet. Username is `admin`. |
+| Allow web UI over ethernet | `on` / `off`. Off closes ports 80/443 on eth0 entirely. |
+
+**Default login: `admin` / `52235223` — change it.** The password is sent over
+plain HTTP; on an untrusted network use Tailscale to reach the UI instead. The
+raw app port (8080) is never exposed on ethernet — only the nginx proxy.
+
 ## Applying changes
 
 - **Save (not applied)** — validates and writes config; nothing on the system

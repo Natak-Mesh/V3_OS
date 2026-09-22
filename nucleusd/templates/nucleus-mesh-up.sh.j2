@@ -70,6 +70,13 @@ ufw allow in on wlan1
 ufw allow in on br-lan
 ufw allow in on tailscale0
 ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
+{% if web_eth0_access %}
+# Web UI over ethernet (home LAN etc). nginx password-protects any request that
+# does not come from a trusted source net (mesh/br-lan/tailscale). Port 8080
+# (the raw app) stays closed on eth0 — only the nginx proxy (80/443) is exposed.
+ufw allow in on eth0 to any port 80 proto tcp comment 'web ui over ethernet'
+ufw allow in on eth0 to any port 443 proto tcp comment 'web ui (https) over ethernet'
+{% endif %}
 {% if eth0_mode == "wan" %}
 # WAN mode: let LAN/mesh clients route OUT to the internet via eth0. NAT
 # masquerade for these is set up in the WAN block above; inbound-from-internet

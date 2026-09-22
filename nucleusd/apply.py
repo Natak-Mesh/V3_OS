@@ -24,6 +24,7 @@ RETI_CONFIG = Path(f"/home/{RETI_USER}/.reticulum/config")
 NGINX_VHOST = Path("/etc/nginx/sites-available/nucleus")
 NGINX_ENABLED = Path("/etc/nginx/sites-enabled/nucleus")
 NGINX_DEFAULT = Path("/etc/nginx/sites-enabled/default")
+NGINX_HTPASSWD = Path("/etc/nginx/nucleus.htpasswd")
 CERT_DIR = Path("/etc/nucleus/certs")
 CERT_CRT = CERT_DIR / "nucleus-web.crt"
 CERT_KEY = CERT_DIR / "nucleus-web.key"
@@ -62,6 +63,8 @@ TARGETS: list[Target] = [
     Target("reticulum-config.j2", RETI_CONFIG, ("rnsd",)),
     # nginx reverse proxy — reload (not restart) handled specially in apply().
     Target("nginx-nucleus.conf.j2", NGINX_VHOST, ()),
+    # HTTP Basic credentials for web UI over eth0 — reload nginx on change.
+    Target("nucleus.htpasswd.j2", NGINX_HTPASSWD, ()),
 ]
 
 
@@ -310,7 +313,8 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     if NGINX_DEFAULT.is_symlink() or NGINX_DEFAULT.exists():
         NGINX_DEFAULT.unlink()
         default_removed = True
-    if str(NGINX_VHOST) in result.changed or cert_changed or symlink_changed or default_removed:
+    if (str(NGINX_VHOST) in result.changed or str(NGINX_HTPASSWD) in result.changed
+            or cert_changed or symlink_changed or default_removed):
         _reload_nginx()
         result.units_restarted.append("nginx")
 

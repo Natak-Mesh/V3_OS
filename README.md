@@ -181,6 +181,13 @@ nucleusctl status               # live interfaces / services / babel neighbours
 
 Or use the web UI at `http://<node-ip>:8080` (same operations, same API).
 
+**Web UI access.** The UI needs no password from the mesh, the AP, br-lan,
+Tailscale, or localhost. A request arriving over the ethernet port must log in
+(HTTP Basic, user `admin`). Set the password and toggle eth0 exposure in the
+`web:` config section — nginx auth + the eth0 firewall rule are rendered by
+`nucleusctl apply`. **Change the default `52235223`.** It travels over plain
+HTTP, so prefer Tailscale on untrusted networks.
+
 ---
 
 ## 6. Directory layout

@@ -11,11 +11,31 @@
 # Direct http://<ip>:8080 keeps working unchanged as a fallback.
 # ============================================================
 
+# Rate-limit zone for web-UI logins (shared across both server blocks). Declared
+# here at http context — this file is included inside nginx's http {} block.
+limit_req_zone $binary_remote_addr zone=nucleus_login:1m rate=10r/s;
+
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
 
     server_name {{ hostname }}.local _;
+
+    # --- Web UI access control -------------------------------------------------
+    # Trusted source networks (mesh, br-lan/AP, tailscale, localhost) reach the
+    # UI with no password. Everything else — i.e. clients arriving over eth0 —
+    # must pass HTTP Basic auth. `satisfy any` = allowed source OR valid login.
+    satisfy any;
+    allow 127.0.0.1;
+    allow ::1;
+{% for cidr in web_trusted_cidrs %}
+    allow {{ cidr }};
+{% endfor %}
+    deny all;
+    auth_basic "nucleus";
+    auth_basic_user_file /etc/nginx/nucleus.htpasswd;
+    # Throttle password guessing from exposed (eth0) clients.
+    limit_req zone=nucleus_login burst=20 nodelay;
 
     # Mesh PTT voice: soft-PTT handset WebSocket → nucleus-voice daemon (:5557).
     location /voice-ws {
@@ -55,6 +75,18 @@ server {
     listen [::]:443 ssl default_server;
 
     server_name {{ hostname }}.local _;
+
+    # --- Web UI access control (see the port-80 block above) -------------------
+    satisfy any;
+    allow 127.0.0.1;
+    allow ::1;
+{% for cidr in web_trusted_cidrs %}
+    allow {{ cidr }};
+{% endfor %}
+    deny all;
+    auth_basic "nucleus";
+    auth_basic_user_file /etc/nginx/nucleus.htpasswd;
+    limit_req zone=nucleus_login burst=20 nodelay;
 
     ssl_certificate /etc/nucleus/certs/nucleus-web.crt;
     ssl_certificate_key /etc/nucleus/certs/nucleus-web.key;

@@ -63,6 +63,15 @@ messaging:
   dedupe_window_secs: 60   # window to match the LoRa + WiFi copies of one message
   history_limit: 500       # max messages retained / returned to the UI
 
+web:
+  # Web UI access control. The UI needs NO password from the mesh, the AP, the
+  # local br-lan, Tailscale, or localhost. A request arriving over the ethernet
+  # port (a home LAN, or a public network) must log in with user/password below.
+  # CHANGE THE DEFAULT PASSWORD (see the manual).
+  user: admin
+  password: "52235223"     # HTTP Basic password for web UI over ethernet (min 6)
+  eth0_access: true        # false = deny the web UI on eth0 entirely (ports 80/443)
+
 reticulum:
   enabled: true            # run the Reticulum daemon (rnsd.service)
   transport: true          # act as a transport node (route/relay for peers)

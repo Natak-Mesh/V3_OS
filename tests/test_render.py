@@ -16,7 +16,7 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 13
+    assert len(r) == 14
     assert all(v.strip() for v in r.values())
 
 
@@ -134,6 +134,50 @@ def test_meshup_no_wan_route_in_lan_mode():
     assert "ufw route allow in on br-lan out on eth0" not in m
     assert "ufw allow in on eth0 to any port 22 proto tcp" in m
     assert "ufw route allow in on br-lan out on wlan1" in m
+
+
+def test_web_auth_in_nginx():
+    n = rendered()["/etc/nginx/sites-available/nucleus"]
+    # Basic auth enabled, trusted source nets skip it (satisfy any).
+    assert "satisfy any;" in n
+    assert "auth_basic_user_file /etc/nginx/nucleus.htpasswd;" in n
+    assert "allow 127.0.0.1;" in n
+    assert "allow 10.20.1.0/24;" in n     # mesh subnet
+    assert "allow 10.20.9.0/24;" in n     # br-lan (node id 9)
+    assert "allow 100.64.0.0/10;" in n    # tailscale
+    assert "deny all;" in n
+    assert "limit_req_zone" in n
+
+
+def test_htpasswd_rendered():
+    h = rendered()["/etc/nginx/nucleus.htpasswd"]
+    # Deterministic {SHA} scheme, user admin, from default password.
+    assert h.startswith("admin:{SHA}") or "\nadmin:{SHA}" in h
+
+
+def test_htpasswd_deterministic():
+    # Same password -> identical file (apply idempotence).
+    assert render_all(CFG)["/etc/nginx/nucleus.htpasswd"] == \
+        render_all(CFG)["/etc/nginx/nucleus.htpasswd"]
+
+
+def test_meshup_web_over_eth0():
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    assert "ufw allow in on eth0 to any port 80 proto tcp" in m
+    assert "ufw allow in on eth0 to any port 443 proto tcp" in m
+
+
+def test_meshup_web_over_eth0_disabled():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "web": {"eth0_access": False},
+    })
+    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    assert "ufw allow in on eth0 to any port 80 proto tcp" not in m
+    # ssh still allowed regardless.
+    assert "ufw allow in on eth0 to any port 22 proto tcp" in m
 
 
 def test_hostapd_bridges_brlan():
