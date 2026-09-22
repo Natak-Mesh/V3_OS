@@ -541,7 +541,8 @@ const PAGES = {
 
         head("Web UI", "Password only required over the ethernet port; " +
           "mesh/AP/Tailscale clients are trusted. Change the default (see manual)."),
-        { type: "ftext", label: "Web password (min 6)", value: web.password || "",
+        { type: "ftext", label: "Web password (blank = keep current)",
+          value: web.password || "",
           onChange: (v) => web.password = v },
         { type: "fselect", label: "Allow web UI over ethernet",
           options: ["on", "off"],

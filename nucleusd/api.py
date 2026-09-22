@@ -8,9 +8,10 @@ there is exactly one implementation of every operation.
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -23,6 +24,34 @@ from .schema import NucleusConfig
 WEB_DIR = Path(__file__).parent / "web"
 
 app = FastAPI(title="Nucleus V3 OS", version=__version__)
+
+# State-changing methods that a cross-site page could trigger in a logged-in /
+# trusted client's browser. GET/HEAD/OPTIONS are exempt (they read only).
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+@app.middleware("http")
+async def _reject_cross_origin_writes(request: Request, call_next):
+    """CSRF guard: block browser mutations coming from another origin.
+
+    A browser always attaches an `Origin` header on a cross-site POST/PUT (and on
+    same-site ones for these methods too). If it is present and does not match the
+    host the request was addressed to, the request came from a different site, so
+    we refuse it. Non-browser clients (curl, scripts, ATAK, peer nodes) send no
+    Origin and are unaffected, so the machine API keeps working unchanged.
+    """
+    if request.method in _MUTATING_METHODS:
+        origin = request.headers.get("origin")
+        if origin:
+            origin_host = urlparse(origin).hostname or ""
+            # Host header without any :port (nginx forwards the original Host).
+            target_host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+            if origin_host != target_host:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "cross-origin request refused"},
+                )
+    return await call_next(request)
 
 # Meshtastic radio configurator + CoT bridge status/control endpoints.
 try:
@@ -61,12 +90,26 @@ def get_version() -> dict:
     return {"version": __version__}
 
 
+# Sent in place of the real web password on read; echoed back unchanged means
+# "keep the stored password" on write (see put_config).
+_PASSWORD_PLACEHOLDER = ""
+
+
 @app.get("/api/v1/config")
 def get_config() -> dict:
-    """Return the current validated config plus derived values."""
+    """Return the current validated config plus derived values.
+
+    The web UI password is redacted: the raw API must not hand out the eth0
+    login secret to every trusted-network client that reads the config. The
+    derived htpasswd line (a SHA-1 hash of it) is dropped for the same reason.
+    """
     cfg = cfgio.load()
     data = cfg.model_dump(mode="json")
-    data["_derived"] = cfg.render_context()
+    if "web" in data and "password" in data["web"]:
+        data["web"]["password"] = _PASSWORD_PLACEHOLDER
+    derived = cfg.render_context()
+    derived.pop("web_htpasswd", None)
+    data["_derived"] = derived
     return data
 
 
@@ -76,7 +119,18 @@ def put_config(new: dict) -> dict:
 
     Kept separate from apply so a client can stage config and apply atomically
     (or review a dry-run first).
+
+    Because GET redacts the web password, a client that round-trips the config
+    sends back a blank one. A blank/absent web password here means "unchanged":
+    we fill in the currently-stored value before validating, so a save never
+    silently wipes the password.
     """
+    web = new.get("web")
+    if isinstance(web, dict) and not web.get("password"):
+        try:
+            web["password"] = cfgio.load().web.password
+        except Exception:
+            pass  # no valid current config; let schema defaults/validation run
     try:
         cfg = NucleusConfig.model_validate(new)
     except Exception as e:  # pydantic ValidationError -> 422
