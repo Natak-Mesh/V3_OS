@@ -121,6 +121,36 @@ def test_meshup_firewall_rules():
     assert "ufw --force enable" in m
 
 
+def test_meshup_firewall_reset_before_allow():
+    # config.yaml is the single source of truth: the ruleset is rebuilt every
+    # run, so a reset must precede the first `ufw allow` (no stale rules linger).
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    assert "ufw --force reset" in m
+    assert m.index("ufw --force reset") < m.index("ufw allow")
+    # ssh-on-eth0 is added first, right after the reset, so admin access over
+    # ethernet is never left dangling.
+    assert m.index("ufw allow in on eth0 to any port 22 proto tcp") < \
+        m.index("ufw allow in on wlan1")
+    # Reset leaves timestamped rule-file backups; they must be cleaned up.
+    assert "rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*" in m
+
+
+def test_meshup_firewall_disabled():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "firewall": {"enabled": False},
+    })
+    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    # Firewall off: ufw is disabled and no rules are rendered at all.
+    assert "ufw --force disable" in m
+    assert "ufw allow" not in m
+    assert "ufw route" not in m
+    assert "ufw --force enable" not in m
+    assert "ufw --force reset" not in m
+
+
 def test_meshup_no_wan_route_in_lan_mode():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
@@ -176,6 +206,10 @@ def test_meshup_web_over_eth0_disabled():
     })
     m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
     assert "ufw allow in on eth0 to any port 80 proto tcp" not in m
+    assert "ufw allow in on eth0 to any port 443 proto tcp" not in m
+    # The reset rebuilds the ruleset, so any 80/443 rule left from an earlier
+    # apply is removed rather than lingering.
+    assert "ufw --force reset" in m
     # ssh still allowed regardless.
     assert "ufw allow in on eth0 to any port 22 proto tcp" in m
 

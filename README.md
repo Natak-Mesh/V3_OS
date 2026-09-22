@@ -97,7 +97,12 @@ The mesh comes up in a deliberate order, split between **declarative**
      mesh does L2 transport only,
    - set the 802.11s `mesh_ttl`/`mesh_element_ttl` and RTS threshold,
    - install the NAT (WAN mode) and the multicast-TTL mangle rule via
-     **nftables** (trixie's default; the old code used iptables).
+     **nftables** (trixie's default; the old code used iptables),
+   - rebuild the host firewall (**UFW**) from config: `ufw --force reset` then
+     re-add the current rules, so the live ruleset always matches `config.yaml`
+     and never accumulates stale rules. Only UFW's own rules are reset — the
+     nftables NAT and multicast-TTL rules above are untouched. `firewall.enabled:
+     false` disables UFW instead. See the manual [Firewall](docs/manual/firewall.md) page.
 3. **`babeld`** distributes unicast routes at L3 (mesh + br-lan subnets + default
    route for gateway sharing).
 4. **`smcroute`** bridges multicast groups between `wlan1` and `br-lan`.
@@ -187,6 +192,12 @@ Tailscale, or localhost. A request arriving over the ethernet port must log in
 `web:` config section — nginx auth + the eth0 firewall rule are rendered by
 `nucleusctl apply`. **Change the default `52235223`.** It travels over plain
 HTTP, so prefer Tailscale on untrusted networks.
+
+**Host firewall.** UFW is driven from the `firewall:` config section and
+rebuilt from `config.yaml` on every mesh bring-up (`ufw --force reset`, then the
+current rules), so it never accumulates stale rules. ssh over eth0 is always
+allowed while it's on; `firewall.enabled: false` turns it off entirely. Details
+in the manual [Firewall](docs/manual/firewall.md) page.
 
 ---
 

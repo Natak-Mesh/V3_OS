@@ -72,6 +72,14 @@ web:
   password: "52235223"     # HTTP Basic password for web UI over ethernet (min 6)
   eth0_access: true        # false = deny the web UI on eth0 entirely (ports 80/443)
 
+firewall:
+  # Host firewall (UFW). The ruleset is rebuilt from this config on every mesh
+  # bring-up (ufw --force reset, then the rules above), so config.yaml is the
+  # single source of truth and stale rules never linger. Only UFW's own rules
+  # are managed — nftables NAT/masquerade and the multicast-TTL rules are not
+  # touched. ssh over ethernet is always allowed while the firewall is on.
+  enabled: true            # false = disable UFW entirely (no host firewall)
+
 reticulum:
   enabled: true            # run the Reticulum daemon (rnsd.service)
   transport: true          # act as a transport node (route/relay for peers)

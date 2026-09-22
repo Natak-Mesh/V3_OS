@@ -86,6 +86,16 @@ def test_web_short_password_rejected():
         cfg(web={"password": "12345"})
 
 
+def test_firewall_defaults():
+    assert cfg().firewall.enabled is True
+
+
+def test_firewall_disabled_in_context():
+    c = cfg(firewall={"enabled": False})
+    assert c.firewall.enabled is False
+    assert c.render_context()["firewall_enabled"] is False
+
+
 def test_web_htpasswd_deterministic():
     # {SHA} scheme, stable for a given password (apply idempotence).
     c = cfg()

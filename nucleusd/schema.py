@@ -367,6 +367,26 @@ class WebConfig(BaseModel):
     )
 
 
+class FirewallConfig(BaseModel):
+    """Host firewall (UFW) control.
+
+    The ruleset is rebuilt from this config on every mesh bring-up: the
+    rendered `nucleus-mesh-up.sh` runs `ufw --force reset` first, so the live
+    rules always reflect the current config and never accumulate stale rules
+    from earlier applies. This only manages UFW's own rules — the nftables NAT
+    masquerade, the multicast-TTL mangle rules, and Tailscale's chains are set
+    up separately and are not touched by the reset.
+
+    `enabled: false` renders `ufw --force disable` instead of the rule block,
+    turning the host firewall off entirely.
+    """
+
+    enabled: bool = Field(
+        True,
+        description="Enable the host firewall (UFW). Off = ufw disabled entirely.",
+    )
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -381,6 +401,7 @@ class NucleusConfig(BaseModel):
     reticulum: ReticulumConfig = Field(default_factory=ReticulumConfig)
     tak: TakConfig = Field(default_factory=TakConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    firewall: FirewallConfig = Field(default_factory=FirewallConfig)
 
     @field_validator("node", mode="before")
     @classmethod
@@ -527,4 +548,6 @@ class NucleusConfig(BaseModel):
             "web_htpasswd": self.web_htpasswd,
             "web_trusted_cidrs": self.web_trusted_cidrs,
             "web_eth0_access": self.web.eth0_access,
+            # --- Host firewall (ufw) ---
+            "firewall_enabled": self.firewall.enabled,
         }

@@ -60,16 +60,27 @@ nft list chain ip nat POSTROUTING 2>/dev/null | grep -q 'oifname "eth0" masquera
 {% endif %}
 
 # --- Host firewall (UFW) ----------------------------------------------------
+{% if firewall_enabled %}
+# config.yaml is the single source of truth: reset first so the live ruleset is
+# rebuilt from the current config on every run and never accumulates stale rules
+# from an earlier apply. `ufw --force reset` only clears UFW's own rules — the
+# nftables NAT masquerade, the multicast-TTL mangle rules (both set up above via
+# nft), and Tailscale's chains live in separate tables and are untouched. Reset
+# leaves timestamped backups of the rule files behind; drop them so /etc/ufw
+# does not fill up over time.
+ufw --force reset
+rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*
 # Trust internal interfaces (WPA3 mesh + local LAN + tailscale); default-deny
 # everything arriving on eth0 EXCEPT ssh, so ethernet admin access survives.
-# Idempotent: `ufw allow`/`default` are no-ops if the rule already exists.
+# The ssh-on-eth0 rule is added first, right after the reset, so admin access
+# over ethernet is never left dangling by a later bad rule.
 ufw --force default deny incoming
 ufw --force default allow outgoing
 ufw --force default deny routed
+ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
 ufw allow in on wlan1
 ufw allow in on br-lan
 ufw allow in on tailscale0
-ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
 {% if web_eth0_access %}
 # Web UI over ethernet (home LAN etc). nginx password-protects any request that
 # does not come from a trusted source net (mesh/br-lan/tailscale). Port 8080
@@ -89,6 +100,10 @@ ufw route allow in on wlan1 out on eth0
 ufw route allow in on br-lan out on wlan1
 ufw route allow in on wlan1 out on br-lan
 ufw --force enable
+{% else %}
+# Firewall disabled in config (firewall.enabled: false) — turn UFW off entirely.
+ufw --force disable
+{% endif %}
 
 {% if mesh_mcast_ttl > 0 %}
 # Bump multicast TTL on br-lan ingress. ATAK emits CoT/discovery/voice with

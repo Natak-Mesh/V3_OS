@@ -80,7 +80,7 @@ plugged into a home or office network) must log in.
 | Field | Notes |
 |-------|-------|
 | Web password (min 6) | HTTP Basic password for access over ethernet. Username is `admin`. |
-| Allow web UI over ethernet | `on` / `off`. Off closes ports 80/443 on eth0 entirely. |
+| Allow web UI over ethernet | `on` / `off`. Off closes ports 80/443 on eth0 entirely. See [Firewall](firewall.md). |
 
 **Default login: `admin` / `52235223` — change it.** The password is sent over
 plain HTTP; on an untrusted network use Tailscale to reach the UI instead. The
