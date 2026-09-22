@@ -15,6 +15,7 @@
   [[Mesh AutoInterface]]
     type = AutoInterface
     enabled = Yes
+    mode = internal
     devices = {{ reti_auto_device }}
 
 {% endif %}
@@ -22,14 +23,19 @@
   [[LAN TCP Server]]
     type = TCPServerInterface
     enabled = Yes
+    mode = internal
     device = {{ reti_tcp_server_device }}
     listen_port = {{ reti_tcp_server_port }}
 
 {% endif %}
 {% if reti_entry_node %}
   [[Entry Node]]
+    # boundary: announces from the public network are NOT flooded into the
+    # mesh/LAN; local announces still propagate out, and internal clients can
+    # still resolve outside paths on demand (recursive path requests).
     type = TCPClientInterface
     enabled = Yes
+    mode = boundary
     target_host = {{ reti_entry_node_host }}
     target_port = {{ reti_entry_node_port }}
 

@@ -33,6 +33,10 @@ def test_reticulum_config_defaults():
     assert "listen_port = 4242" in r
     # Entry-node uplink.
     assert "type = TCPClientInterface" in r
+    # Interface modes: entry node is boundary, local interfaces internal,
+    # so public-network announces are not flooded into the mesh/LAN.
+    assert "mode = boundary" in r
+    assert r.count("mode = internal") == 2
     assert "target_host = 173.230.150.24" in r
     assert "target_port = 4243" in r
     # KISS off by default.

@@ -86,4 +86,5 @@ Selectable item types: navigation links, action buttons, and editable fields
 Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md).
 
 For subsystem internals see [messaging-internals.md](messaging-internals.md), [voice-internals.md](voice-internals.md)
-and [API.md](../API.md).
+and [API.md](../API.md). Reticulum transport and client-device setup:
+[reticulum.md](reticulum.md).
