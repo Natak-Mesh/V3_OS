@@ -162,7 +162,15 @@ def _parse_link(out: dict) -> None:
             continue
         out[name]["state"] = "present"
         if "state" in f:
-            out[name]["oper_state"] = f[f.index("state") + 1]
+            oper = f[f.index("state") + 1]
+            # 802.11s mesh interfaces sit in DORMANT forever by kernel design,
+            # even while fully associated and routing. The link is genuinely
+            # carrying traffic when LOWER_UP is set in the flags field (f[2],
+            # e.g. "<...,UP,LOWER_UP>"), so report that as UP; a truly down
+            # radio lacks LOWER_UP and stays DORMANT.
+            if oper == "DORMANT" and len(f) > 2 and "LOWER_UP" in f[2]:
+                oper = "UP"
+            out[name]["oper_state"] = oper
         if "master" in f:
             out[name]["master"] = f[f.index("master") + 1]
 

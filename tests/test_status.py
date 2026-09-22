@@ -165,5 +165,24 @@ def test_bridge_member_not_absent(monkeypatch):
     assert out["wlan0"]["addrs"] == []
     # addressed interfaces still report their addrs
     assert "10.20.1.42/24" in out["wlan1"]["addrs"]
-    assert out["wlan1"]["oper_state"] == "DORMANT"
+    # 802.11s mesh iface reports DORMANT but has LOWER_UP -> normalized to UP.
+    assert out["wlan1"]["oper_state"] == "UP"
     assert out["br-lan"]["oper_state"] == "UP"
+
+
+# Same mesh radio but genuinely down: no carrier, no LOWER_UP flag.
+LINK_MESH_DOWN = (
+    "4: wlan1: <BROADCAST,MULTICAST> mtu 1500 qdisc noqueue "
+    "state DORMANT mode DORMANT group default qlen 1000\n"
+)
+
+
+def test_dormant_mesh_without_lower_up_stays_dormant(monkeypatch):
+    def fake_run(cmd, **kw):
+        text = LINK_MESH_DOWN if "link" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=text, stderr="")
+
+    monkeypatch.setattr(status.subprocess, "run", fake_run)
+    out = status.iface_addrs()
+    # No LOWER_UP -> the radio really is down, keep DORMANT (warn, not ok).
+    assert out["wlan1"]["oper_state"] == "DORMANT"
