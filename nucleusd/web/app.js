@@ -144,20 +144,23 @@ const PAGES = {
   // Dashboard: a menu; live data lives in the persistent header.
   home: {
     title: "Main Menu",
-    build() {
-      return {
-        items: [
-          { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
-          { type: "nav", label: "MESSAGING", to: "messaging" },
-          { type: "nav", label: "VOICE (PTT)", to: "voice" },
-          { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
-          { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
-          { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
-          { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
-          { type: "nav", label: "TAK SERVER", to: "tak" },
-          { type: "nav", label: "SYSTEM UPDATE", to: "update" },
-        ],
-      };
+    async build() {
+      const items = [
+        { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
+        { type: "nav", label: "MESSAGING", to: "messaging" },
+        { type: "nav", label: "VOICE (PTT)", to: "voice" },
+        { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
+        { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
+        { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
+        { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
+      ];
+      // TAK Server is optional; show the menu entry only when it's installed.
+      const { ok, d: tak } = await jget("/api/v1/tak/status");
+      if (ok && tak.installed) {
+        items.push({ type: "nav", label: "TAK SERVER", to: "tak" });
+      }
+      items.push({ type: "nav", label: "SYSTEM UPDATE", to: "update" });
+      return { items };
     },
   },
 
