@@ -40,3 +40,27 @@ def test_web_pages_have_no_flask_template_residue():
         text = f.read_text()
         assert "url_for" not in text, f"{f.name} contains Flask url_for()"
         assert "{{" not in text, f"{f.name} contains a Jinja expression"
+
+
+def test_messaging_log_sticks_to_newest_message():
+    """Regression: the messaging log must auto-scroll to the newest message.
+
+    render() only followed the selected row, and the messaging page has no
+    selectable rows, so pushed/polled messages landed below the fold and the
+    page opened at the top. The fix marks the page `stickBottom` (app.js) and
+    pins/forces the viewport to the bottom in render() (cli.js). Node isn't
+    installed on this node, so we pin the wiring in the static assets rather
+    than executing the JS.
+    """
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    cli_js = (web / "cli.js").read_text()
+
+    # The messaging page opts into stick-to-bottom behaviour.
+    assert "stickBottom: true" in app_js, "messaging page lost stickBottom flag"
+
+    # render() honours stickBottom: detect bottom, force a jump, pin the view.
+    assert "stickBottom" in cli_js, "render() no longer reads stickBottom"
+    assert "state.stickJump" in cli_js, "render() lost the forced-jump flag"
+    assert "view.scrollTop = view.scrollHeight" in cli_js, \
+        "render() no longer pins the viewport to the newest line"

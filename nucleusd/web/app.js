@@ -615,6 +615,9 @@ const PAGES = {
   // per-message badge shows which transport(s) delivered it.
   messaging: {
     title: "Messaging",
+    // Keep the viewport pinned to the newest message as the log grows, unless
+    // the operator has scrolled up to read history (see render() in cli.js).
+    stickBottom: true,
     // A live WebSocket pushes new messages (see onEnter). `dynamic` stays as a
     // fallback poll: build() only fetches when the WS isn't delivering.
     dynamic: 3000,

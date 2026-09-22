@@ -18,6 +18,7 @@
     stack: [],        // nav history for BACK
     timer: null,      // dynamic-refresh interval id
     building: false,  // guards overlapping builds
+    stickJump: false, // one-shot: force stickBottom pages to the newest line
   };
 
   // Shell helpers handed to page actions.
@@ -80,8 +81,24 @@
     const ae = document.activeElement;
     const composeWasFocused = ae && ae.id === "compose-input";
     const caret = composeWasFocused ? ae.selectionStart : null;
+
+    // Log pages (stickBottom) keep the newest line in view: if the viewport was
+    // already at the bottom — or a jump was forced (page entry / just sent) —
+    // pin it there after the rebuild; otherwise leave the scroll where the
+    // operator parked it so reading history isn't yanked down by a new message.
+    const stick = (PAGES[state.page] || {}).stickBottom;
+    const wasAtBottom =
+      view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+    const prevScroll = view.scrollTop;
+
     view.innerHTML = html;
     renderDock(composeIdx, composeWasFocused, caret);
+
+    if (stick) {
+      if (state.stickJump || wasAtBottom) view.scrollTop = view.scrollHeight;
+      else view.scrollTop = prevScroll;
+    }
+    state.stickJump = false;
 
     // Row taps: select, then activate/edit (rows stay directly tappable).
     view.querySelectorAll(".row-wrap").forEach((el) => {
@@ -154,6 +171,7 @@
       if (!isRefresh) {
         state.sel = firstSelectable();
         state.editing = false;
+        state.stickJump = true;  // land on the newest line when opening a log page
       } else {
         state.sel = selectable(state.items[prevSel]) ? prevSel : firstSelectable();
       }
@@ -259,6 +277,8 @@
     it.onChange && it.onChange("");
     const inp = document.getElementById("compose-input");
     if (inp) { inp.value = ""; inp.focus(); }
+    // Sending is an explicit "take me to the newest line" action.
+    state.stickJump = true;
     if (text && it.onSubmit) it.onSubmit(S, text);
   }
 
