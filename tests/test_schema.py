@@ -170,3 +170,19 @@ def test_subnet_collision_rejected():
     # node.id == 1 makes the default br-lan (10.20.1) collide with the mesh.
     with pytest.raises(ValidationError):
         cfg(node={"id": 1})
+
+
+def test_tx_min_interval_default():
+    assert cfg().meshtastic.tx_min_interval_secs == 30
+
+
+def test_tx_min_interval_bounds_accepted():
+    assert cfg(meshtastic={"tx_min_interval_secs": 0}).meshtastic.tx_min_interval_secs == 0
+    assert cfg(meshtastic={"tx_min_interval_secs": 3600}).meshtastic.tx_min_interval_secs == 3600
+
+
+def test_tx_min_interval_out_of_range_rejected():
+    with pytest.raises(ValidationError):
+        cfg(meshtastic={"tx_min_interval_secs": -1})
+    with pytest.raises(ValidationError):
+        cfg(meshtastic={"tx_min_interval_secs": 3601})

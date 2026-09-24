@@ -69,6 +69,7 @@ Header: derived br-lan IP.
 | GPS serial path | Default `/dev/ttyS0`. |
 | I2C device | Default `/dev/i2c-1`. |
 | CoT bridge | `on` / `off`. |
+| TX rate limit (s) | 0–3600; min secs between LoRa TX of the same CoT UID (`0` = off). Read live by the bridge. See [Meshtastic](meshtastic.md#tx-rate-limit). |
 
 ## Web UI
 

@@ -183,6 +183,10 @@ class MeshtasticConfig(BaseModel):
     gps_serial_path: str = Field("/dev/ttyS0", description="Serial device for a UART GPS.")
     i2c_device: str = Field("/dev/i2c-1", description="I2C bus device for an I2C GPS.")
     cot_bridge: bool = Field(True, description="Run the ATAK CoT <-> LoRa bridge (cot-bridge.service).")
+    tx_min_interval_secs: int = Field(
+        30, ge=0, le=3600,
+        description="Min seconds between LoRa TX of the same CoT UID (0 = no limit). Read live by cot-bridge.",
+    )
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig, description="Presence heartbeat settings.")
 
 

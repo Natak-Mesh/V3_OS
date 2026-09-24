@@ -54,6 +54,7 @@ meshtastic:
   gps_serial_path: /dev/ttyS0   # UART GPS device (Pi GPIO header = ttyS0)
   i2c_device: /dev/i2c-1        # only used when gps: i2c
   cot_bridge: true         # run the ATAK CoT <-> LoRa bridge (cot-bridge.service)
+  tx_min_interval_secs: 30  # min secs between LoRa TX of the same CoT UID (0 = off); live
 
 messaging:
   enabled: true            # run the text messaging service (nucleus-messaging.service)

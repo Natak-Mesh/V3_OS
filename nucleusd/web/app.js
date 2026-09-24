@@ -87,6 +87,8 @@ let M = null;
 let MESH_CFG_OPEN = false;
 // Working copy of the presence-heartbeat node config (separate from radio).
 let HB = null;
+// Working copy of the per-UID TX rate limit (node config, read live by cot-bridge).
+let TXR = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
 let MSG_DRAFT = "";
@@ -440,6 +442,22 @@ const PAGES = {
         { type: "fnum", key: "hb_interval", label: "Interval (s)", value: HB.interval_secs,
           min: 60, max: 3600, step: 60, onChange: (v) => HB.interval_secs = v },
         { type: "button", label: "» Save heartbeat", onEnter: saveHeartbeat },
+      );
+
+      // TX rate limit (node config, not radio) — cot-bridge reads it live.
+      if (TXR === null) {
+        const { d: cfg } = await jget("/api/v1/config");
+        const mt = cfg.meshtastic || {};
+        TXR = mt.tx_min_interval_secs ?? 30;
+      }
+      items.push(
+        { type: "content", html: `<div class="content"><div class="page-title" ` +
+          `style="padding-left:0">TX rate limit</div><div class="hint" ` +
+          `style="padding-left:0">Min seconds between LoRa transmissions of the same CoT ` +
+          `UID. 0 disables the limit.</div></div>` },
+        { type: "fnum", key: "tx_min_interval", label: "TX rate limit (s)", value: TXR,
+          min: 0, max: 3600, step: 1, onChange: (v) => TXR = v },
+        { type: "button", label: "» Save TX rate limit", onEnter: saveTxRateLimit },
       );
       return { items };
     },
@@ -824,6 +842,18 @@ async function saveHeartbeat(S) {
   };
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("heartbeat saved — active within one bridge cycle (~10s)");
+  else S.msg("save failed: " + JSON.stringify(d.detail), false);
+}
+
+async function saveTxRateLimit(S) {
+  if (TXR === null) return S.msg("nothing to save", false);
+  // Read-modify-write the full node config so we don't clobber other fields.
+  const { d: cfg } = await jget("/api/v1/config");
+  delete cfg._derived;
+  cfg.meshtastic = cfg.meshtastic || {};
+  cfg.meshtastic.tx_min_interval_secs = parseInt(TXR, 10);
+  const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
+  if (ok) S.msg("TX rate limit saved — active within one bridge cycle (~10s)");
   else S.msg("save failed: " + JSON.stringify(d.detail), false);
 }
 

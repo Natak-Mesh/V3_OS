@@ -59,3 +59,12 @@ of silence.
 - **Heartbeat** — `on` / `off`.
 - **Interval (s)** — 60–3600 (60s steps).
 - **Save heartbeat** — active within one bridge cycle (~10s).
+
+## TX rate limit
+
+Node config (not radio) — read live by the CoT bridge, so no radio reboot.
+Minimum seconds between LoRa transmissions of the same CoT UID; drops repeat
+updates for a UID inside the window to keep the airwaves clear.
+
+- **TX rate limit (s)** — 0–3600. `0` disables the limit.
+- **Save TX rate limit** — active within one bridge cycle (~10s).

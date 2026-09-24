@@ -113,7 +113,12 @@ MESHTASTICD_PORT = 4403
 
 # ── Rate limiting ───────────────────────────────────────────────
 
-TX_MIN_INTERVAL = 30  # seconds — min time between TX for same CoT UID
+# Min seconds between LoRa TX of the same CoT UID (0 = no limit). This is the
+# starting value only; the live value is read from config.yaml
+# (meshtastic.tx_min_interval_secs) each main-loop pass — see _apply_tx_min_interval().
+# The default lives solely in the schema so it can't drift.
+from nucleusd.schema import MeshtasticConfig  # noqa: E402
+TX_MIN_INTERVAL = MeshtasticConfig.model_fields["tx_min_interval_secs"].default
 
 # ── Globals (initialized in main) ───────────────────────────────
 
@@ -223,6 +228,10 @@ def _read_mesh_conf():
         hb = m.get("heartbeat", {}) or {}
         cfg["HEARTBEAT_ENABLED"] = "true" if hb.get("enabled", True) else "false"
         cfg["HEARTBEAT_INTERVAL"] = str(hb.get("interval_secs", 300))
+        # Per-UID TX rate limit. Only surfaced when present so a missing/invalid
+        # key leaves TX_MIN_INTERVAL untouched (schema owns the default).
+        if "tx_min_interval_secs" in m:
+            cfg["TX_MIN_INTERVAL"] = str(m.get("tx_min_interval_secs"))
     except OSError:
         pass
     except Exception as e:  # malformed YAML must not crash the bridge
@@ -559,6 +568,26 @@ def _create_mcast_listener(group, port):
 def _is_chat_event(cot_xml):
     """Check if a CoT XML string is a GeoChat event."""
     return "GeoChat" in cot_xml or "b-t-f" in cot_xml
+
+
+def _apply_tx_min_interval(cfg):
+    """Update the global TX_MIN_INTERVAL from a _read_mesh_conf() dict.
+
+    The value is validated by the schema on write (PUT /api/v1/config), so no
+    clamping is done here. A missing key or an unparseable value leaves the
+    current interval unchanged. Logs at INFO only when the value actually
+    changes, so the ~10s main-loop poll stays quiet.
+    """
+    global TX_MIN_INTERVAL
+    if "TX_MIN_INTERVAL" not in cfg:
+        return
+    try:
+        new = int(cfg["TX_MIN_INTERVAL"])
+    except (TypeError, ValueError):
+        return
+    if new != TX_MIN_INTERVAL:
+        logger.info(f"TX rate limit changed: {TX_MIN_INTERVAL}s -> {new}s per UID")
+        TX_MIN_INTERVAL = new
 
 
 def _tx_rate_ok(uid):
@@ -1075,6 +1104,8 @@ def main():
     cfg = _read_mesh_conf()
     _use_tcp = cfg.get("MESHTASTICD_ENABLED",
                        "false").lower() in ("true", "1", "yes")
+    # Pick up the configured TX rate limit before the startup banner prints it.
+    _apply_tx_min_interval(cfg)
 
     # ── Open radio interface (TCP or serial) ─────────────────
     if _use_tcp:
@@ -1266,6 +1297,8 @@ def main():
                 # Presence heartbeat (re-read config each pass so a UI change
                 # takes effect without restarting the bridge).
                 _hb = _read_mesh_conf()
+                # Live TX rate limit (reuses the same read; no restart needed).
+                _apply_tx_min_interval(_hb)
                 if _hb.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes"):
                     try:
                         _hb_iv = max(60, int(_hb.get("HEARTBEAT_INTERVAL", "300")))
@@ -1281,7 +1314,7 @@ def main():
                     for u in expired:
                         del _rx_recent_uids[u]
                 with _tx_lock:
-                    expired = [u for u, t in _tx_last_sent.items() if now - t > TX_MIN_INTERVAL * 2]
+                    expired = [u for u, t in _tx_last_sent.items() if now - t > max(TX_MIN_INTERVAL * 2, 60)]
                     for u in expired:
                         del _tx_last_sent[u]
             except Exception as e:
