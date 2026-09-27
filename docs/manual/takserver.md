@@ -15,6 +15,10 @@ the boot-ordering drop-in and setup script are inert unless enabled.
 - The TAK Server `.deb` from <https://tak.gov> (auth-walled — it cannot be
   downloaded automatically). Place it in `~natak`, e.g.
   `takserver_5.7-RELEASE32_all.deb`.
+- The MediaMTX **linux_arm64** release tarball from
+  <https://github.com/bluenviron/mediamtx/releases>, also in `~natak`, e.g.
+  `mediamtx_v1.15.6_linux_arm64.tar.gz`. The script stops before changing
+  anything if it can't find one (unless MediaMTX is already installed).
 - `tak.variant: official` in `/etc/nucleus/config.yaml`. **On an existing node
   the `tak:` block does not exist in the file** — `install.sh` only seeds
   `config.yaml` when it is absent, so it never adds the block to a live node.
@@ -48,12 +52,13 @@ CA common names are **derived** from the hostname (no spaces): root
 ## Setup
 
 ```bash
-sudo nucleus-tak-setup.sh [/path/to/takserver_*.deb]
+sudo nucleus-tak-setup.sh [/path/to/takserver_*.deb] [/path/to/mediamtx_*.tar.gz]
 ```
 
 The script is not in your home directory — `install.sh` installs it to
 `/opt/nucleus/bin/` and symlinks it onto `PATH` (`/usr/local/bin`), so run it
-by name. With no argument it auto-finds `~natak/takserver_*.deb`. The script is
+by name. With no arguments it auto-finds `~natak/takserver_*.deb` and
+`~natak/mediamtx_*_linux_arm64.tar.gz`. The script is
 idempotent — an existing PKI, package, or CoreConfig edit is detected and
 skipped, so a re-run never regenerates a CA or clobbers a live server. Phases:
 
@@ -65,13 +70,12 @@ skipped, so a re-run never regenerates a CA or clobbers a live server. Phases:
 | Cert metadata | Patches `cert-metadata.sh` with the `cert.*` values. |
 | PKI | Generates root CA, intermediate CA, and the `takserver` server cert. |
 | CoreConfig | Points the truststore at the intermediate CA and injects the certificate auto-enrollment block. |
-| Start | Enables + starts `takserver.service`, waits for a clean messaging-server start. |
-| Admin | Creates the `webadmin` client cert and authorizes it as administrator. |
+| Admin cert | Creates the `webadmin` client cert (offline; skipped if it exists). |
+| Start | Enables `takserver.service`; restarts it only if this run installed the package, generated PKI or edited CoreConfig, starts it if it is down, otherwise leaves it running. |
+| Admin authorize | First install only: waits (up to 15 min) for port 8089, then authorizes `webadmin` as administrator. Re-runs skip this and do not wait. |
 | Export | Copies `webadmin.p12` + the intermediate truststore to `~natak`, and stages the same two files in `/opt/nucleus/tak-certs/` (owned by `natak`) for the web UI to serve to connected devices. |
 | Firewall | Opens the TAK ports on eth0 immediately (if UFW is active). See [Ports](#ports). |
-
-> **MediaMTX is not installed by this script** (nor anywhere else in the repo
-> yet). Install it separately if you need video.
+| MediaMTX | Installs the binary + default config (if not installed), writes `mediamtx.service`, enables + starts it once (starts on boot), opens its ports on eth0. See [MediaMTX](#mediamtx). |
 
 ## After setup
 
@@ -126,6 +130,35 @@ the local network only, but if eth0 sits on a network with public addresses
 is the weakest point — the intermediate truststore is public by design, so
 enrollment is protected only by the TAK user's password. Use strong passwords
 and disable users you don't need.
+
+## MediaMTX
+
+Media server for TAK video (RTSP/SRT), installed by the setup script:
+
+| Item | Location |
+|------|----------|
+| Binary | `/usr/local/bin/mediamtx` |
+| Config | `/usr/local/etc/mediamtx.yml` — the release's default, installed together with the binary; re-runs leave it alone while the binary is present, so your edits persist |
+| Service | `/etc/systemd/system/mediamtx.service`, written by the setup script (only on TAK nodes). Runs as `natak`, after `nucleus-mesh.service`, restarts on failure, enabled on boot. Re-runs do not restart it. |
+
+**Streams are open** — the default config allows anyone who can reach the ports
+to publish and watch any path, with no username or password.
+
+Opened on eth0 whenever `mediamtx.service` is enabled (checked by
+`nucleus-mesh-up.sh` on every mesh bring-up), to any source address:
+
+| Port | Use |
+|------|-----|
+| 8554/tcp | RTSP, e.g. `rtsp://<node-ip>:8554/<path>` |
+| 8000/udp, 8001/udp | RTSP media over UDP (RTP/RTCP) |
+| 8890/udp | SRT, e.g. `srt://<node-ip>:8890?streamid=read:<path>` |
+
+MediaMTX's other protocols (RTMP 1935, HLS 8888, WebRTC 8889/8189) are on in the
+default config and reachable over the mesh, AP and Tailscale, but are not
+opened on eth0. To upgrade, remove `/usr/local/bin/mediamtx`, re-run the setup
+script with the new tarball, then `sudo systemctl restart mediamtx`. This also
+replaces `mediamtx.yml` with the new release's default — back it up first if
+you edited it.
 
 ## Boot ordering
 

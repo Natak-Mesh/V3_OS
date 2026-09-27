@@ -162,12 +162,32 @@ TAK_ETH0_RULES = (
 def test_meshup_tak_ports_gated_on_installed_package():
     m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
     # Runtime dpkg check (not config) decides whether TAK ports open on eth0.
-    check = ("if [ \"$(dpkg-query -W -f='${Status}' takserver 2>/dev/null || true)\""
+    check = ("if [ \"$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)\""
              " = \"install ok installed\" ]; then")
     assert check in m
     for rule in TAK_ETH0_RULES:
         assert rule in m
         # Inside the dpkg guard, after the reset, before ufw is enabled.
+        assert m.index(check) < m.index(rule) < m.index("ufw --force enable")
+        assert m.index("ufw --force reset") < m.index(rule)
+
+
+MEDIAMTX_ETH0_RULES = (
+    "ufw allow in on eth0 to any port 8554 proto tcp",
+    "ufw allow in on eth0 to any port 8000 proto udp",
+    "ufw allow in on eth0 to any port 8001 proto udp",
+    "ufw allow in on eth0 to any port 8890 proto udp",
+)
+
+
+def test_meshup_mediamtx_ports_gated_on_enabled_unit():
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    # Runtime systemd check decides whether MediaMTX ports open on eth0.
+    check = "if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then"
+    assert check in m
+    for rule in MEDIAMTX_ETH0_RULES:
+        assert rule in m
+        # Inside the systemd guard, after the reset, before ufw is enabled.
         assert m.index(check) < m.index(rule) < m.index("ufw --force enable")
         assert m.index("ufw --force reset") < m.index(rule)
 
@@ -181,7 +201,8 @@ def test_meshup_tak_ports_absent_when_firewall_disabled():
     })
     m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
     assert "dpkg-query" not in m
-    for rule in TAK_ETH0_RULES:
+    assert "mediamtx" not in m
+    for rule in TAK_ETH0_RULES + MEDIAMTX_ETH0_RULES:
         assert rule not in m
 
 

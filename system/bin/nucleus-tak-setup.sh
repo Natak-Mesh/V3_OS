@@ -9,9 +9,13 @@
 # a single validated source of truth.
 #
 # Prereq: download takserver_*.deb from https://tak.gov (auth-walled — cannot be
-# fetched automatically) into ~natak, then:
+# fetched automatically) and the MediaMTX linux_arm64 release tarball
+# (https://github.com/bluenviron/mediamtx/releases) into ~natak, then:
 #
-#     sudo nucleus-tak-setup.sh [/path/to/takserver_*.deb]
+#     sudo nucleus-tak-setup.sh [/path/to/takserver_*.deb] [/path/to/mediamtx_*.tar.gz]
+#
+# MediaMTX (RTSP/SRT video for TAK) is installed alongside TAK Server and
+# enabled to start on boot.
 #
 # Idempotent: existing repo/PKI/CoreConfig edits are detected and skipped, so a
 # re-run never regenerates a CA or clobbers a live server.
@@ -74,6 +78,22 @@ EOF
     exit 1
 fi
 
+# ---- 1b. Locate the MediaMTX tarball (checked up front, before any changes) --
+MTX_BIN=/usr/local/bin/mediamtx
+MTX_CONF=/usr/local/etc/mediamtx.yml
+MTX_TGZ="${2:-}"
+if [ -z "$MTX_TGZ" ]; then
+    MTX_TGZ="$(ls -1 "$EXPORT_HOME"/mediamtx_*_linux_arm64.tar.gz 2>/dev/null | head -n1 || true)"
+fi
+if [ ! -x "$MTX_BIN" ] && { [ -z "$MTX_TGZ" ] || [ ! -f "$MTX_TGZ" ]; }; then
+    cat >&2 <<EOF
+MediaMTX tarball not found. Download the linux_arm64 release from
+https://github.com/bluenviron/mediamtx/releases into $EXPORT_HOME and re-run:
+  sudo nucleus-tak-setup.sh [takserver.deb] /path/to/mediamtx_vX.Y.Z_linux_arm64.tar.gz
+EOF
+    exit 1
+fi
+
 # ---- 2. Prerequisites (bookworm-pinned pg-15, java-17, nofile) --------------
 if [ ! -f /etc/apt/sources.list.d/bookworm.list ]; then
     echo "==> add bookworm repo (postgresql-15 lives there on trixie)"
@@ -92,12 +112,16 @@ if ! grep -q 'nofile      32768' /etc/security/limits.conf 2>/dev/null; then
 fi
 
 # ---- 3. Install TAK Server (apt resolves deps; needs ./ path) ---------------
+# CHANGED=1 when this run installs/regenerates/edits anything TAK loads at
+# start, so takserver is only restarted when it actually needs to be.
+CHANGED=0
 if [ ! -d "$TAK" ]; then
     echo "==> install $(basename "$DEB")"
     case "$DEB" in
         /*) apt-get install -y "$DEB" ;;
         *)  apt-get install -y "./$DEB" ;;
     esac
+    CHANGED=1
 else
     echo "==> $TAK exists — skipping .deb install"
 fi
@@ -125,14 +149,18 @@ if [ ! -f "$FILES/${INT_CA}-signing.jks" ]; then
         yes y | ./makeCert.sh ca '$INT_CA'
         ./makeCert.sh server takserver
     "
+    CHANGED=1
 else
     echo "==> PKI already present — skipping generation"
 fi
 
 # ---- 6. CoreConfig: truststore + auto-enrollment ----------------------------
 CORE="$TAK/CoreConfig.example.xml"
-echo "==> point truststore at intermediate CA"
-sed -i "s/truststore-root/truststore-${INT_CA}/g" "$CORE"
+if grep -q 'truststore-root' "$CORE"; then
+    echo "==> point truststore at intermediate CA"
+    sed -i "s/truststore-root/truststore-${INT_CA}/g" "$CORE"
+    CHANGED=1
+fi
 
 # Re-run guard: skip only if an ACTIVE (uncommented) certificateSigning block
 # exists. The example file ships a commented-out sample of this block, so a
@@ -167,46 +195,60 @@ xml = xml.replace("</Configuration>", block + "\n</Configuration>", 1)
 with open(path, "w") as f:
     f.write(xml)
 PY
+    CHANGED=1
 else
     echo "==> certificateSigning already in CoreConfig — skipping"
 fi
 
-# ---- 7. Start the server; wait for the client TLS port to listen ------------
-# On a Pi the Java/Ignite/Postgres stack can take many minutes to come up. Wait
-# for TCP 8089 (client connector) to listen — the log has no reliable "started"
-# string in 5.7 — then give a short settle before touching UserManager.
-echo "==> enable + start takserver"
-systemctl enable takserver.service
-systemctl restart takserver.service
-echo "    waiting for client port 8089 (up to 15 min)..."
-UP=0
-for i in $(seq 1 180); do
-    if ss -tln 2>/dev/null | grep -q ':8089 '; then
-        echo "    takserver up (8089 listening)"
-        UP=1
-        sleep 30   # settle: Ignite services register after the port opens
-        break
-    fi
-    sleep 5
-done
-if [ "$UP" -ne 1 ]; then
-    echo "WARNING: 8089 never came up — check $LOG; skipping admin cert" >&2
-fi
-
-# ---- 8. Admin certificate ---------------------------------------------------
-if [ "$UP" -eq 1 ] && [ ! -f "$FILES/webadmin.p12" ]; then
-    echo "==> create + authorize webadmin cert"
-    sudo -u tak bash -c "
-        set -e
-        cd '$CERTS'
-        ./makeCert.sh client webadmin
-        java -jar '$TAK/utils/UserManager.jar' certmod -A '$FILES/webadmin.pem'
-    "
+# ---- 7. webadmin client cert (offline — does not need takserver running) ----
+NEW_ADMIN=0
+if [ ! -f "$FILES/webadmin.p12" ]; then
+    echo "==> create webadmin cert"
+    sudo -u tak bash -c "cd '$CERTS' && ./makeCert.sh client webadmin"
+    NEW_ADMIN=1
 else
     echo "==> webadmin cert already present — skipping"
 fi
 
-# ---- 9. Export webadmin.p12 + truststore for enrollment ---------------------
+# ---- 8. Start takserver only if this run changed something or it's down -----
+systemctl enable takserver.service
+if [ "$CHANGED" -eq 1 ]; then
+    echo "==> restart takserver (config/PKI/package changed)"
+    systemctl restart takserver.service
+elif ! systemctl is-active --quiet takserver.service; then
+    echo "==> start takserver"
+    systemctl start takserver.service
+else
+    echo "==> takserver running, nothing changed — no restart"
+fi
+
+# ---- 9. Authorize webadmin (first install only; needs takserver up) ---------
+# UserManager certmod talks to the running server. On a Pi the Java/Ignite/
+# Postgres stack can take many minutes to come up; TCP 8089 listening is the
+# readiness signal (5.7's log has no reliable "started" line), then a short
+# settle for Ignite services to register.
+if [ "$NEW_ADMIN" -eq 1 ]; then
+    echo "    waiting for client port 8089 (up to 15 min) to authorize webadmin..."
+    UP=0
+    for i in $(seq 1 180); do
+        if ss -tln 2>/dev/null | grep -q ':8089 '; then
+            echo "    takserver up (8089 listening)"
+            UP=1
+            sleep 30
+            break
+        fi
+        sleep 5
+    done
+    if [ "$UP" -eq 1 ]; then
+        echo "==> authorize webadmin as administrator"
+        sudo -u tak java -jar "$TAK/utils/UserManager.jar" certmod -A "$FILES/webadmin.pem"
+    else
+        echo "WARNING: 8089 never came up — check $LOG. Authorize later with:" >&2
+        echo "  sudo -u tak java -jar $TAK/utils/UserManager.jar certmod -A $FILES/webadmin.pem" >&2
+    fi
+fi
+
+# ---- 10. Export webadmin.p12 + truststore for enrollment --------------------
 echo "==> export credentials to $EXPORT_HOME"
 cp -v "$FILES/webadmin.p12" "$EXPORT_HOME/"
 cp -v "$FILES/truststore-${INT_CA}.p12" "$EXPORT_HOME/"
@@ -220,7 +262,7 @@ cp -v "$FILES/webadmin.p12" "$CERT_WEB_DIR/"
 cp -v "$FILES/truststore-${INT_CA}.p12" "$CERT_WEB_DIR/"
 chown -R "$EXPORT_USER:$EXPORT_USER" "$CERT_WEB_DIR"
 
-# ---- 10. Open TAK ports on eth0 now -----------------------------------------
+# ---- 11. Open TAK ports on eth0 now -----------------------------------------
 # nucleus-mesh-up.sh re-adds these on every mesh bring-up (it detects the
 # installed takserver package), so this only covers the time until the next
 # boot/apply. ufw skips rules that already exist, so re-runs are harmless.
@@ -230,6 +272,45 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
     ufw allow in on eth0 to any port 8089 proto tcp comment 'tak client tls'
     ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
     ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
+fi
+
+# ---- 12. MediaMTX (RTSP/SRT video) ------------------------------------------
+# Binary + default config from the release tarball (default config used as-is:
+# open publish/read, no auth; left alone once installed).
+if [ ! -x "$MTX_BIN" ]; then
+    echo "==> install MediaMTX from $(basename "$MTX_TGZ")"
+    tar -xzf "$MTX_TGZ" -C "$(dirname "$MTX_BIN")" mediamtx
+    tar -xzf "$MTX_TGZ" -C "$(dirname "$MTX_CONF")" mediamtx.yml
+else
+    echo "==> $MTX_BIN exists — skipping MediaMTX install"
+fi
+echo "==> mediamtx.service (enabled on boot)"
+cat > /etc/systemd/system/mediamtx.service <<EOF
+[Unit]
+Description=MediaMTX media server (RTSP/SRT video for TAK)
+After=nucleus-mesh.service network-online.target
+Wants=nucleus-mesh.service network-online.target
+
+[Service]
+User=$EXPORT_USER
+ExecStart=$MTX_BIN $MTX_CONF
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now mediamtx.service
+
+# Open MediaMTX ports on eth0 now (RTSP + SRT). nucleus-mesh-up.sh re-adds
+# these on every mesh bring-up while mediamtx.service is enabled.
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    echo "==> open MediaMTX ports on eth0 (8554 tcp, 8000/8001/8890 udp)"
+    ufw allow in on eth0 to any port 8554 proto tcp comment 'mediamtx rtsp'
+    ufw allow in on eth0 to any port 8000 proto udp comment 'mediamtx rtp'
+    ufw allow in on eth0 to any port 8001 proto udp comment 'mediamtx rtcp'
+    ufw allow in on eth0 to any port 8890 proto udp comment 'mediamtx srt'
 fi
 
 cat <<EOF
@@ -242,4 +323,6 @@ TAK Server provisioning complete.
   Exported   : $EXPORT_HOME/webadmin.p12
                $EXPORT_HOME/truststore-${INT_CA}.p12
   Web UI     : same two files staged in $CERT_WEB_DIR for device download.
+  MediaMTX   : rtsp://<node-ip>:8554/<path>  srt://<node-ip>:8890?streamid=publish:<path>
+               open publish/read (no auth); config $MTX_CONF; starts on boot.
 EOF

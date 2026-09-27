@@ -13,8 +13,10 @@ The firewall rules are rendered into `nucleus-mesh-up.sh` and applied by
 **first**, then re-adds exactly the rules the current config asks for. Because of
 the reset, a rule that is no longer in the config (for example, the web-over-eth0
 rules after you set `eth0_access: off`) is removed rather than left behind. The
-live ruleset therefore always reflects the current `config.yaml` and nothing
-else.
+live ruleset therefore always reflects the current `config.yaml`, with one
+exception: the optional TAK Server / MediaMTX add-on (provisioned by
+`nucleus-tak-setup.sh`, outside the config pipeline) opens its eth0 ports based
+on what is installed on the node, checked at run time. See the table below.
 
 The reset only clears UFW's own rules. It does **not** touch:
 
@@ -40,6 +42,7 @@ With the firewall enabled, the following rules are applied, in this order:
 | allow in on tailscale0 | Trust Tailscale. |
 | allow in on eth0 port 80/443 tcp | Web UI over ethernet. Only present when `web.eth0_access: true`. nginx password-protects these. |
 | allow in on eth0 port 8443/8089/8446 tcp, 8090 udp | Official TAK Server over ethernet. Only present when the `takserver` package is installed — checked at run time with `dpkg-query`, not from config. Open to any source; see [TAK Server](takserver.md#ports). |
+| allow in on eth0 port 8554 tcp, 8000/8001/8890 udp | MediaMTX RTSP + SRT video over ethernet. Only present when `mediamtx.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. Open to any source; see [TAK Server](takserver.md#mediamtx). |
 | route allow br-lan/wlan1 → eth0 | Internet egress for clients. Only in eth0 WAN mode. |
 | route allow br-lan ↔ wlan1 | Mesh ↔ LAN forwarding, always. |
 

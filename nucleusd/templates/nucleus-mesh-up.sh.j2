@@ -93,11 +93,19 @@ ufw allow in on eth0 to any port 443 proto tcp comment 'web ui (https) over ethe
 # the node — nodes without TAK open nothing extra. Exact string compare (no
 # pipeline) so `set -euo pipefail` can't abort on a missing package.
 # 8443/8089/8090 require a client cert; 8446 (enrollment) is user/password.
-if [ "$(dpkg-query -W -f='${Status}' takserver 2>/dev/null || true)" = "install ok installed" ]; then
+if [ "$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)" = "install ok installed" ]; then
     ufw allow in on eth0 to any port 8443 proto tcp comment 'tak web admin'
     ufw allow in on eth0 to any port 8089 proto tcp comment 'tak client tls'
     ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
     ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
+fi
+# MediaMTX (installed by nucleus-tak-setup.sh, not a .deb): open RTSP + SRT on
+# eth0 whenever its unit is enabled. `if` keeps a non-zero exit from tripping -e.
+if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then
+    ufw allow in on eth0 to any port 8554 proto tcp comment 'mediamtx rtsp'
+    ufw allow in on eth0 to any port 8000 proto udp comment 'mediamtx rtp'
+    ufw allow in on eth0 to any port 8001 proto udp comment 'mediamtx rtcp'
+    ufw allow in on eth0 to any port 8890 proto udp comment 'mediamtx srt'
 fi
 {% if eth0_mode == "wan" %}
 # WAN mode: let LAN/mesh clients route OUT to the internet via eth0. NAT
