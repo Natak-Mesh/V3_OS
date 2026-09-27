@@ -213,7 +213,7 @@ html, body {
   background: var(--bg-card);
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  grid-template-areas: "up enter down" "back back back";
+  grid-template-areas: "up enter down" "up back down";
 }
 #ctrl button {
   background: transparent; color: var(--text-primary);
@@ -226,7 +226,7 @@ html, body {
 #c-down { grid-area: down; border-right: none; }
 #c-back {
   grid-area: back; border-top: 1px solid var(--border-color);
-  border-right: none; font-size: 14px; letter-spacing: .1em; color: var(--text-secondary);
+  font-size: 14px; letter-spacing: .1em; color: var(--text-secondary);
 }
 
 /* Thin dark scrollbar to match the terminal shell. */
