@@ -87,6 +87,9 @@
     // pin it there after the rebuild; otherwise leave the scroll where the
     // operator parked it so reading history isn't yanked down by a new message.
     const stick = (PAGES[state.page] || {}).stickBottom;
+    // Bottom-anchor the log (newest line sits directly above the compose box)
+    // so a keyboard pushing the page up never hides it off the top.
+    view.classList.toggle("stick-bottom", !!stick);
     const wasAtBottom =
       view.scrollHeight - view.scrollTop - view.clientHeight < 24;
     const prevScroll = view.scrollTop;
@@ -150,6 +153,33 @@
       if (caret != null) try { compose.setSelectionRange(caret, caret); } catch (e) {}
     }
   }
+
+  // ── Keep log pages pinned while the on-screen keyboard opens ──
+  // Opening the mobile keyboard shrinks/pans the viewport without re-rendering,
+  // so render()'s stickBottom pin never runs and the newest lines drop below
+  // the compose box. Track whether the log is parked at the bottom and re-pin
+  // on viewport resizes and when the compose input takes focus.
+  let viewPinned = true;
+  view.addEventListener("scroll", () => {
+    viewPinned = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+  }, { passive: true });
+
+  function repinLog() {
+    if (!(PAGES[state.page] || {}).stickBottom) return;
+    const ae = document.activeElement;
+    const composing = ae && ae.id === "compose-input";
+    if (!viewPinned && !composing) return;  // operator is reading history
+    requestAnimationFrame(() => { view.scrollTop = view.scrollHeight; });
+  }
+  window.addEventListener("resize", repinLog);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", repinLog);
+  dock && dock.addEventListener("focusin", (ev) => {
+    if (ev.target && ev.target.id !== "compose-input") return;
+    viewPinned = true;
+    repinLog();
+    // Some browsers finish the keyboard animation without a resize event.
+    setTimeout(repinLog, 350);
+  });
 
   function scrollSelIntoView() {
     const rows = Array.from(view.querySelectorAll(".row-wrap"));

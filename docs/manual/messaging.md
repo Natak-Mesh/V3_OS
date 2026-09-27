@@ -17,6 +17,9 @@ shows which transport delivered each one.
 | Message | Message text. |
 | Via | Transport(s) that delivered it: `wifi`, `lora`, or `wifi+lora` (`—` if unknown). |
 
+The log stays pinned to the newest message — including while the on-screen
+keyboard opens for the compose box — unless you've scrolled up to read history.
+
 Shows the most recent 100 messages. `messaging service unavailable` means the
 messaging daemon is down; `no messages yet` means an empty store.
 

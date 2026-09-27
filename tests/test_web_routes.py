@@ -66,6 +66,34 @@ def test_messaging_log_sticks_to_newest_message():
         "render() no longer pins the viewport to the newest line"
 
 
+def test_messaging_log_stays_pinned_when_keyboard_opens():
+    """Regression: focusing the compose box on a phone opens the keyboard, which
+    shrinks/pans the viewport without a re-render, so the newest messages fell
+    out of view above the text entry box. cli.js must re-pin stickBottom pages
+    on viewport resize and on compose focus."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    cli_js = (web / "cli.js").read_text()
+    assert "function repinLog()" in cli_js, "keyboard re-pin handler removed"
+    assert 'window.addEventListener("resize", repinLog)' in cli_js, \
+        "no re-pin on window resize"
+    assert 'visualViewport.addEventListener("resize", repinLog)' in cli_js, \
+        "no re-pin on visualViewport resize (mobile keyboard)"
+    assert '"focusin"' in cli_js, "no re-pin when the compose input takes focus"
+
+
+def test_messaging_log_is_bottom_anchored():
+    """Regression: a short log sat at the TOP of the viewport, so when the phone
+    keyboard pushed the page up the messages went out of view. stickBottom pages
+    must anchor content to the bottom, directly above the compose box."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    cli_js = (web / "cli.js").read_text()
+    cli_css = (web / "cli.css").read_text()
+    assert 'view.classList.toggle("stick-bottom", !!stick)' in cli_js, \
+        "render() no longer marks stickBottom pages"
+    assert "#view.stick-bottom > :first-child { margin-top: auto; }" in cli_css, \
+        "log is no longer bottom-anchored"
+
+
 def test_peer_join_is_a_selectable_item():
     """Regression: the peer Join action was an inline <button onclick> injected
     into a `content` block, which the shell cursor skips (and any rebuild wiped).

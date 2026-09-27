@@ -71,6 +71,12 @@ html, body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Log pages (stickBottom): anchor content to the bottom of the viewport so the
+   newest message sits directly above the compose box, even with a short log. */
+#view.stick-bottom { display: flex; flex-direction: column; }
+#view.stick-bottom > * { flex-shrink: 0; }
+#view.stick-bottom > :first-child { margin-top: auto; }
+
 .page-title {
   color: var(--text-secondary);
   text-transform: uppercase;
