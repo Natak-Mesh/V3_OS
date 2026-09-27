@@ -220,6 +220,18 @@ cp -v "$FILES/webadmin.p12" "$CERT_WEB_DIR/"
 cp -v "$FILES/truststore-${INT_CA}.p12" "$CERT_WEB_DIR/"
 chown -R "$EXPORT_USER:$EXPORT_USER" "$CERT_WEB_DIR"
 
+# ---- 10. Open TAK ports on eth0 now -----------------------------------------
+# nucleus-mesh-up.sh re-adds these on every mesh bring-up (it detects the
+# installed takserver package), so this only covers the time until the next
+# boot/apply. ufw skips rules that already exist, so re-runs are harmless.
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    echo "==> open TAK ports on eth0 (8443/8089/8446 tcp, 8090 udp)"
+    ufw allow in on eth0 to any port 8443 proto tcp comment 'tak web admin'
+    ufw allow in on eth0 to any port 8089 proto tcp comment 'tak client tls'
+    ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
+    ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
+fi
+
 cat <<EOF
 
 TAK Server provisioning complete.

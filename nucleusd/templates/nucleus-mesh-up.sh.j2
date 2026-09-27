@@ -88,6 +88,17 @@ ufw allow in on tailscale0
 ufw allow in on eth0 to any port 80 proto tcp comment 'web ui over ethernet'
 ufw allow in on eth0 to any port 443 proto tcp comment 'web ui (https) over ethernet'
 {% endif %}
+# Official TAK Server: open its ports on eth0 whenever the package is installed.
+# Checked at run time (dpkg), not from config, so it tracks what is actually on
+# the node — nodes without TAK open nothing extra. Exact string compare (no
+# pipeline) so `set -euo pipefail` can't abort on a missing package.
+# 8443/8089/8090 require a client cert; 8446 (enrollment) is user/password.
+if [ "$(dpkg-query -W -f='${Status}' takserver 2>/dev/null || true)" = "install ok installed" ]; then
+    ufw allow in on eth0 to any port 8443 proto tcp comment 'tak web admin'
+    ufw allow in on eth0 to any port 8089 proto tcp comment 'tak client tls'
+    ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
+    ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
+fi
 {% if eth0_mode == "wan" %}
 # WAN mode: let LAN/mesh clients route OUT to the internet via eth0. NAT
 # masquerade for these is set up in the WAN block above; inbound-from-internet

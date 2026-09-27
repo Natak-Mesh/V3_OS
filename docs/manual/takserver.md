@@ -51,7 +51,9 @@ CA common names are **derived** from the hostname (no spaces): root
 sudo nucleus-tak-setup.sh [/path/to/takserver_*.deb]
 ```
 
-With no argument it auto-finds `~natak/takserver_*.deb`. The script is
+The script is not in your home directory — `install.sh` installs it to
+`/opt/nucleus/bin/` and symlinks it onto `PATH` (`/usr/local/bin`), so run it
+by name. With no argument it auto-finds `~natak/takserver_*.deb`. The script is
 idempotent — an existing PKI, package, or CoreConfig edit is detected and
 skipped, so a re-run never regenerates a CA or clobbers a live server. Phases:
 
@@ -66,6 +68,10 @@ skipped, so a re-run never regenerates a CA or clobbers a live server. Phases:
 | Start | Enables + starts `takserver.service`, waits for a clean messaging-server start. |
 | Admin | Creates the `webadmin` client cert and authorizes it as administrator. |
 | Export | Copies `webadmin.p12` + the intermediate truststore to `~natak`, and stages the same two files in `/opt/nucleus/tak-certs/` (owned by `natak`) for the web UI to serve to connected devices. |
+| Firewall | Opens the TAK ports on eth0 immediately (if UFW is active). See [Ports](#ports). |
+
+> **MediaMTX is not installed by this script** (nor anywhere else in the repo
+> yet). Install it separately if you need video.
 
 ## After setup
 
@@ -100,12 +106,26 @@ is installed (it shows "not installed" otherwise). It provides:
 
 ## Ports
 
-| Port | Service |
-|------|---------|
-| 8089/tcp | Client connect (TLS) |
-| 8090/udp | QUIC |
-| 8443/tcp | Web admin / WebTAK / API |
-| 8446/tcp | Cert enrollment |
+| Port | Service | Access control |
+|------|---------|----------------|
+| 8089/tcp | Client connect (TLS) | Client certificate |
+| 8090/udp | QUIC | Client certificate |
+| 8443/tcp | Web admin / WebTAK / API | Client certificate |
+| 8446/tcp | Cert enrollment | Username + password only |
+
+These ports are always reachable over the mesh, br-lan/AP and Tailscale (those
+interfaces are fully trusted). On **eth0** they are opened automatically
+whenever the `takserver` package is installed: `nucleus-mesh-up.sh` checks
+`dpkg-query -W -f='${Status}' takserver` on every mesh bring-up, and the setup
+script adds the same rules at the end of provisioning so they work immediately.
+There is no config switch.
+
+The eth0 rules accept **any source address**. Behind a NAT router that means
+the local network only, but if eth0 sits on a network with public addresses
+(including the node's public IPv6 addresses) the ports face the internet. 8446
+is the weakest point — the intermediate truststore is public by design, so
+enrollment is protected only by the TAK user's password. Use strong passwords
+and disable users you don't need.
 
 ## Boot ordering
 

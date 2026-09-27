@@ -39,6 +39,7 @@ With the firewall enabled, the following rules are applied, in this order:
 | allow in on br-lan | Trust the local wired LAN / AP bridge. |
 | allow in on tailscale0 | Trust Tailscale. |
 | allow in on eth0 port 80/443 tcp | Web UI over ethernet. Only present when `web.eth0_access: true`. nginx password-protects these. |
+| allow in on eth0 port 8443/8089/8446 tcp, 8090 udp | Official TAK Server over ethernet. Only present when the `takserver` package is installed — checked at run time with `dpkg-query`, not from config. Open to any source; see [TAK Server](takserver.md#ports). |
 | route allow br-lan/wlan1 → eth0 | Internet egress for clients. Only in eth0 WAN mode. |
 | route allow br-lan ↔ wlan1 | Mesh ↔ LAN forwarding, always. |
 
