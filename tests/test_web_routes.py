@@ -64,3 +64,15 @@ def test_messaging_log_sticks_to_newest_message():
     assert "state.stickJump" in cli_js, "render() lost the forced-jump flag"
     assert "view.scrollTop = view.scrollHeight" in cli_js, \
         "render() no longer pins the viewport to the newest line"
+
+
+def test_peer_join_is_a_selectable_item():
+    """Regression: the peer Join action was an inline <button onclick> injected
+    into a `content` block, which the shell cursor skips (and any rebuild wiped).
+    Joinable peers must be rendered as shell `button` items instead."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    assert 'onclick="joinPeer' not in app_js, "Join is an unselectable inline button again"
+    assert "peers-slot" not in app_js, "peer results injected into DOM instead of items"
+    assert "...peerItems()" in app_js, "meshtastic page no longer renders peer items"
+    assert "onEnter: (S) => joinPeer(S, p.ip)" in app_js, "Join button item lost"

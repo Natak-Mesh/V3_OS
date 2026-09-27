@@ -89,6 +89,9 @@ let MESH_CFG_OPEN = false;
 let HB = null;
 // Working copy of the per-UID TX rate limit (node config, read live by cot-bridge).
 let TXR = null;
+// Last wifi-mesh peer query result ({peers, local}); rendered as page items so
+// each joinable peer is a selectable row that survives rebuilds.
+let PEERS = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
 let MSG_DRAFT = "";
@@ -420,8 +423,9 @@ const PAGES = {
             `region, modem preset, frequency slot) to this device's. Join copies those ` +
             `settings to this device's Meshtastic radio so both LoRa radios share the channel. ` +
             `Role, TX power and hop limit are untouched. The Meshtastic radio reboots after ` +
-            `joining.</div><div id="peers-slot" class="content"></div></div>` },
+            `joining.</div></div>` },
           { type: "button", label: "» Query Nucleus peers for Meshtastic channels", onEnter: loadPeers },
+          ...peerItems(),
         );
       }
 
@@ -789,46 +793,69 @@ async function meshShowQr(S) {
 }
 
 async function loadPeers(S) {
-  const slot = document.getElementById("peers-slot");
-  if (slot) slot.innerHTML = `<div class="hint">querying Nucleus devices on the wifi mesh for Meshtastic configs…</div>`;
-  const { d } = await jget(MB + "/peers");
-  const L = d.local || {};
-  const peers = d.peers || [];
-  if (!peers.length) { if (slot) slot.innerHTML = `<div class="off">no other Nucleus devices reachable on the wifi mesh</div>`; return; }
-  let h = `<table><tr><th>Nucleus IP</th><th>Channel</th><th>Key</th><th>Region</th>` +
-    `<th>Preset</th><th>Slot</th><th>Match</th></tr>`;
+  S.msg("querying Nucleus devices on the wifi mesh for Meshtastic configs…");
+  const { ok, d } = await jget(MB + "/peers");
+  if (!ok) return S.msg("peer query failed: " + (d.detail || "error"), false);
+  PEERS = { peers: d.peers || [], local: d.local || {} };
+  const n = PEERS.peers.length;
+  await S.reload();  // render() resets the message line, so set it afterwards
+  S.msg(n ? `${n} Nucleus peer${n === 1 ? "" : "s"} found — select a Join row to copy its channel`
+    : "no other Nucleus devices reachable on the wifi mesh", n > 0);
+}
+
+const peerMatches = (p, L) =>
+  p.channel_name === L.channel_name && p.psk_fingerprint === L.psk_fingerprint &&
+  p.modem_preset === L.modem_preset && p.region === L.region && p.frequency_slot === L.frequency_slot;
+
+// Page items for the last peer query: a comparison table (content) plus one
+// selectable Join button per peer whose channel differs and can be copied.
+function peerItems() {
+  if (!PEERS || !PEERS.peers.length) return [];
+  const L = PEERS.local;
+  let h = `<div class="content"><table><tr><th>Nucleus IP</th><th>Channel</th><th>Key</th>` +
+    `<th>Region</th><th>Preset</th><th>Slot</th><th>Match</th></tr>`;
   const cell = (v, match) => `<td class="${match ? "ok" : "off"}">${esc(v === "" || v == null ? "—" : v)}</td>`;
-  peers.forEach((p) => {
+  const joins = [];
+  PEERS.peers.forEach((p) => {
     if (!p.reachable) {
       h += `<tr><td>${esc(p.ip)}</td><td class="warn" colspan="6">unreachable / no Meshtastic config</td></tr>`;
       return;
     }
-    const match = p.channel_name === L.channel_name && p.psk_fingerprint === L.psk_fingerprint &&
-      p.modem_preset === L.modem_preset && p.region === L.region && p.frequency_slot === L.frequency_slot;
+    const match = peerMatches(p, L);
     h += `<tr><td>${esc(p.ip)}</td>` +
       cell(p.channel_name, p.channel_name === L.channel_name) +
       cell(p.psk_fingerprint, p.psk_fingerprint === L.psk_fingerprint) +
       cell(p.region, p.region === L.region) +
       cell(p.modem_preset, p.modem_preset === L.modem_preset) +
       cell(p.frequency_slot, p.frequency_slot === L.frequency_slot) +
-      `<td class="${match ? "ok" : "off"}">` +
-      ((match || !p.has_channel_url) ? (match ? "match" : "differs")
-        : `<button class="act" onclick="joinPeer('${esc(p.ip)}')">Join</button>`) +
-      `</td></tr>`;
+      `<td class="${match ? "ok" : "off"}">${match ? "match" : "differs"}</td></tr>`;
+    if (!match && p.has_channel_url) {
+      joins.push({
+        type: "button",
+        label: `» Join ${p.ip} (${p.channel_name || "—"} · ${p.modem_preset || "—"} · key ${p.psk_fingerprint || "—"})`,
+        onEnter: (S) => joinPeer(S, p.ip),
+      });
+    }
   });
-  h += `</table>`;
-  if (slot) slot.innerHTML = h;
+  h += `</table></div>`;
+  return [{ type: "content", html: h }, ...joins];
 }
 
-// Exposed for the inline Join button rendered above.
-window.joinPeer = async function (ip) {
+async function joinPeer(S, ip) {
   if (!confirm(`Join ${ip}'s Meshtastic channel? Copies its channel name, key, region, ` +
     `preset and slot to this device's Meshtastic radio (role, TX power, hop limit unchanged). ` +
     `Meshtastic radio reboots.`)) return;
-  const S = window.__shell;
   await radioOp(S, MB + "/config/join-peer", { host: ip }, "join");
-  loadPeers(S);
-};
+  // Refresh the comparison so the joined peer shows "match", keeping radioOp's
+  // result message (render() resets the message line).
+  const m = document.getElementById("shell-msg");
+  const text = m ? m.textContent : "";
+  const good = !(m && m.classList.contains("err"));
+  const { ok, d } = await jget(MB + "/peers");
+  if (ok) PEERS = { peers: d.peers || [], local: d.local || {} };
+  await S.reload();
+  S.msg(text, good);
+}
 
 async function saveHeartbeat(S) {
   if (!HB) return S.msg("nothing to save", false);
