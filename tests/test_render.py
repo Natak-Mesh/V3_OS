@@ -214,10 +214,19 @@ def test_meshup_web_over_eth0_disabled():
     assert "ufw allow in on eth0 to any port 22 proto tcp" in m
 
 
-def test_hostapd_bridges_brlan():
+def test_hostapd_no_bridge_directive():
     h = rendered()["/etc/hostapd/hostapd.conf"]
-    assert "bridge=br-lan" in h
+    # brlan-setup.service enslaves wlan0 into br-lan; a hostapd bridge= line
+    # would fight networkd over it (see hostapd.conf.j2).
+    assert "\nbridge=" not in h
     assert "ssid=0009-nucleus-ap" in h
+
+
+def test_brlan_setup_restarts_with_networkd_and_hostapd():
+    from nucleusd.apply import TARGETS
+    for t in TARGETS:
+        if "systemd-networkd" in t.units or "hostapd" in t.units:
+            assert "brlan-setup" in t.units, t.template
 
 
 def test_eth0_lan_mode():

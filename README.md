@@ -34,7 +34,7 @@ Everything flows one direction, from one file:
    /opt/nucleus/bin/nucleus-mesh-up.sh
         |
         v   (restart only affected units)
-   systemd-networkd, nucleus-mesh, babeld, smcroute, hostapd
+   systemd-networkd, nucleus-mesh, babeld, smcroute, hostapd, brlan-setup
 ```
 
 **Why this shape**
@@ -87,8 +87,8 @@ The mesh comes up in a deliberate order, split between **declarative**
 (systemd-networkd) and **imperative** (a rendered shell script) work.
 
 1. **systemd-networkd** owns what it can express declaratively: the `br-lan`
-   bridge, static addresses on `wlan1`/`br-lan`, the `wlan0`→`br-lan` and
-   `eth0`→bridge/DHCP wiring. No `sleep` hacks.
+   bridge, static addresses on `wlan1`/`br-lan`, and the `eth0`→bridge/DHCP
+   wiring. (`wlan0`→`br-lan` is done by `brlan-setup` — see step 6.)
 2. **`nucleus-mesh.service`** runs the rendered `nucleus-mesh-up.sh` for the
    imperative bits networkd can't do:
    - put `wlan1` into 802.11s mesh mode (`iw ... set type mesh`),
@@ -106,8 +106,12 @@ The mesh comes up in a deliberate order, split between **declarative**
 3. **`babeld`** distributes unicast routes at L3 (mesh + br-lan subnets + default
    route for gateway sharing).
 4. **`smcroute`** bridges multicast groups between `wlan1` and `br-lan`.
-5. **`hostapd`** brings up the 5 GHz AP and, via its `bridge=br-lan` directive,
-   enslaves `wlan0` itself — replacing the old `brlan-setup.service` sleep hack.
+5. **`hostapd`** brings up the 5 GHz AP on `wlan0`.
+6. **`brlan-setup.service`** then enslaves `wlan0` into `br-lan` (networkd
+   can't while hostapd flips it to AP mode). Without it `br-lan` has no
+   carrier and AP clients get no DHCP. `nucleusctl apply` re-runs it whenever
+   it reloads networkd or restarts hostapd, since either drops `wlan0` out of
+   the bridge.
 
 ### Hard-won lessons carried over from Nucleus_OS
 

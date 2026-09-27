@@ -46,17 +46,21 @@ class Target:
     mode: int = 0o644
 
 
+# brlan-setup (static unit, system/systemd/brlan-setup.service) enslaves wlan0
+# into br-lan after hostapd has put it in AP mode. Reloading networkd or
+# restarting hostapd drops wlan0 out of br-lan (no AP DHCP), so every target
+# that bounces either of those must also re-run brlan-setup.
 TARGETS: list[Target] = [
-    Target("networkd/20-br-lan.netdev.j2", Path("/etc/systemd/network/20-br-lan.netdev"), ("systemd-networkd",)),
-    Target("networkd/21-br-lan.network.j2", Path("/etc/systemd/network/21-br-lan.network"), ("systemd-networkd",)),
-    Target("networkd/30-wlan0.network.j2", Path("/etc/systemd/network/30-wlan0.network"), ("systemd-networkd",)),
-    Target("networkd/40-eth0.network.j2", Path("/etc/systemd/network/40-eth0.network"), ("systemd-networkd",)),
-    Target("networkd/10-wlan1.network.j2", Path("/etc/systemd/network/10-wlan1.network"), ("systemd-networkd",)),
+    Target("networkd/20-br-lan.netdev.j2", Path("/etc/systemd/network/20-br-lan.netdev"), ("systemd-networkd", "brlan-setup")),
+    Target("networkd/21-br-lan.network.j2", Path("/etc/systemd/network/21-br-lan.network"), ("systemd-networkd", "brlan-setup")),
+    Target("networkd/30-wlan0.network.j2", Path("/etc/systemd/network/30-wlan0.network"), ("systemd-networkd", "brlan-setup")),
+    Target("networkd/40-eth0.network.j2", Path("/etc/systemd/network/40-eth0.network"), ("systemd-networkd", "brlan-setup")),
+    Target("networkd/10-wlan1.network.j2", Path("/etc/systemd/network/10-wlan1.network"), ("systemd-networkd", "brlan-setup")),
     Target("wpa_supplicant-mesh.conf.j2", Path("/etc/wpa_supplicant/wpa_supplicant-mesh.conf"), ("nucleus-mesh",), 0o600),
     Target("nucleus-mesh-up.sh.j2", Path("/opt/nucleus/bin/nucleus-mesh-up.sh"), ("nucleus-mesh",), 0o755),
     Target("babeld.conf.j2", Path("/etc/babeld.conf"), ("babeld",)),
     Target("smcroute.conf.j2", Path("/etc/smcroute.conf"), ("smcroute",)),
-    Target("hostapd.conf.j2", Path("/etc/hostapd/hostapd.conf"), ("hostapd",)),
+    Target("hostapd.conf.j2", Path("/etc/hostapd/hostapd.conf"), ("hostapd", "brlan-setup")),
     Target("meshtasticd-config.yaml.j2", Path("/etc/meshtasticd/config.yaml"), ("meshtasticd",)),
     # rnsd is enable/disable-driven like meshtasticd (handled in apply()), and
     # the file must land owned by RETI_USER — see _write_reticulum below.
@@ -279,8 +283,9 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
         return result
 
     if units_to_restart:
-        # Deterministic, dependency-friendly restart order.
-        order = ["systemd-networkd", "nucleus-mesh", "babeld", "smcroute", "hostapd"]
+        # Deterministic, dependency-friendly restart order. brlan-setup must
+        # run last: it re-enslaves wlan0 into br-lan after hostapd is up.
+        order = ["systemd-networkd", "nucleus-mesh", "babeld", "smcroute", "hostapd", "brlan-setup"]
         ordered = [u for u in order if u in units_to_restart]
         _restart(ordered)
         result.units_restarted = ordered
