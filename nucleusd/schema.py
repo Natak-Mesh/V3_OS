@@ -171,7 +171,7 @@ class MeshtasticConfig(BaseModel):
     enabled: bool = Field(True, description="Run meshtasticd + expose the radio to the CoT bridge.")
     region: str = Field("US", description="LoRa region code (US, EU_868, ...). Radio won't TX until set.")
     hat: str = Field(
-        "rak6421-slot1",
+        "rak6421-slot2",
         pattern="^(rak6421-slot1|rak6421-slot2|auto)$",
         description="LoRa HAT/slot: rak6421-slot1 | rak6421-slot2 | auto.",
     )

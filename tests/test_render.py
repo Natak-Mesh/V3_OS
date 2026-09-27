@@ -67,12 +67,12 @@ def test_reticulum_config_minimal():
 
 def test_meshtasticd_config():
     m = rendered()["/etc/meshtasticd/config.yaml"]
-    # RAK6421 slot1 LoRa pin block inlined (defaults).
+    # RAK6421 slot2 LoRa pin block inlined (defaults).
     assert "Module: sx1262" in m
-    assert "IRQ: 22" in m
-    assert "Reset: 16" in m
-    assert "Busy: 24" in m
-    assert "spidev: spidev0.0" in m
+    assert "IRQ: 18" in m
+    assert "Reset: 24" in m
+    assert "Busy: 19" in m
+    assert "spidev: spidev0.1" in m
     # UART GPS on the Pi GPIO header.
     assert "SerialPath: /dev/ttyS0" in m
     assert "APIPort: 4403" in m

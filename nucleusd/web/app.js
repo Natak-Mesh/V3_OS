@@ -546,7 +546,7 @@ const PAGES = {
           value: mt.region || "US", onChange: (v) => mt.region = v },
         { type: "fselect", label: "HAT / slot",
           options: ["rak6421-slot1", "rak6421-slot2", "auto"],
-          value: mt.hat || "rak6421-slot1", onChange: (v) => mt.hat = v },
+          value: mt.hat || "rak6421-slot2", onChange: (v) => mt.hat = v },
         { type: "fselect", label: "GPS", options: ["off", "uart", "i2c"],
           value: mt.gps || "uart", onChange: (v) => mt.gps = v },
         { type: "ftext", label: "GPS serial path", value: mt.gps_serial_path || "/dev/ttyS0",
