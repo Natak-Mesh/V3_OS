@@ -62,7 +62,7 @@ Everything flows one direction, from one file:
 | `schema.py` | The config contract + derived values | Pure, no filesystem/hardware. Unit-testable. |
 | `config.py` | Load / atomically save `config.yaml` | Only module that does YAML I/O. Atomic writes so a crash can't brick boot. |
 | `apply.py` | Render templates → diff → restart units | The heart. `TARGETS` maps each template to its dest + the units it affects. Importable by both API and CLI. |
-| `status.py` | Read-only runtime status | Babel neighbours (via local-port 33123), interface addrs, unit states. Never mutates. |
+| `status.py` | Read-only runtime status | Babel neighbours/routes (via local-port 33123), interface addrs, unit states. Never mutates the system. Also tracks mesh-node last-seen (in memory, 5 s poll thread started by nucleusd; lost nodes kept 15 min), so `nucleusctl status` only shows currently reachable nodes. |
 | `api.py` | FastAPI app: REST API + web UI | One always-on process. UI is static files calling the same API. |
 | `cli.py` | `nucleusctl` | Thin wrapper over the same modules — identical behaviour to the API. |
 | `templates/` | Jinja2 templates for every generated file | Named after their destination. |
@@ -73,7 +73,7 @@ Everything flows one direction, from one file:
 - `GET /config` — current config + `_derived` block
 - `PUT /config` — validate + persist a replacement config (does **not** apply)
 - `POST /apply?dry_run=<bool>` — render, write changed files, restart units
-- `GET /status` — live interfaces / services / Babel neighbours
+- `GET /status` — live interfaces / services / Babel neighbours / mesh-node last-seen
 
 `PUT` and `apply` are deliberately separate so a client can stage config and
 review a dry-run before committing.

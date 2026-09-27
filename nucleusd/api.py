@@ -151,6 +151,12 @@ def post_apply(dry_run: bool = False) -> dict:
     }
 
 
+@app.on_event("startup")
+def _start_mesh_tracker() -> None:
+    """Record mesh-node last-seen times while nucleusd runs (not under tests)."""
+    statusmod.start_mesh_tracker()
+
+
 @app.get("/api/v1/status")
 def get_status() -> dict:
     """Live runtime status: interfaces, services, Babel neighbours."""

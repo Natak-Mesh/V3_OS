@@ -176,19 +176,22 @@ const PAGES = {
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
-      const routes = st.babel_routes || [];
+      const meshNodes = st.mesh_nodes || [];
       let h = "";
 
       h += `<div class="content"><div class="page-title" style="padding-left:0">Wifi mesh nodes</div>`;
-      if (!routes.length) {
+      if (!meshNodes.length) {
         h += `<div class="off">no nodes — this node does not see any other node over wlan1</div>`;
       } else {
-        h += `<table><tr><th>Node</th><th>Via</th><th>Cost</th></tr>`;
-        routes.forEach((r) => {
-          const via = r.direct ? "direct" : esc(r.via || "—");
-          const cost = (r.metric / 256).toFixed(1);
+        h += `<table><tr><th>Node</th><th>Via</th><th>Cost</th><th>Seen</th></tr>`;
+        meshNodes.forEach((r) => {
+          // Lost nodes keep their row (with age) until dropped after 15 min.
+          const via = !r.reachable ? "—" : r.direct ? "direct" : esc(r.via || "—");
+          const cost = r.reachable ? (r.metric / 256).toFixed(1) : "—";
+          const seen = r.reachable ? "now" : ago(r.last_seen);
           h += `<tr><td>${esc(r.node)}</td><td>${via}</td>` +
-            `<td>${esc(cost)}</td></tr>`;
+            `<td>${esc(cost)}</td>` +
+            `<td class="${r.reachable ? "ok" : "warn"}">${esc(seen)}</td></tr>`;
         });
         h += `</table>`;
       }

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import socket
 import subprocess
+import threading
+import time
 
 
 def _babel_dump(port: int = 33123, timeout: float = 2.0) -> bytes:
@@ -206,12 +208,79 @@ def unit_states(units: tuple[str, ...] = ("systemd-networkd", "nucleus-mesh", "b
     return states
 
 
+# ── Mesh node last-seen tracker ────────────────────────────────
+# Babel only reports who is reachable *now*; it keeps no history. This records
+# when each mesh node (direct or multi-hop) was last in the installed route
+# table, so a lost node stays listed with its age instead of vanishing.
+# In-memory only: nucleusd's background thread feeds it every MESH_POLL_S, and
+# every collect() folds in its own snapshot too.
+MESH_POLL_S = 5
+MESH_MAX_AGE_S = 900  # 15 min, same as the LoRa node list
+
+_mesh_lock = threading.Lock()
+_mesh_nodes: dict[str, dict] = {}
+_mesh_started = False
+
+
+def _mesh_update(routes: list[dict], now: float) -> None:
+    """Fold one babel_routes() snapshot into the last-seen table.
+
+    Nodes in the snapshot are reachable and seen `now`. Nodes missing from it
+    are lost (including when babeld is unreachable: no babel, no connection) and
+    keep their last route + time until MESH_MAX_AGE_S, then are dropped.
+    """
+    with _mesh_lock:
+        present = set()
+        for r in routes:
+            _mesh_nodes[r["node"]] = {**r, "reachable": True, "last_seen": now}
+            present.add(r["node"])
+        for node, n in list(_mesh_nodes.items()):
+            if node in present:
+                continue
+            if now - n["last_seen"] > MESH_MAX_AGE_S:
+                del _mesh_nodes[node]
+            else:
+                n["reachable"] = False
+
+
+def mesh_nodes() -> list[dict]:
+    """Every mesh node seen in the last MESH_MAX_AGE_S, sorted by node IP.
+
+    Each entry: node, via, metric, direct (last known route), reachable,
+    last_seen (epoch seconds).
+    """
+    with _mesh_lock:
+        return sorted((dict(n) for n in _mesh_nodes.values()), key=lambda n: n["node"])
+
+
+def _mesh_loop() -> None:
+    while True:
+        try:
+            _mesh_update(babel_routes(), time.time())
+        except Exception:  # never let one bad poll kill the tracker
+            pass
+        time.sleep(MESH_POLL_S)
+
+
+def start_mesh_tracker() -> None:
+    """Start the background last-seen poller (idempotent). Called by nucleusd."""
+    global _mesh_started
+    with _mesh_lock:
+        if _mesh_started:
+            return
+        _mesh_started = True
+    threading.Thread(target=_mesh_loop, name="mesh-tracker", daemon=True).start()
+
+
 def collect() -> dict:
+    routes = babel_routes()
+    _mesh_update(routes, time.time())
     return {
         "interfaces": iface_addrs(),
         "services": unit_states(),
         "babel_neighbours": babel_neighbours(),
-        "babel_routes": babel_routes(),
+        "babel_routes": routes,
+        "mesh_nodes": mesh_nodes(),
         "meshtastic": {"services": unit_states(
             ("meshtasticd", "cot-bridge", "nucleus-meshtastic-init"))},
     }

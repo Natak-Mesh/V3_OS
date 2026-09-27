@@ -156,6 +156,55 @@ def test_two_neighbours_distinct_ipv4(monkeypatch):
     assert by_addr["fe80::aaaa"] != by_addr["fe80::bbbb"]
 
 
+# ── Mesh node last-seen tracker ──
+def _route(node, direct=True, via=None, metric=256):
+    return {"node": node, "via": via, "metric": metric, "direct": direct}
+
+
+def _reset_mesh(monkeypatch):
+    monkeypatch.setattr(status, "_mesh_nodes", {})
+
+
+def test_mesh_node_goes_lost_then_returns(monkeypatch):
+    _reset_mesh(monkeypatch)
+    status._mesh_update([_route("10.20.1.5"),
+                         _route("10.20.1.9", direct=False, via="10.20.1.5", metric=512)], 1000)
+    # Node 9 (multi-hop) drops out of the route table.
+    status._mesh_update([_route("10.20.1.5")], 1060)
+    by = {n["node"]: n for n in status.mesh_nodes()}
+    assert by["10.20.1.5"]["reachable"] is True and by["10.20.1.5"]["last_seen"] == 1060
+    assert by["10.20.1.9"]["reachable"] is False
+    assert by["10.20.1.9"]["last_seen"] == 1000      # age counts from last real sighting
+    assert by["10.20.1.9"]["via"] == "10.20.1.5"     # last known route kept
+    # It comes back.
+    status._mesh_update([_route("10.20.1.5"), _route("10.20.1.9")], 1100)
+    by = {n["node"]: n for n in status.mesh_nodes()}
+    assert by["10.20.1.9"]["reachable"] is True and by["10.20.1.9"]["last_seen"] == 1100
+
+
+def test_mesh_node_dropped_after_max_age(monkeypatch):
+    _reset_mesh(monkeypatch)
+    status._mesh_update([_route("10.20.1.5")], 1000)
+    status._mesh_update([], 1000 + status.MESH_MAX_AGE_S)
+    assert [n["node"] for n in status.mesh_nodes()] == ["10.20.1.5"]  # still within window
+    status._mesh_update([], 1001 + status.MESH_MAX_AGE_S)
+    assert status.mesh_nodes() == []
+
+
+def test_mesh_babeld_down_marks_all_lost(monkeypatch):
+    """No babel connection = no connection to any node; never fake 'reachable'."""
+    _reset_mesh(monkeypatch)
+    status._mesh_update([_route("10.20.1.5"), _route("10.20.1.9")], 1000)
+
+    def refuse(*a, **k):
+        raise ConnectionRefusedError
+    monkeypatch.setattr(status.socket, "create_connection", refuse)
+    status._mesh_update(status.babel_routes(), 1010)
+    nodes = status.mesh_nodes()
+    assert len(nodes) == 2
+    assert all(n["reachable"] is False and n["last_seen"] == 1000 for n in nodes)
+
+
 def test_bridge_member_not_absent(monkeypatch):
     monkeypatch.setattr(status.subprocess, "run", _fake_run)
     out = status.iface_addrs()
