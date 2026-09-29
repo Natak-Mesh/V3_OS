@@ -99,6 +99,18 @@ if [ "$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)" = "install ok insta
     ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
     ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
 fi
+# OpenTAKServer (either/or with the official server; installed manually, not a
+# .deb): open its TLS ports on eth0 whenever its unit is enabled. The plain-HTTP
+# 8082 (unauthenticated Marti API) is deliberately NOT opened on eth0.
+if systemctl is-enabled --quiet opentakserver.service 2>/dev/null; then
+    ufw allow in on eth0 to any port 8444 proto tcp comment 'ots web ui'
+    ufw allow in on eth0 to any port 8443 proto tcp comment 'ots marti api'
+    ufw allow in on eth0 to any port 8446 proto tcp comment 'ots cert enrollment'
+    ufw allow in on eth0 to any port 8089 proto tcp comment 'ots client tls'
+    ufw allow in on eth0 to any port 8883 proto tcp comment 'ots mqtt tls'
+    ufw allow in on eth0 to any port 8322 proto tcp comment 'ots rtsps'
+    ufw allow in on eth0 to any port 1936 proto tcp comment 'ots rtmps'
+fi
 # MediaMTX (installed by nucleus-tak-setup.sh, not a .deb): open RTSP + SRT on
 # eth0 whenever its unit is enabled. `if` keeps a non-zero exit from tripping -e.
 if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then

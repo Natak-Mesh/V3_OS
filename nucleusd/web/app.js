@@ -162,7 +162,8 @@ const PAGES = {
       // TAK Server is optional; show the menu entry only when it's installed.
       const { ok, d: tak } = await jget("/api/v1/tak/status");
       if (ok && tak.installed) {
-        items.push({ type: "nav", label: "TAK SERVER", to: "tak" });
+        const label = tak.variant === "opentakserver" ? "OPENTAKSERVER" : "TAK SERVER";
+        items.push({ type: "nav", label, to: "tak" });
       }
       items.push({ type: "nav", label: "SYSTEM UPDATE", to: "update" });
       return { items };
@@ -247,7 +248,7 @@ const PAGES = {
       // TAK Server is optional; show a row only when it's installed.
       const { d: tak } = await jget("/api/v1/tak/status");
       if (tak && tak.installed) {
-        h += `<tr><td>takserver</td><td class="${tak.service === "active" ? "ok" : "off"}">${esc(tak.service)}</td></tr>`;
+        h += `<tr><td>${esc(tak.unit || "takserver")}</td><td class="${tak.service === "active" ? "ok" : "off"}">${esc(tak.service)}</td></tr>`;
       }
       h += `</table></div>`;
 
@@ -255,8 +256,9 @@ const PAGES = {
     },
   },
 
-  // TAK Server (optional): client-cert downloads + web-admin pointer. Only
-  // meaningful on nodes provisioned with nucleus-tak-setup.sh; hidden otherwise.
+  // TAK Server (optional): official (nucleus-tak-setup.sh) OR OpenTAKServer
+  // (installer + nucleus-ots-fixup.sh). Cert downloads + web-UI pointer; the
+  // menu entry is hidden when neither is installed.
   tak: {
     title: "TAK Server",
     dynamic: 5000,
@@ -271,11 +273,43 @@ const PAGES = {
       }
 
       const cls = s.service === "active" ? "ok" : "off";
+      const host = location.hostname;
+
+      if (s.variant === "opentakserver") {
+        // OTS web UI is on 8444 (moved off 443 by nucleus-ots-fixup.sh). Link is
+        // built from the host used to reach this UI, so no IP is needed.
+        const url = `https://${host}:8444`;
+        let head = `<div class="content"><div class="kv">` +
+          `<span>server <b>OpenTAKServer</b></span>` +
+          `<span>status <span class="${cls}">${esc(s.service)}</span></span></div>` +
+          `<div class="kv"><span>web UI <a href="${esc(url)}" target="_blank" ` +
+          `rel="noopener"><b>${esc(url)}</b></a></span></div>` +
+          `<div class="off">Log in to the OpenTAKServer web UI to manage users. ` +
+          `Install the truststore on client devices; they connect on port 8089 ` +
+          `(TLS) and enroll on 8446.</div></div>`;
+        items.push({ type: "content", html: head });
+        items.push({ type: "button", label: "» OPEN OPENTAKSERVER WEB UI",
+          onEnter: () => window.open(url, "_blank", "noopener") });
+
+        const ts = (s.certs || []).filter((n) => n.startsWith("truststore"));
+        if (!ts.length) {
+          items.push({ type: "content", html: `<div class="content">` +
+            `<div class="warn">no truststore staged — run sudo nucleus-ots-fixup.sh</div></div>` });
+        } else {
+          items.push({ type: "content", html: `<div class="content">` +
+            `<div class="page-title" style="padding-left:0">Download truststore</div></div>` });
+          ts.forEach((name) => {
+            items.push({ type: "button", label: "» " + name,
+              onEnter: () => takDownload(name) });
+          });
+        }
+        return { items };
+      }
+
       let head = `<div class="content"><div class="kv">` +
         `<span>status <span class="${cls}">${esc(s.service)}</span></span></div>`;
       // Web admin lives on TAK's own port (8443), not the Nucleus UI. Point the
       // operator there and remind them the admin cert must be imported first.
-      const host = location.hostname;
       head += `<div class="kv"><span>web admin ` +
         `<b>https://${esc(host)}:8443</b></span></div>` +
         `<div class="off">Import webadmin.p12 into your browser first, ` +

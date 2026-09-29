@@ -40,7 +40,7 @@ irreversible, per-node actions that don't belong in the idempotent apply loop.
 
 | Field | Notes |
 |-------|-------|
-| `variant` | `none` (default) or `official`. Setup no-ops unless `official`. |
+| `variant` | `none` (default), `official`, or `opentakserver` (either/or — see [OpenTAKServer](opentakserver.md)). This script no-ops unless `official`, and refuses to run if OpenTAKServer is installed. |
 | `enrollment_validity_days` | Validity of certs issued via auto-enrollment (default 365). |
 | `keystore_pass` | Signing keystore password (TAK default `atakatak`). |
 | `cert.country` / `cert.state` / `cert.city` | X.509 C / ST / L. |

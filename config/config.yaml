@@ -97,10 +97,11 @@ reticulum:
   # kiss_speed: 115200
 
 tak:
-  # Official TAK Server (+ MediaMTX) — OFF on most nodes. Set variant: official,
-  # drop the tak.gov .deb in ~natak, then run:  sudo nucleus-tak-setup.sh
-  # This block is consumed by that one-shot script, NOT by 'nucleusctl apply'.
-  variant: none            # none | official
+  # TAK Server — OFF on most nodes. Either/or, never both:
+  #   official      : drop the tak.gov .deb in ~natak, then run:  sudo nucleus-tak-setup.sh
+  #   opentakserver : run the OpenTAKServer Pi installer manually (see docs/manual)
+  # This block is NOT consumed by 'nucleusctl apply'.
+  variant: none            # none | official | opentakserver
   enrollment_validity_days: 365   # validity of certs issued via auto-enrollment
   keystore_pass: atakatak  # signing keystore password (TAK default)
   cert:                    # X.509 metadata baked into the PKI
