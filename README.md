@@ -11,7 +11,7 @@ memory is a first-class concern.
 **Subsystems:** Wi-Fi 802.11s mesh (babeld L3 routing, smcroute multicast, HWMP
 off), Meshtastic LoRa + ATAK CoT bridge, WiFi+LoRa text messaging, mesh PTT
 voice, Reticulum (rnsd), nginx-fronted web UI, UFW host firewall. Optional per
-node: Tailscale, official TAK Server (see §4).
+node: Tailscale, official TAK Server **or** OpenTAKServer (either/or; see §4).
 
 ---
 
@@ -107,8 +107,9 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
    - `mesh_ttl`/`mesh_element_ttl` and RTS threshold,
    - nftables NAT (WAN mode) + multicast-TTL mangle rule,
    - UFW rebuilt every run (`ufw --force reset`, then rules from config;
-     `firewall.enabled: false` disables it). TAK/MediaMTX ports on eth0 are
-     opened only if those packages are installed. nftables rules are untouched.
+     `firewall.enabled: false` disables it). TAK/OpenTAKServer/MediaMTX ports
+     on eth0 are opened only if those are installed (checked at run time).
+     nftables rules are untouched.
      See [Firewall](docs/manual/firewall.md).
 3. **babeld** — unicast routes (mesh + br-lan subnets + default route).
 4. **smcroute** — multicast between `wlan1` and `br-lan`.
@@ -142,6 +143,14 @@ localhost) don't.
   with `sudo nucleus-tak-setup.sh` (needs the tak.gov `.deb`). It still reads
   its inputs from the `tak:` block via `nucleusctl tak-config`. See
   [takserver.md](docs/manual/takserver.md).
+- **OpenTAKServer** — either/or alternative to the official server (never
+  both); same **separate, uncommon install**. Set `tak.variant: opentakserver`,
+  then as `natak` over SSH run the upstream installer
+  (`curl -s -L https://i.opentakserver.io/raspberry_pi_installer | bash -`),
+  then `sudo nucleus-ots-fixup.sh` — moves OTS nginx ports off 8080/443
+  (→ 8082/8444), restores the Nucleus nginx site, stages the truststore for
+  the web UI. Re-run the fixup after every OTS upgrade. See
+  [opentakserver.md](docs/manual/opentakserver.md).
 
 ---
 
@@ -154,7 +163,8 @@ node:
 - Python package → `/opt/nucleus/venv`; `nucleusctl` + Reticulum CLIs →
   `/usr/local/bin`
 - `system/` → systemd units, udev rule, NetworkManager conf, sudoers,
-  `nucleus-update.sh`, `nucleus-tak-setup.sh` (inert unless used)
+  `nucleus-update.sh`, `nucleus-tak-setup.sh`, `nucleus-ots-fixup.sh` (inert
+  unless used)
 - GPS UART prep (boot config/cmdline)
 - `config/config.yaml` → `/etc/nucleus/config.yaml` **only if absent**
 - enables services, restarts the app daemons to pick up new code
@@ -215,7 +225,8 @@ V3_OS/
 │   ├── systemd/         # nucleusd, nucleus-mesh, brlan-setup, cot-bridge,
 │   │                    # nucleus-meshtastic-init, nucleus-messaging,
 │   │                    # nucleus-voice, rnsd, takserver.service.d/
-│   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh
+│   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh,
+│   │                    # nucleus-ots-fixup.sh
 │   └── networkmanager/  sudoers.d/  udev/
 ├── config/config.yaml   # default config, seeded to /etc on install
 ├── docs/                # API.md + operator manual
