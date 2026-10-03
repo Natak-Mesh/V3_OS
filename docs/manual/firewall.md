@@ -42,6 +42,7 @@ With the firewall enabled, the following rules are applied, in this order:
 | allow in on tailscale0 | Trust Tailscale. |
 | allow in on eth0 port 80/443 tcp | Web UI over ethernet. Only present when `web.eth0_access: true`. nginx password-protects these. |
 | allow in on eth0 port 8443/8089/8446 tcp, 8090 udp | Official TAK Server over ethernet. Only present when the `takserver` package is installed — checked at run time with `dpkg-query`, not from config. Open to any source; see [TAK Server](takserver.md#ports). |
+| allow in on eth0 port 8444/8443/8446/8089/8883/8322/1936 tcp | OpenTAKServer over ethernet. Only present when `opentakserver.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. 8082 (plain HTTP, unauthenticated) is never opened on eth0. Open to any source; see [OpenTAKServer](opentakserver.md#ports). |
 | allow in on eth0 port 8554 tcp, 8000/8001/8890 udp | MediaMTX RTSP + SRT video over ethernet. Only present when `mediamtx.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. Open to any source; see [TAK Server](takserver.md#mediamtx). |
 | route allow br-lan/wlan1 → eth0 | Internet egress for clients. Only in eth0 WAN mode. |
 | route allow br-lan ↔ wlan1 | Mesh ↔ LAN forwarding, always. |

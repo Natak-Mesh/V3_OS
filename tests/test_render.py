@@ -192,6 +192,31 @@ def test_meshup_mediamtx_ports_gated_on_enabled_unit():
         assert m.index("ufw --force reset") < m.index(rule)
 
 
+OTS_ETH0_RULES = (
+    "ufw allow in on eth0 to any port 8444 proto tcp comment 'ots web ui'",
+    "ufw allow in on eth0 to any port 8443 proto tcp comment 'ots marti api'",
+    "ufw allow in on eth0 to any port 8446 proto tcp comment 'ots cert enrollment'",
+    "ufw allow in on eth0 to any port 8089 proto tcp comment 'ots client tls'",
+    "ufw allow in on eth0 to any port 8883 proto tcp comment 'ots mqtt tls'",
+    "ufw allow in on eth0 to any port 8322 proto tcp comment 'ots rtsps'",
+    "ufw allow in on eth0 to any port 1936 proto tcp comment 'ots rtmps'",
+)
+
+
+def test_meshup_ots_ports_gated_on_enabled_unit():
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    # Runtime systemd check decides whether OpenTAKServer ports open on eth0.
+    check = "if systemctl is-enabled --quiet opentakserver.service 2>/dev/null; then"
+    assert check in m
+    for rule in OTS_ETH0_RULES:
+        assert rule in m
+        # Inside the systemd guard, after the reset, before ufw is enabled.
+        assert m.index(check) < m.index(rule) < m.index("ufw --force enable")
+        assert m.index("ufw --force reset") < m.index(rule)
+    # Unauthenticated plain-HTTP port is never opened on eth0.
+    assert "port 8082" not in m
+
+
 def test_meshup_tak_ports_absent_when_firewall_disabled():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
@@ -202,7 +227,8 @@ def test_meshup_tak_ports_absent_when_firewall_disabled():
     m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
     assert "dpkg-query" not in m
     assert "mediamtx" not in m
-    for rule in TAK_ETH0_RULES + MEDIAMTX_ETH0_RULES:
+    assert "opentakserver" not in m
+    for rule in TAK_ETH0_RULES + MEDIAMTX_ETH0_RULES + OTS_ETH0_RULES:
         assert rule not in m
 
 

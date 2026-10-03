@@ -163,26 +163,39 @@ def get_status() -> dict:
     return statusmod.collect()
 
 
-# --- TAK Server (optional; provisioned by nucleus-tak-setup.sh) --------------
+# --- TAK Server (optional; official OR OpenTAKServer, either/or) -------------
 # Outside the config pipeline like tailscale: presence is detected live, and the
-# cert downloads serve the files nucleus-tak-setup.sh staged.
+# cert downloads serve the files staged by nucleus-tak-setup.sh (official) or
+# nucleus-ots-fixup.sh (OpenTAKServer).
 TAK_CERT_DIR = Path("/opt/nucleus/tak-certs")
 TAK_DIR = Path("/opt/tak")
+OTS_UNIT = Path("/etc/systemd/system/opentakserver.service")
+
+
+def _tak_variant() -> str | None:
+    """Which TAK server is installed: 'official', 'opentakserver' or None."""
+    if TAK_DIR.is_dir():
+        return "official"
+    if OTS_UNIT.is_file():
+        return "opentakserver"
+    return None
 
 
 @app.get("/api/v1/tak/status")
 def get_tak_status() -> dict:
-    """TAK Server presence + service state + downloadable certs."""
+    """TAK Server presence + variant + service state + downloadable certs."""
     import subprocess
-    installed = TAK_DIR.is_dir()
+    variant = _tak_variant()
+    unit = {"official": "takserver", "opentakserver": "opentakserver"}.get(variant)
     service = "not installed"
-    if installed:
-        r = subprocess.run(["systemctl", "is-active", "takserver.service"],
+    if unit:
+        r = subprocess.run(["systemctl", "is-active", f"{unit}.service"],
                            capture_output=True, text=True, check=False)
         service = r.stdout.strip() or "unknown"
     certs = sorted(p.name for p in TAK_CERT_DIR.glob("*.p12")) \
         if TAK_CERT_DIR.is_dir() else []
-    return {"installed": installed, "service": service, "certs": certs}
+    return {"installed": variant is not None, "variant": variant,
+            "unit": unit, "service": service, "certs": certs}
 
 
 @app.get("/api/v1/tak/certs/{name}")

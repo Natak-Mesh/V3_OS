@@ -38,9 +38,15 @@ def test_tak_ca_names_derive_from_hostname():
     assert c.tak_intermediate_ca_name == "0009-nucleus-ca"
 
 
+def test_tak_variant_accepts_opentakserver():
+    # OpenTAKServer is the either/or alternative to the official server.
+    c = cfg(tak={"variant": "opentakserver"})
+    assert c.tak.variant == "opentakserver"
+
+
 def test_tak_variant_rejects_unknown():
     with pytest.raises(ValidationError):
-        cfg(tak={"variant": "opentakserver"})
+        cfg(tak={"variant": "freetakserver"})
 
 
 def test_derived_addressing():

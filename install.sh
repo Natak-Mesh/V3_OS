@@ -132,6 +132,14 @@ mkdir -p /etc/systemd/system/takserver.service.d
 install -m 644 "$REPO/system/systemd/takserver.service.d/override.conf" \
     /etc/systemd/system/takserver.service.d/override.conf
 
+echo "==> OpenTAKServer fixup tooling (inert unless tak.variant=opentakserver)"
+# Post-install fixup for a manually-installed OpenTAKServer (moves its nginx
+# ports off 8080/443 so it coexists with the Nucleus UI). NOT wired into apply;
+# copied to every node so it's ready when needed; no-ops unless
+# config.yaml sets tak.variant=opentakserver.
+install -m 755 "$REPO/system/bin/nucleus-ots-fixup.sh" "$OPT/bin/nucleus-ots-fixup.sh"
+ln -sf "$OPT/bin/nucleus-ots-fixup.sh" /usr/local/bin/nucleus-ots-fixup.sh
+
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
 if [ ! -f /etc/nucleus/config.yaml ]; then

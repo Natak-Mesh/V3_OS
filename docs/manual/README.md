@@ -41,6 +41,7 @@ AP via this web UI (or the same REST API / `nucleusctl`).
 | nucleus-voice | UDP-mcast PTT voice; optional LoRa STT/TTS | [Voice](voice.md) | [voice-internals.md](voice-internals.md) |
 | nucleusd | Always-on FastAPI: config/apply/status, REST API, serves this UI | [System](system.md) | [API.md](../API.md) |
 | takserver *(optional)* | Official TAK Server (tak.gov) + MediaMTX; off by default, provisioned per-node | — | [takserver.md](takserver.md) |
+| opentakserver *(optional)* | OpenTAKServer — either/or alternative to takserver; off by default, installed per-node | — | [opentakserver.md](opentakserver.md) |
 
 ### Config pipeline
 
@@ -81,9 +82,11 @@ Selectable item types: navigation links, action buttons, and editable fields
 | INTERFACES AND SERVICES | [System](system.md) |
 | RADIO CONFIGURATION | [Config](config.md) |
 | TAK SERVER *(optional)* | [TAK Server](takserver.md) |
+| OPENTAKSERVER *(optional)* | [OpenTAKServer](opentakserver.md#web-ui-page) |
 | SYSTEM UPDATE | [Update](update.md) |
 
-Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md).
+Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md),
+[OpenTAKServer](opentakserver.md) (either/or).
 
 Node-wide reference (not web UI pages): [Firewall](firewall.md) — the host
 firewall (UFW), driven from `config.yaml`.

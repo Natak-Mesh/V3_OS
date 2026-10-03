@@ -46,10 +46,23 @@ CFG_JSON="$(nucleusctl tak-config)"
 jget() { echo "$CFG_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin)$1)"; }
 
 VARIANT="$(jget "['variant']")"
+if [ "$VARIANT" = "opentakserver" ]; then
+    echo "tak.variant is 'opentakserver' — this script provisions the OFFICIAL server only."
+    echo "OpenTAKServer is installed with its own installer; see docs/manual/opentakserver.md."
+    exit 0
+fi
 if [ "$VARIANT" != "official" ]; then
     echo "tak.variant is '$VARIANT' (not 'official') in config.yaml — nothing to do."
     echo "Set 'tak: {variant: official}' and re-run."
     exit 0
+fi
+
+# Either/or: refuse if OpenTAKServer is already on this node (conflicting
+# PostgreSQL, MediaMTX, nginx and ports 8089/8443/8446).
+if [ -f /etc/systemd/system/opentakserver.service ]; then
+    echo "OpenTAKServer is installed on this node (opentakserver.service exists)." >&2
+    echo "Official TAK Server and OpenTAKServer are either/or — not installing." >&2
+    exit 1
 fi
 
 C_COUNTRY="$(jget "['cert']['country']")"

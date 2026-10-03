@@ -319,19 +319,24 @@ class TakCertConfig(BaseModel):
 
 
 class TakConfig(BaseModel):
-    """Official TAK Server (+ MediaMTX) — optional, off on most nodes.
+    """TAK Server — optional, off on most nodes. Either/or: official OR OTS.
 
-    This block is consumed by the one-shot provisioning script
-    (nucleus-tak-setup.sh), NOT the `nucleusctl apply` render loop: installing
-    the tak.gov .deb and generating PKI are irreversible, per-node-optional
-    actions that don't belong in the idempotent apply pipeline. The script reads
-    these values to run unattended (cert metadata, CA names, enrollment config).
+    `official` (tak.gov .deb + MediaMTX) is provisioned by the one-shot script
+    nucleus-tak-setup.sh; `opentakserver` is installed manually with the
+    upstream OpenTAKServer Raspberry Pi installer. Neither is part of the
+    `nucleusctl apply` render loop: installing a TAK server and generating PKI
+    are irreversible, per-node-optional actions that don't belong in the
+    idempotent apply pipeline. The cert/enrollment fields below apply to the
+    official server only (OTS generates its own CA).
     """
 
     variant: str = Field(
         "none",
-        pattern="^(none|official)$",
-        description="TAK Server variant: none (default) | official (tak.gov .deb).",
+        pattern="^(none|official|opentakserver)$",
+        description=(
+            "TAK Server variant: none (default) | official (tak.gov .deb) "
+            "| opentakserver (OpenTAKServer Pi installer)."
+        ),
     )
     cert: TakCertConfig = Field(default_factory=TakCertConfig)
     enrollment_validity_days: int = Field(
