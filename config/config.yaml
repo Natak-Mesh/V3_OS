@@ -64,7 +64,7 @@ messaging:
   dedupe_window_secs: 60   # window to match the LoRa + WiFi copies of one message
   history_limit: 500       # max messages retained / returned to the UI
   rns:                     # Reticulum/LXMF direct-message lane (per-node DMs via rnsd)
-    enabled: false         # opt-in; loads RNS/LXMF (~27 MB) only when true
+    enabled: true          # on by default; loads RNS/LXMF (~27 MB)
     announce_interval_secs: 1800  # re-announce lxmf.delivery + nucleus.node every N s
     propagation_node: false       # run an LXMF store-and-forward node (extra memory/disk)
 

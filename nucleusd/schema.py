@@ -275,7 +275,7 @@ class RnsMessagingConfig(BaseModel):
     """
 
     enabled: bool = Field(
-        False,
+        True,
         description="Enable the Reticulum/LXMF direct-message lane in nucleus-messaging.",
     )
     announce_interval_secs: int = Field(
