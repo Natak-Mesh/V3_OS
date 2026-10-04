@@ -2,8 +2,12 @@
 Description=Nucleus text messaging (WiFi + LoRa)
 # WiFi transport rides the wlan1 802.11s mesh; LoRa path relays through the
 # CoT bridge's localhost text relay (bridge owns the radio).
-After=nucleus-mesh.service cot-bridge.service network-online.target
-Wants=nucleus-mesh.service cot-bridge.service
+# The optional Reticulum/LXMF lane attaches to the rnsd shared instance as a
+# client. Order after rnsd so it is usually up when we try; the lane also probes
+# rnsd and retries, so this is ordering-only (not a hard dependency) and the
+# WiFi/LoRa lanes still run if rnsd is absent.
+After=nucleus-mesh.service cot-bridge.service rnsd.service network-online.target
+Wants=nucleus-mesh.service cot-bridge.service rnsd.service
 
 [Service]
 Type=simple

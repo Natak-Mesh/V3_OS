@@ -46,6 +46,8 @@ CONTROL_ADDR = ("127.0.0.1", 5562)   # API/CLI -> us (we bind here)
 
 MCAST_IF = "wlan1"                    # WiFi transport egresses the mesh iface
 PERSIST_PATH = "/var/lib/nucleus/messages.jsonl"
+RNS_PERSIST_PATH = "/var/lib/nucleus/rns_messages.jsonl"
+RNS_RETRY_SECS = 30                   # retry attaching to rnsd while it's down
 
 
 def log(msg: str) -> None:
@@ -72,8 +74,19 @@ def iface_ipv4(ifname: str) -> str | None:
 
 
 def load_config() -> dict:
-    """Read messaging.* + identity from config.yaml into a flat dict."""
-    out = {
+    """Load messaging.* + derived identity via the validated schema.
+
+    Goes through ``nucleusd.config.load`` (not a bespoke YAML read) so this
+    daemon shares the single config contract and derived values — per the repo
+    rule that new code loads config through ``config.load()``. The returned flat
+    dict keeps the shape the rest of the service already consumes; the validated
+    model is stashed under ``_cfg`` so the RNS lane can derive its announce
+    app_data (node id/host/IPs/version/caps) from the same source of truth.
+
+    Falls back to safe defaults only if the config is unreadable/invalid, so the
+    daemon still starts (WiFi lane) on a half-provisioned node.
+    """
+    defaults = {
         "enabled": True,
         "wifi_group": "239.10.10.60",
         "wifi_port": 17020,
@@ -83,33 +96,35 @@ def load_config() -> dict:
         "node_id": 0,
         "sender": socket.gethostname().split(".")[0],
         "mesh_ttl": 8,
+        "rns_enabled": False,
+        "rns_announce_interval_secs": 1800,
+        "rns_propagation_node": False,
+        "_cfg": None,
     }
     try:
-        import yaml
-        with open(CONFIG_PATH) as f:
-            raw = yaml.safe_load(f) or {}
-        m = raw.get("messaging", {}) or {}
-        for k in ("enabled", "wifi_group", "wifi_port", "lora",
-                  "dedupe_window_secs", "history_limit"):
-            if k in m and m[k] is not None:
-                out[k] = m[k]
-        node = raw.get("node", {}) or {}
-        mesh = raw.get("mesh", {}) or {}
-        nid = node.get("id")
-        if nid is None:
-            host = socket.gethostname().split(".")[0]
-            if host.endswith("-nucleus") and host[:4].isdigit():
-                nid = int(host[:4])
-        if nid is not None:
-            out["node_id"] = int(nid)
-            out["sender"] = f"{int(nid):04d}-nucleus"
-        if node.get("name"):
-            out["sender"] = node["name"]
-        out["mesh_ttl"] = int(mesh.get("mesh_802_ttl", 8))
-    except OSError:
-        pass
+        from .. import config as cfgmod
+        cfg = cfgmod.load()
     except Exception as e:
-        log(f"config read error: {e}")
+        log(f"config load error ({e}); using defaults")
+        return defaults
+
+    m = cfg.messaging
+    out = dict(defaults)
+    out.update({
+        "enabled": m.enabled,
+        "wifi_group": m.wifi_group,
+        "wifi_port": m.wifi_port,
+        "lora": m.lora,
+        "dedupe_window_secs": m.dedupe_window_secs,
+        "history_limit": m.history_limit,
+        "node_id": cfg.node.id,
+        "sender": cfg.node.hostname,
+        "mesh_ttl": cfg.mesh.mesh_802_ttl,
+        "rns_enabled": m.rns.enabled,
+        "rns_announce_interval_secs": m.rns.announce_interval_secs,
+        "rns_propagation_node": m.rns.propagation_node,
+        "_cfg": cfg,
+    })
     return out
 
 
@@ -132,6 +147,19 @@ class MessagingService:
         self._subs: dict = {}
         self._subs_lock = threading.Lock()
         self._stop = threading.Event()
+
+        # ── Reticulum/LXMF direct-message lane (optional) ────────────
+        # Off unless messaging.rns.enabled. Built lazily in run() so the
+        # RNS/LXMF libraries are never imported on nodes with the lane off.
+        self.rns_enabled = bool(cfg.get("rns_enabled", False))
+        self._rns_lane = None
+        self._rns_store = None
+        if self.rns_enabled:
+            from .rns_store import ConversationStore
+            self._rns_store = ConversationStore(
+                history_limit=cfg["history_limit"],
+                persist_path=RNS_PERSIST_PATH,
+            )
 
     # ── local push subscribers (for live UI over WS) ────────────
     SUB_TTL = 20.0  # a subscriber must re-subscribe within this window
@@ -316,8 +344,89 @@ class MessagingService:
                 "wifi_port": self.wifi_port,
                 "lora": self.lora_enabled,
                 "count": len(self.store.history()),
+                "rns": self._rns_status(),
             }
+        # ── Reticulum/LXMF direct-message commands ───────────────
+        if cmd == "rns_peers":
+            return self._rns_peers()
+        if cmd == "rns_history":
+            return self._rns_history(req.get("peer"), float(req.get("since", 0) or 0))
+        if cmd == "rns_send":
+            return self._rns_send(req.get("dest", ""), req.get("text", ""))
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
+
+    # ── Reticulum/LXMF lane helpers ──────────────────────────────
+    def _rns_status(self) -> dict:
+        if not self.rns_enabled:
+            return {"enabled": False}
+        lane = self._rns_lane
+        return {
+            "enabled": True,
+            "started": bool(lane and lane.started),
+            "address": lane.delivery_hash_hex if lane else None,
+        }
+
+    def _rns_peers(self) -> dict:
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": True, "peers": []}
+        return {"ok": True, "peers": self._rns_lane.peers.as_list()}
+
+    def _rns_history(self, peer, since: float) -> dict:
+        if not (self.rns_enabled and self._rns_store):
+            return {"ok": True, "messages": []}
+        return {"ok": True, "messages": self._rns_store.history(peer, since)}
+
+    def _rns_send(self, dest: str, text: str) -> dict:
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": False, "error": "rns lane not available"}
+        res = self._rns_lane.send(dest, text)
+        if res.get("ok"):
+            msg = self._rns_store.add(dest, text.strip(), "out",
+                                      state=res.get("state", "outbound"))
+            self._notify_rns(msg)
+            res["id"] = f"{msg['peer']}:{msg['ts']}"
+        return res
+
+    def _on_rns_message(self, peer_hex: str, text: str, ts: float) -> None:
+        """Inbound LXMF callback: store it and push to subscribers."""
+        if not self._rns_store:
+            return
+        msg = self._rns_store.add(peer_hex, text, "in", ts=ts)
+        self._notify_rns(msg)
+
+    def _notify_rns(self, msg: dict) -> None:
+        """Push a new DM to live subscribers (same channel as broadcast)."""
+        now = time.time()
+        frame = json.dumps({"event": "rns_message", "message": msg}).encode("utf-8")
+        with self._subs_lock:
+            targets = [a for a, exp in self._subs.items() if exp >= now]
+        for a in targets:
+            try:
+                self._notify_tx.sendto(frame, a)
+            except OSError:
+                pass
+
+    def _rns_setup_loop(self) -> None:
+        """Build + attach the RNS lane, retrying until rnsd is reachable."""
+        from .rns_lane import RnsLane
+        cfg = self.cfg.get("_cfg")
+        if cfg is None:
+            log("rns lane: no validated config available; lane disabled")
+            return
+        from .. import __version__
+        appdata = cfg.rns_announce_appdata(__version__)
+        self._rns_lane = RnsLane(
+            appdata=appdata,
+            display_name=self.sender,
+            announce_interval_secs=self.cfg.get("rns_announce_interval_secs", 1800),
+            propagation_node=self.cfg.get("rns_propagation_node", False),
+            on_message=self._on_rns_message,
+        )
+        while not self._stop.is_set():
+            if self._rns_lane.start():
+                log("rns lane attached to rnsd shared instance")
+                return
+            self._stop.wait(RNS_RETRY_SECS)
 
     @staticmethod
     def _reply(sock, addr, obj) -> None:
@@ -336,10 +445,15 @@ class MessagingService:
         ]
         if self.lora_enabled:
             threads.append(threading.Thread(target=self._lora_rx_loop, daemon=True))
+        if self.rns_enabled:
+            # Attaches to rnsd in the background (retries if rnsd isn't up yet),
+            # so a down/slow-to-start rnsd never blocks the WiFi/LoRa lanes.
+            threads.append(threading.Thread(target=self._rns_setup_loop, daemon=True))
         for t in threads:
             t.start()
         log(f"messaging up as sender={self.sender!r} "
-            f"(wifi={self.wifi_group}:{self.wifi_port}, lora={self.lora_enabled})")
+            f"(wifi={self.wifi_group}:{self.wifi_port}, lora={self.lora_enabled}, "
+            f"rns={self.rns_enabled})")
         try:
             while not self._stop.is_set():
                 time.sleep(1)

@@ -40,6 +40,30 @@ Verify on the node: `rnstatus` should show the LAN TCP Server with
 `Clients: 1+`. Clients attached to different nodes then see each other's
 announces across the mesh (transport is enabled on every node).
 
+## Monitoring page
+
+The web UI has a **RETICULUM** page (main menu) showing the same data as
+`rnstatus`, refreshed every 5 s: the transport identity and uptime, each
+configured interface with its mode (internal/boundary/…), up/down state, RX/TX
+totals and attached-client count, plus the total number of known paths.
+
+It reads this straight from the running `rnsd` over its local control socket —
+the shared instance exposed by `share_instance = Yes` — so nothing starts a
+second Reticulum stack. The same data is on the API at
+`GET /api/v1/reticulum/status` (and `/interfaces`, `/paths`). If `rnsd` is
+stopped the page shows a "not running" state rather than erroring.
+
+## Node discovery & direct messaging (LXMF)
+
+With `messaging.rns.enabled`, the messaging daemon attaches to this same shared
+`rnsd` as a client (never a second stack) and announces two destinations from
+one persistent node identity: the standard `lxmf.delivery` inbox and a custom
+`nucleus.node` announce whose app_data identifies the node (id, host, IPs,
+version, capabilities). Nodes that hear each other's `nucleus.node` announces
+appear at `GET /api/v1/reticulum/nodes`, and each can be messaged directly over
+LXMF. See [messaging-internals.md](messaging-internals.md). Off by default; the
+RNS/LXMF libraries load only when enabled.
+
 ## Troubleshooting
 
 - `rnstatus` — interface state, connected clients, traffic counters.

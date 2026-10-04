@@ -275,7 +275,26 @@ curl -s -X POST http://localhost:8080/api/v1/messaging/messages \
 ### `WS /ws`
 WebSocket for live messages. On connect it sends one
 `{"event":"history","messages":[...]}`, then a `{"event":"message",...}` for
-each new message. Use this instead of polling `/messages` in a UI.
+each new message. Inbound Reticulum direct messages (below) push on the same
+socket as `{"event":"rns_message","message":{...}}`. Use this instead of polling.
+
+### Reticulum direct messages (`/api/v1/messaging/rns/...`)
+Per-peer one-to-one LXMF messages over `rnsd`, distinct from the broadcast
+WiFi/LoRa log above. Off unless `messaging.rns.enabled`; endpoints then return
+empty/`disabled` cleanly rather than erroring.
+
+- `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>"}`.
+- `GET /rns/peers` — discovered Nucleus nodes (same list as
+  `GET /api/v1/reticulum/nodes`): `{"ok":true,"peers":[{"id":9,"host":...,
+  "lxmf_hash":"...","caps":[...],"hops":1,"last_seen":...}]}`.
+- `GET /rns/messages?peer=<hash>&since=<ts>` — conversation history (omit `peer`
+  for all peers merged).
+- `POST /rns/messages` — send a DM. Body `{"dest":"<lxmf hash>","text":"..."}`;
+  `400` on failure (e.g. path not yet known — retry shortly).
+```bash
+curl -s -X POST http://localhost:8080/api/v1/messaging/rns/messages \
+  -H 'Content-Type: application/json' -d '{"dest":"<hex>","text":"hi node"}'
+```
 
 ---
 
@@ -303,6 +322,59 @@ Switch channel. Body: `{"n": <int>}`. `400` on a bad channel number.
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/voice/channel \
   -H 'Content-Type: application/json' -d '{"n":1}'
+```
+
+---
+
+## Reticulum (`/api/v1/reticulum`)
+
+Read-only status for the Reticulum daemon (`rnsd`). nucleusd talks to the shared
+`rnsd` instance over its local control socket (the same one `rnstatus`/`rnpath`
+use) — no second Reticulum stack is started, so this adds negligible memory.
+`running` is `false` (not an error) when rnsd is down; genuine socket/parse
+failures return `503`.
+
+### `GET /status`
+Transport identity + uptime + totals, the configured interfaces, and the path
+count. Per-peer/per-client spawned interfaces are omitted (as in `rnstatus`).
+```bash
+curl -s http://localhost:8080/api/v1/reticulum/status
+# {"running":true,
+#  "transport":{"transport_id":"5fdaeff7...","uptime":2220.5,
+#    "rxb":385411,"txb":777338,"rxs":0.0,"txs":0.0},
+#  "interfaces":[{"name":"AutoInterface[Mesh AutoInterface]",
+#    "short_name":"Mesh AutoInterface","up":true,"mode":"internal",
+#    "bitrate":10000000,"rxb":0,"txb":0,"rxs":0.0,"txs":0.0,
+#    "announces_in":0.0,"announces_out":0.0,"clients":null}, ...],
+#  "path_count":2810}
+```
+
+### `GET /interfaces`
+Just the interface list from `/status` (same per-interface shape).
+```bash
+curl -s http://localhost:8080/api/v1/reticulum/interfaces
+# {"interfaces":[{...}]}
+```
+
+### `GET /paths`
+The full path table: for each known destination its next-hop (`via`), `hops`,
+the `interface` it was learned on, and `timestamp`/`expires` epochs.
+```bash
+curl -s http://localhost:8080/api/v1/reticulum/paths
+# {"paths":[{"hash":"3c736576...","via":"4dc77e9d...","hops":4,
+#   "interface":"TCPInterface[Entry Node/173.230.150.24:4243]",
+#   "timestamp":1791121039.2,"expires":1791725839.2}, ...]}
+```
+
+### `GET /nodes`
+Nucleus nodes discovered via their `nucleus.node` LXMF announces (requires
+`messaging.rns.enabled`). Empty list when the lane is off or the messaging daemon
+is unreachable — never an error.
+```bash
+curl -s http://localhost:8080/api/v1/reticulum/nodes
+# {"nodes":[{"id":9,"host":"0009-nucleus","mesh_ip":"10.20.1.9",
+#   "br_lan":"10.20.9.1","sw":"0.9.4","caps":["msg","voice"],
+#   "lxmf_hash":"f1b5a645...","hops":1,"last_seen":1791121039.2}]}
 ```
 
 ---

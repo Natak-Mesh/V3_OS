@@ -20,6 +20,7 @@ dependencies = [
     "meshtastic_tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git@v0.9.1#subdirectory=python",
     # --- Reticulum cryptographic networking stack (rnsd) ---
     "rns>=0.7",                  # provides the rnsd daemon (rnsd.service)
+    "lxmf>=0.5",                 # LXMF messaging (nucleus-messaging RNS lane, opt-in)
     # --- live Codec2 voice stream over LoRa (nucleus-voice STREAM transport) ---
     "numpy",                     # frame math for the Codec2 stream encoder/decoder
     "pycodec2",                  # Codec2 3200 bps codec (builds against libcodec2-dev)

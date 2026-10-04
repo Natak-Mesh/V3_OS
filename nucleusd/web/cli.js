@@ -30,6 +30,9 @@
       m.className = "msg " + (text ? (ok ? "ok" : "err") : "");
     },
     reload() { return build(true); },
+    // Navigate to another page, optionally passing params (read as
+    // state.params in the target page's build()).
+    go(pageKey, params = null) { return go(pageKey, true, params); },
   };
   window.__shell = S;
 
@@ -222,13 +225,14 @@
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
   }
 
-  async function go(pageKey, push = true) {
+  async function go(pageKey, push = true, params = null) {
     if (!PAGES[pageKey]) return;
     // Tear down the page we're leaving (close sockets, etc.).
     const leaving = PAGES[state.page];
     if (leaving && leaving.onLeave) { try { leaving.onLeave(S); } catch (e) {} }
     if (push && pageKey !== state.page) state.stack.push(state.page);
     state.page = pageKey;
+    state.params = params;
     state.sel = 0;
     state.editing = false;
     stopTimer();
@@ -260,7 +264,9 @@
   function activate() {
     const it = state.items[state.sel];
     if (!it) return;
-    if (it.type === "nav") return go(it.to);
+    // nav normally just navigates to it.to; an onEnter (e.g. to pass params)
+    // takes precedence when present.
+    if (it.type === "nav") return it.onEnter ? it.onEnter(S) : go(it.to);
     if (it.type === "button") { S.msg(""); return it.onEnter && it.onEnter(S); }
     if (state.editing) return commitEdit();
     state.editing = true;

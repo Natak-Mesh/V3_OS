@@ -256,6 +256,36 @@ class MessagingConfig(BaseModel):
         500, ge=10, le=10000,
         description="Max messages retained in the store / returned to the UI.",
     )
+    rns: "RnsMessagingConfig" = Field(default_factory=lambda: RnsMessagingConfig())
+
+
+class RnsMessagingConfig(BaseModel):
+    """Reticulum (LXMF) direct-message transport for the messaging daemon.
+
+    A third transport alongside WiFi multicast and LoRa, but unlike those it is
+    NOT fanned into the shared broadcast store: LXMF messages are addressed to a
+    single node, so they are kept as per-peer conversations. The daemon attaches
+    to the already-running rnsd shared instance as a client (it never starts a
+    second Reticulum stack); if rnsd is down the lane is simply skipped.
+
+    Only primitives live here — the announced app_data (node id, host, IPs,
+    version, capabilities) is DERIVED from the rest of the config and the VERSION
+    file, never hand-entered. The identity is created once at runtime under
+    /var/lib/nucleus/rns/ and is a NODE identity (phones never hold it).
+    """
+
+    enabled: bool = Field(
+        False,
+        description="Enable the Reticulum/LXMF direct-message lane in nucleus-messaging.",
+    )
+    announce_interval_secs: int = Field(
+        1800, ge=60, le=86400,
+        description="How often to re-announce the lxmf.delivery + nucleus.node destinations.",
+    )
+    propagation_node: bool = Field(
+        False,
+        description="Run an LXMF propagation node (store-and-forward for offline peers). Extra memory/disk; off by default.",
+    )
 
 
 class ReticulumConfig(BaseModel):
@@ -475,6 +505,43 @@ class NucleusConfig(BaseModel):
         import base64
         digest = hashlib.sha1(self.web.password.encode()).digest()
         return f"{self.web.user}:{{SHA}}{base64.b64encode(digest).decode()}"
+
+    # ---- Reticulum/LXMF node announce (derived; see RnsMessagingConfig) ----
+    @property
+    def node_capabilities(self) -> list[str]:
+        """Which Nucleus services this node currently offers, for the announce.
+
+        Derived from the enabled subsystems so a peer hearing a nucleus.node
+        announce knows what it can talk to. Order is stable for test fixtures.
+        """
+        caps: list[str] = []
+        if self.messaging.enabled:
+            caps.append("msg")
+        if self.voice.enabled:
+            caps.append("voice")
+        if self.meshtastic.enabled:
+            caps.append("lora")
+        if self.tak.variant != "none":
+            caps.append("tak")
+        return caps
+
+    def rns_announce_appdata(self, version: str) -> dict:
+        """Compact, msgpack-able payload for the custom `nucleus.node` announce.
+
+        Every value is derived (node id/host/IPs from the schema, version from
+        the VERSION file, caps from enabled services) — nothing here is operator
+        hand-entered. Kept small so the whole announce stays within Reticulum's
+        packet limit. `v` is the payload schema version for forward compat.
+        """
+        return {
+            "v": 1,
+            "id": self.node.id,
+            "host": self.node.hostname,
+            "mesh_ip": self.mesh_ip,
+            "br_lan": self.br_lan_ip,
+            "sw": version,
+            "caps": self.node_capabilities,
+        }
 
     @property
     def web_trusted_cidrs(self) -> list[str]:

@@ -24,6 +24,11 @@ class SendBody(BaseModel):
     text: str = ""
 
 
+class RnsSendBody(BaseModel):
+    dest: str = ""   # recipient lxmf.delivery hash (hex)
+    text: str = ""
+
+
 def _rpc(req: dict) -> dict:
     """One-shot request/reply against the daemon's UDP control socket."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -53,6 +58,34 @@ def messages(since: float = 0.0) -> dict:
 @router.post("/messages")
 def send(body: SendBody) -> dict:
     res = _rpc({"cmd": "send", "text": body.text})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "send failed"))
+    return res
+
+
+# ── Reticulum/LXMF direct-message lane ───────────────────────────
+# Per-peer DMs over LXMF (via rnsd), distinct from the WiFi/LoRa broadcast log
+# above. The daemon owns the lane + per-peer store; these just relay control
+# commands. All return cleanly (empty lists / disabled flags) when the lane is
+# off, so the UI can render without special-casing.
+@router.get("/rns/status")
+def rns_status() -> dict:
+    return _rpc({"cmd": "status"}).get("rns", {"enabled": False})
+
+
+@router.get("/rns/peers")
+def rns_peers() -> dict:
+    return _rpc({"cmd": "rns_peers"})
+
+
+@router.get("/rns/messages")
+def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
+    return _rpc({"cmd": "rns_history", "peer": peer, "since": since})
+
+
+@router.post("/rns/messages")
+def rns_send(body: RnsSendBody) -> dict:
+    res = _rpc({"cmd": "rns_send", "dest": body.dest, "text": body.text})
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error", "send failed"))
     return res

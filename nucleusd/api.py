@@ -83,6 +83,14 @@ try:
 except Exception:
     pass
 
+# Reticulum (rnsd) read-only status — thin layer over the shared-instance RPC
+# socket (see nucleusd/reticulum.py). Read-only; outside the config pipeline.
+try:
+    from .reticulum_router import router as reticulum_router
+    app.include_router(reticulum_router)
+except Exception:
+    pass
+
 
 @app.get("/api/v1/version")
 def get_version() -> dict:

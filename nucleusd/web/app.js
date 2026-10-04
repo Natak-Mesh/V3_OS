@@ -35,6 +35,26 @@ function ago(epoch) {
   return Math.floor(s / 86400) + "d";
 }
 
+// Human byte + duration formatting for the Reticulum monitor.
+function fmtBytes(n) {
+  if (n == null) return "—";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v.toFixed(0) : v.toFixed(1)) + " " + u[i];
+}
+function fmtDur(sec) {
+  if (sec == null) return "—";
+  let s = Math.floor(sec);
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60);
+  if (d) return d + "d " + h + "h";
+  if (h) return h + "h " + m + "m";
+  if (m) return m + "m";
+  return Math.floor(sec) + "s";
+}
+
 // ── Shared status header ───────────────────────────────────────
 // Populated on a 5s interval by the shell; independent of the current page.
 async function refreshHeader() {
@@ -111,6 +131,19 @@ function msgUpsert(m) {
   MSG_CACHE.sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+// Reticulum/LXMF direct-message state. Separate from the broadcast chat above:
+// DMs are per-peer, keyed by the peer's lxmf.delivery hash.
+let RNS_DRAFT = "";
+let RNS_CACHE = {};        // peer hash -> ordered (oldest→newest) message list
+// Merge a DM into the per-peer cache (by peer+ts+direction; no server id).
+function rnsUpsert(m) {
+  if (!m || !m.peer) return;
+  const list = RNS_CACHE[m.peer] || (RNS_CACHE[m.peer] = []);
+  const i = list.findIndex((x) => x.ts === m.ts && x.direction === m.direction && x.text === m.text);
+  if (i >= 0) list[i] = m; else list.push(m);
+  list.sort((a, b) => a.ts - b.ts);
+}
+
 // Voice state: channel list cache for the TUI voice page.
 let VOICE_CH = null;
 
@@ -156,6 +189,7 @@ const PAGES = {
         { type: "nav", label: "VOICE (PTT)", to: "voice" },
         { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
         { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
+        { type: "nav", label: "RETICULUM", to: "reticulum" },
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
       ];
@@ -398,6 +432,58 @@ const PAGES = {
           { type: "button", label: "» Switch", onEnter: tsSwitch },
         );
       }
+
+      return { items };
+    },
+  },
+
+  // Reticulum (rnsd) read-only monitor: transport identity/uptime, configured
+  // interfaces with traffic + announce rates + attached clients, path count.
+  // Data comes from the shared-instance control socket via /api/v1/reticulum.
+  reticulum: {
+    title: "Reticulum",
+    dynamic: 5000,
+    async build() {
+      const { ok, d: s } = await jget("/api/v1/reticulum/status");
+      const items = [
+        { type: "nav", label: "» DIRECT MESSAGES (Reticulum)", to: "rns_nodes" },
+      ];
+
+      if (!ok || !s.running) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">rnsd is not running — no Reticulum status available</div></div>` });
+        return { items };
+      }
+
+      const t = s.transport || {};
+      let head = `<div class="content"><div class="kv">` +
+        `<span>transport <b>${esc(t.transport_id || "—")}</b></span></div>` +
+        `<div class="kv"><span>uptime <b>${t.uptime != null ? fmtDur(t.uptime) : "—"}</b></span>` +
+        `<span>paths <b>${s.path_count}</b></span></div>` +
+        `<div class="kv"><span>rx <b>${fmtBytes(t.rxb)}</b></span>` +
+        `<span>tx <b>${fmtBytes(t.txb)}</b></span></div></div>`;
+      items.push({ type: "content", html: head });
+
+      const ifaces = s.interfaces || [];
+      let h = `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div>`;
+      if (!ifaces.length) {
+        h += `<div class="off">no interfaces configured</div>`;
+      } else {
+        h += `<table><tr><th>Interface</th><th>Mode</th><th>State</th>` +
+          `<th>RX</th><th>TX</th><th>Clients</th></tr>`;
+        ifaces.forEach((i) => {
+          const cls = i.up ? "ok" : "warn";
+          const clients = i.clients != null ? i.clients : "—";
+          h += `<tr><td>${esc(i.short_name || i.name)}</td>` +
+            `<td>${esc(i.mode)}</td>` +
+            `<td class="${cls}">${i.up ? "up" : "down"}</td>` +
+            `<td>${fmtBytes(i.rxb)}</td><td>${fmtBytes(i.txb)}</td>` +
+            `<td>${esc(clients)}</td></tr>`;
+        });
+        h += `</table>`;
+      }
+      h += `</div>`;
+      items.push({ type: "content", html: h });
 
       return { items };
     },
@@ -720,6 +806,96 @@ const PAGES = {
     },
   },
 
+  // Reticulum/LXMF node list: every Nucleus node discovered via its
+  // nucleus.node announce. Selecting one opens a per-peer conversation.
+  rns_nodes: {
+    title: "Direct Messages",
+    dynamic: 5000,
+    onEnter: (S) => msgWsOpen(S),
+    onLeave: () => msgWsClose(),
+    async build() {
+      const st = await jget("/api/v1/messaging/rns/status");
+      const items = [];
+      const s = st.ok ? st.d : {};
+      if (!s.enabled) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">Reticulum messaging is disabled</div>` +
+          `<div class="hint" style="padding-left:0">Enable messaging.rns.enabled ` +
+          `in the config, then apply.</div></div>` });
+        return { items };
+      }
+      let head = `<div class="content"><div class="kv"><span>status ` +
+        `<b class="${s.started ? "ok" : "warn"}">${s.started ? "up" : "starting…"}</b></span></div>`;
+      if (s.address) head += `<div class="kv"><span>this node <b>${esc(s.address)}</b></span></div>`;
+      head += `</div>`;
+      items.push({ type: "content", html: head });
+
+      const r = await jget("/api/v1/messaging/rns/peers");
+      const peers = (r.ok && r.d.peers) ? r.d.peers : [];
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">Nucleus nodes</div>` +
+        (peers.length ? "" : `<div class="off">no nodes discovered yet</div>`) + `</div>` });
+      peers.forEach((p) => {
+        const caps = (p.caps || []).join(",") || "—";
+        const hops = p.hops != null ? `${p.hops}h` : "—";
+        items.push({
+          type: "nav",
+          label: `${p.host || p.id || "?"}  ·  ${hops}  ·  ${caps}  ·  seen ${ago(p.last_seen)}`,
+          to: "rns_chat",
+          // onEnter navigates with params (the peer's delivery hash + host).
+          onEnter: (S) => S.go("rns_chat", { hash: p.lxmf_hash, host: p.host || String(p.id) }),
+        });
+      });
+      return { items };
+    },
+  },
+
+  // Reticulum/LXMF per-peer conversation. params: {hash, host}.
+  rns_chat: {
+    title: "DM",
+    stickBottom: true,
+    dynamic: 3000,
+    onEnter: (S) => msgWsOpen(S),
+    onLeave: () => msgWsClose(),
+    async build(params) {
+      const p = params || {};
+      const peer = p.hash;
+      const items = [];
+      if (!peer) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="warn">no peer selected</div></div>` });
+        return { items };
+      }
+      const r = await jget("/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer));
+      if (r.ok) (r.d.messages || []).forEach(rnsUpsert);
+      const list = RNS_CACHE[peer] || [];
+      let h = `<div class="hint">Direct LXMF message to ${esc(p.host || peer)}.</div>`;
+      h += `<div class="content">`;
+      if (!r.ok) h += `<div class="warn">messaging service unavailable</div>`;
+      else if (!list.length) h += `<div class="off">no messages yet</div>`;
+      else {
+        h += `<table><tr><th>When</th><th>From</th><th>Message</th><th>State</th></tr>`;
+        list.slice(-100).forEach((m) => {
+          const mine = m.direction === "out";
+          h += `<tr><td>${ago(m.ts)}</td>` +
+            `<td class="${mine ? "ok" : ""}">${mine ? "me" : esc(p.host || "peer")}</td>` +
+            `<td>${esc(m.text)}</td><td>${esc(m.state || "")}</td></tr>`;
+        });
+        h += `</table>`;
+      }
+      h += `</div>`;
+      return {
+        items: [
+          { type: "content", html: h },
+          { type: "compose", key: "rns_text", value: RNS_DRAFT, max: 200,
+            placeholder: "Type a message",
+            sendLabel: "Send", onChange: (v) => RNS_DRAFT = v,
+            onSubmit: (S, text) => rnsSend(S, peer, text) },
+        ],
+      };
+    },
+  },
+
   // Voice (PTT) status + channel control. The full soft-PTT handset lives at
   // /voice; this page mirrors the daemon's control socket so an operator can
   // see mesh audio state and switch channel from the TUI.
@@ -932,6 +1108,18 @@ async function sendMessage(S, text) {
   return S.reload();
 }
 
+// Send a Reticulum/LXMF direct message to one peer (lxmf.delivery hash).
+async function rnsSend(S, peer, text) {
+  text = (text != null ? text : RNS_DRAFT || "").trim();
+  if (!text) return S.msg("type a message first", false);
+  const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/messages", { dest: peer, text });
+  if (!ok) return S.msg("send failed: " + (d.detail || "error"), false);
+  RNS_DRAFT = "";
+  S.msg("sent");
+  // Inbound/echoed DMs also arrive over the WS; reload for an immediate view.
+  return S.reload();
+}
+
 // ── Messaging live push (WebSocket) ────────────────────────────
 // Opens a WS to the daemon-backed /api/v1/messaging/ws endpoint. New messages
 // arrive as {event:"message",message:{...}}; the initial frame is the history.
@@ -956,6 +1144,8 @@ function msgWsOpen(S) {
       (obj.messages || []).forEach(msgUpsert);
     } else if (obj.event === "message") {
       msgUpsert(obj.message);
+    } else if (obj.event === "rns_message") {
+      rnsUpsert(obj.message);
     } else return;
     if (S) S.reload();
   };
