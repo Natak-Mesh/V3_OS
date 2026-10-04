@@ -234,7 +234,7 @@ class RnsLane:
             aspect_filter = f"{proto.NUCLEUS_APP_NAME}.{proto.NUCLEUS_NODE_ASPECT}"
 
             def received_announce(self, destination_hash, announced_identity,
-                                  app_data, *extra):
+                                  app_data):
                 lane._handle_node_announce(destination_hash, announced_identity, app_data)
 
         RNS.Transport.register_announce_handler(_NodeAnnounceHandler())

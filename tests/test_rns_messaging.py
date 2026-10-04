@@ -130,9 +130,9 @@ def test_schema_announce_appdata_is_derived():
     assert proto.parse_node_appdata(proto.encode_node_appdata(data)) == data
 
 
-def test_schema_rns_defaults_off():
+def test_schema_rns_defaults_on():
     cfg = _cfg()
-    assert cfg.messaging.rns.enabled is False
+    assert cfg.messaging.rns.enabled is True
     assert cfg.messaging.rns.propagation_node is False
 
 
@@ -160,3 +160,59 @@ def test_lane_never_inits_reticulum_when_rnsd_down(monkeypatch):
     assert lane.start() is False
     assert lane.started is False
     assert called["reticulum"] is False
+
+
+# ── regression: announce handler matches RNS 1.5.6 call signature ─
+def test_announce_handler_accepts_rns_keyword_call(monkeypatch):
+    """RNS 1.5.6 Transport calls received_announce() with keyword args incl.
+    announce_packet_hash; the handler must accept that call and record the peer
+    (the *extra form raised TypeError and dropped every announce)."""
+    from nucleusd.messaging import rns_lane
+
+    captured = {}
+
+    class _FakeTransport:
+        @staticmethod
+        def register_announce_handler(h):
+            captured["handler"] = h
+
+        @staticmethod
+        def hops_to(_dh):
+            return 2
+
+    class _FakeDestination:
+        @staticmethod
+        def hash(_identity, _app, _aspect):
+            return b"\xaa\xbb\xcc\xdd"
+
+    fake_rns = types.ModuleType("RNS")
+    fake_rns.Transport = _FakeTransport
+    fake_rns.Destination = _FakeDestination
+    monkeypatch.setitem(sys.modules, "RNS", fake_rns)
+
+    lane = rns_lane.RnsLane(appdata=_appdata(), display_name="0042-nucleus")
+    lane._register_announce_handler()
+    handler = captured["handler"]
+
+    # Dispatch exactly as RNS 1.5.6 Transport.job does: it inspects the bound
+    # method's parameter count and calls the matching keyword form. The old
+    # *extra signature counted as 4 params, so RNS passed announce_packet_hash
+    # into *extra as a keyword and raised TypeError, dropping every announce.
+    import inspect
+    app_data = proto.encode_node_appdata(_appdata(id=9, host="0009-nucleus"))
+    kwargs = dict(
+        destination_hash=b"\x01" * 16,
+        announced_identity=object(),
+        app_data=app_data,
+    )
+    nparams = len(inspect.signature(handler.received_announce).parameters)
+    if nparams >= 4:
+        kwargs["announce_packet_hash"] = b"\x02" * 16
+    if nparams >= 5:
+        kwargs["is_path_response"] = False
+    handler.received_announce(**kwargs)
+
+    peers = lane.peers.as_list()
+    assert [p["id"] for p in peers] == [9]
+    assert peers[0]["lxmf_hash"] == "aabbccdd"
+    assert peers[0]["hops"] == 2
