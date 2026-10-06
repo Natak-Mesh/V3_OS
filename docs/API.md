@@ -294,14 +294,43 @@ each new message. Inbound Reticulum direct messages (below) push on the same
 socket as `{"event":"rns_message","message":{...}}`. Use this instead of polling.
 
 ### Reticulum direct messages (`/api/v1/messaging/rns/...`)
-Per-peer one-to-one LXMF messages over `rnsd`, distinct from the broadcast
+Per-contact one-to-one LXMF messages over `rnsd`, distinct from the broadcast
 WiFi/LoRa log above. Off unless `messaging.rns.enabled`; endpoints then return
 empty/`disabled` cleanly rather than erroring.
 
-- `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>"}`.
-- `GET /rns/peers` — discovered Nucleus nodes (same list as
-  `GET /api/v1/reticulum/nodes`): `{"ok":true,"peers":[{"id":9,"host":...,
-  "lxmf_hash":"...","caps":[...],"hops":1,"last_seen":...}]}`.
+Contacts are **explicit** — there is no flooded announce. You add a peer by
+importing its contact card (over the mesh, from a `nucleus-rns://` link, or by
+scanning its QR). Each card carries the identity public key, so an import
+verifies that the lxmf address matches the key before trusting it. An inbound
+message also auto-adds its sender.
+
+- `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>",
+  "announce_mode":"manual"}`.
+- `GET /rns/contacts` — known contacts:
+  `{"ok":true,"contacts":[{"lxmf_hash":"...","pubkey":"...","name":"0009-nucleus",
+  "id":9,"source":"mesh","added":<ts>,"last_seen":<ts|null>}]}`. `source` is the
+  provenance (`link`/`qr`/`mesh`/`inbound`).
+- `POST /rns/contacts` — import a contact. Body `{"link":"nucleus-rns://..."}`
+  **or** `{"card":{...}}`, plus a `source` tag. Verifies address↔key; `400` if
+  the card is malformed or the key doesn't match the address.
+  ```bash
+  curl -s -X POST http://localhost:8080/api/v1/messaging/rns/contacts \
+    -H 'Content-Type: application/json' \
+    -d '{"link":"nucleus-rns://...","source":"link"}'
+  ```
+- `DELETE /rns/contacts/{dest}` — forget a contact by its lxmf hash.
+- `GET /rns/card` — this node's own shareable card plus its link:
+  `{"ok":true,"card":{...},"link":"nucleus-rns://..."}`. `503` until the lane is
+  started.
+- `GET /rns/card/qr` — the card link as an **SVG image** (`image/svg+xml`),
+  scannable by another node.
+- `GET /rns/mesh-peers` — Nucleus nodes reachable over the WiFi mesh, each with
+  its contact card for one-tap add:
+  `{"ok":true,"peers":[{"ip":"10.20.1.9","card":{...},"link":"nucleus-rns://..."}]}`.
+  Found via Babel neighbours; nodes with the lane off are omitted. Cards here are
+  untrusted until imported (import re-verifies address↔key).
+- `POST /rns/announce` — emit this node's `lxmf.delivery` announce once
+  (operator-triggered): `{"ok":true,"announced":bool}`.
 - `GET /rns/messages?peer=<hash>&since=<ts>` — conversation history (omit `peer`
   for all peers merged).
 - `POST /rns/messages` — send a DM. Body `{"dest":"<lxmf hash>","text":"..."}`;
@@ -379,17 +408,6 @@ curl -s http://localhost:8080/api/v1/reticulum/paths
 # {"paths":[{"hash":"3c736576...","via":"4dc77e9d...","hops":4,
 #   "interface":"TCPInterface[Entry Node/173.230.150.24:4243]",
 #   "timestamp":1791121039.2,"expires":1791725839.2}, ...]}
-```
-
-### `GET /nodes`
-Nucleus nodes discovered via their `nucleus.node` LXMF announces (requires
-`messaging.rns.enabled`). Empty list when the lane is off or the messaging daemon
-is unreachable — never an error.
-```bash
-curl -s http://localhost:8080/api/v1/reticulum/nodes
-# {"nodes":[{"id":9,"host":"0009-nucleus","mesh_ip":"10.20.1.9",
-#   "br_lan":"10.20.9.1","sw":"0.9.4","caps":["msg","voice"],
-#   "lxmf_hash":"f1b5a645...","hops":1,"last_seen":1791121039.2}]}
 ```
 
 ---

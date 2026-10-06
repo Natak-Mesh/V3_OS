@@ -47,6 +47,7 @@ CONTROL_ADDR = ("127.0.0.1", 5562)   # API/CLI -> us (we bind here)
 MCAST_IF = "wlan1"                    # WiFi transport egresses the mesh iface
 PERSIST_PATH = "/var/lib/nucleus/messages.jsonl"
 RNS_PERSIST_PATH = "/var/lib/nucleus/rns_messages.jsonl"
+RNS_CONTACTS_PATH = "/var/lib/nucleus/rns/contacts.json"
 RNS_RETRY_SECS = 30                   # retry attaching to rnsd while it's down
 
 
@@ -97,6 +98,7 @@ def load_config() -> dict:
         "sender": socket.gethostname().split(".")[0],
         "mesh_ttl": 8,
         "rns_enabled": False,
+        "rns_announce_mode": "manual",
         "rns_announce_interval_secs": 1800,
         "rns_propagation_node": False,
         "_cfg": None,
@@ -121,6 +123,7 @@ def load_config() -> dict:
         "sender": cfg.node.hostname,
         "mesh_ttl": cfg.mesh.mesh_802_ttl,
         "rns_enabled": m.rns.enabled,
+        "rns_announce_mode": m.rns.announce_mode,
         "rns_announce_interval_secs": m.rns.announce_interval_secs,
         "rns_propagation_node": m.rns.propagation_node,
         "_cfg": cfg,
@@ -154,12 +157,17 @@ class MessagingService:
         self.rns_enabled = bool(cfg.get("rns_enabled", False))
         self._rns_lane = None
         self._rns_store = None
+        self._rns_contacts = None
         if self.rns_enabled:
             from .rns_store import ConversationStore
+            from .rns_contacts import ContactStore
             self._rns_store = ConversationStore(
                 history_limit=cfg["history_limit"],
                 persist_path=RNS_PERSIST_PATH,
             )
+            # Persistent contact book (replaces the old announce-driven peer
+            # table). Loaded here so imports work even before the lane attaches.
+            self._rns_contacts = ContactStore(persist_path=RNS_CONTACTS_PATH)
 
     # ── local push subscribers (for live UI over WS) ────────────
     SUB_TTL = 20.0  # a subscriber must re-subscribe within this window
@@ -347,12 +355,21 @@ class MessagingService:
                 "rns": self._rns_status(),
             }
         # ── Reticulum/LXMF direct-message commands ───────────────
-        if cmd == "rns_peers":
-            return self._rns_peers()
+        if cmd == "rns_contacts":
+            return self._rns_contacts_list()
         if cmd == "rns_history":
             return self._rns_history(req.get("peer"), float(req.get("since", 0) or 0))
         if cmd == "rns_send":
             return self._rns_send(req.get("dest", ""), req.get("text", ""))
+        if cmd == "rns_card":
+            return self._rns_card()
+        if cmd == "rns_import":
+            return self._rns_import(req.get("link"), req.get("card"),
+                                    req.get("source", "link"))
+        if cmd == "rns_remove":
+            return self._rns_remove(req.get("dest", ""))
+        if cmd == "rns_announce":
+            return self._rns_announce()
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
 
     # ── Reticulum/LXMF lane helpers ──────────────────────────────
@@ -364,12 +381,58 @@ class MessagingService:
             "enabled": True,
             "started": bool(lane and lane.started),
             "address": lane.delivery_hash_hex if lane else None,
+            "announce_mode": self.cfg.get("rns_announce_mode", "manual"),
         }
 
-    def _rns_peers(self) -> dict:
+    def _rns_contacts_list(self) -> dict:
+        """Imported contacts (replaces the old announce-discovered peer list)."""
+        if not (self.rns_enabled and self._rns_contacts):
+            return {"ok": True, "contacts": []}
+        return {"ok": True, "contacts": self._rns_contacts.as_list()}
+
+    def _rns_card(self) -> dict:
+        """This node's shareable contact card + its nucleus-rns:// link."""
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
-            return {"ok": True, "peers": []}
-        return {"ok": True, "peers": self._rns_lane.peers.as_list()}
+            return {"ok": False, "error": "rns lane not available"}
+        card = self._rns_lane.card()
+        if not card:
+            return {"ok": False, "error": "card not ready"}
+        from . import rns_proto as proto
+        return {"ok": True, "card": card, "link": proto.encode_card(card)}
+
+    def _rns_import(self, link, card, source: str) -> dict:
+        """Import a contact from a nucleus-rns:// link or a raw card dict.
+
+        Verifies the card (address must match key) and, if the lane is up, loads
+        the key into RNS straight away so the contact is messageable with no
+        restart. Returns the stored contact.
+        """
+        if not (self.rns_enabled and self._rns_contacts):
+            return {"ok": False, "error": "rns lane not available"}
+        from . import rns_proto as proto
+        parsed = card if isinstance(card, dict) else proto.decode_card(link)
+        if parsed is None:
+            return {"ok": False, "error": "could not parse contact card"}
+        if not proto.verify_card(parsed):
+            return {"ok": False, "error": "card failed verification (address/key mismatch)"}
+        try:
+            contact = self._rns_contacts.add_card(parsed, source=source)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        if self._rns_lane and self._rns_lane.started:
+            self._rns_lane.remember_contact(contact["lxmf_hash"], contact["pubkey"])
+        return {"ok": True, "contact": contact}
+
+    def _rns_remove(self, dest: str) -> dict:
+        if not (self.rns_enabled and self._rns_contacts):
+            return {"ok": False, "error": "rns lane not available"}
+        return {"ok": True, "removed": self._rns_contacts.remove(dest)}
+
+    def _rns_announce(self) -> dict:
+        """Emit our lxmf.delivery announce once (operator-triggered)."""
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": False, "error": "rns lane not available"}
+        return {"ok": True, "announced": self._rns_lane.announce()}
 
     def _rns_history(self, peer, since: float) -> dict:
         if not (self.rns_enabled and self._rns_store):
@@ -387,10 +450,19 @@ class MessagingService:
             res["id"] = f"{msg['peer']}:{msg['ts']}"
         return res
 
-    def _on_rns_message(self, peer_hex: str, text: str, ts: float) -> None:
-        """Inbound LXMF callback: store it and push to subscribers."""
+    def _on_rns_message(self, peer_hex: str, text: str, ts: float,
+                        pubkey_hex: str | None = None) -> None:
+        """Inbound LXMF callback: auto-add the sender, store, push to subscribers.
+
+        Unknown senders are added as contacts automatically — if a node has our
+        address it got the card on purpose, so a reply path should just work. If
+        the sender's public key was recovered it is stored (reply-ready); if not,
+        the contact is keyless until the key is learned.
+        """
         if not self._rns_store:
             return
+        if self._rns_contacts:
+            self._rns_contacts.add_inbound(peer_hex, pubkey_hex, ts=ts)
         msg = self._rns_store.add(peer_hex, text, "in", ts=ts)
         self._notify_rns(msg)
 
@@ -409,17 +481,13 @@ class MessagingService:
     def _rns_setup_loop(self) -> None:
         """Build + attach the RNS lane, retrying until rnsd is reachable."""
         from .rns_lane import RnsLane
-        cfg = self.cfg.get("_cfg")
-        if cfg is None:
-            log("rns lane: no validated config available; lane disabled")
-            return
-        from .. import __version__
-        appdata = cfg.rns_announce_appdata(__version__)
         self._rns_lane = RnsLane(
-            appdata=appdata,
             display_name=self.sender,
+            node_id=self.cfg.get("node_id"),
+            announce_mode=self.cfg.get("rns_announce_mode", "manual"),
             announce_interval_secs=self.cfg.get("rns_announce_interval_secs", 1800),
             propagation_node=self.cfg.get("rns_propagation_node", False),
+            contacts=self._rns_contacts,
             on_message=self._on_rns_message,
         )
         while not self._stop.is_set():

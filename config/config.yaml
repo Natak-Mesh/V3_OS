@@ -65,7 +65,8 @@ messaging:
   history_limit: 500       # max messages retained / returned to the UI
   rns:                     # Reticulum/LXMF direct-message lane (per-node DMs via rnsd)
     enabled: true          # on by default; loads RNS/LXMF (~27 MB)
-    announce_interval_secs: 1800  # re-announce lxmf.delivery + nucleus.node every N s
+    announce_mode: manual  # manual = never auto-announce (share contact cards instead); auto = re-announce on a timer
+    announce_interval_secs: 1800  # auto mode only: re-announce lxmf.delivery every N s
     propagation_node: false       # run an LXMF store-and-forward node (extra memory/disk)
 
 web:

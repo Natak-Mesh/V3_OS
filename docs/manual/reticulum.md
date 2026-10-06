@@ -53,16 +53,35 @@ second Reticulum stack. The same data is on the API at
 `GET /api/v1/reticulum/status` (and `/interfaces`, `/paths`). If `rnsd` is
 stopped the page shows a "not running" state rather than erroring.
 
-## Node discovery & direct messaging (LXMF)
+## Contacts & direct messaging (LXMF)
 
 With `messaging.rns.enabled`, the messaging daemon attaches to this same shared
-`rnsd` as a client (never a second stack) and announces two destinations from
-one persistent node identity: the standard `lxmf.delivery` inbox and a custom
-`nucleus.node` announce whose app_data identifies the node (id, host, IPs,
-version, capabilities). Nodes that hear each other's `nucleus.node` announces
-appear at `GET /api/v1/reticulum/nodes`, and each can be messaged directly over
-LXMF. See [messaging-internals.md](messaging-internals.md). Off by default; the
-RNS/LXMF libraries load only when enabled.
+`rnsd` as a client (never a second stack) and exposes one persistent node
+identity's standard `lxmf.delivery` inbox. There is **no custom flooded
+announce** for discovery any more. Instead each node publishes a **contact
+card** — its lxmf.delivery address plus its identity public key — that peers
+import out-of-band:
+
+- **Over the WiFi mesh:** the Direct Messages page lists Nucleus nodes found via
+  Babel routes (same discovery as Meshtastic channel sharing) and offers a
+  one-tap **Add** that pulls and verifies the peer's card.
+- **By link:** copy another node's `nucleus-rns://…` card link and paste it into
+  the import box.
+- **By QR:** show a node's card QR and scan it on the other device, then paste.
+
+Imported contacts are saved to `/var/lib/nucleus/rns/contacts.json`. Because the
+card carries the peer's public key, the node can address and message it directly
+with **no announce ever required** — on import (and at daemon start) the key is
+loaded into RNS so `rnpath`/delivery resolve on demand. An inbound message from
+an unknown sender auto-adds that sender as a contact (if it has your address it
+got your card on purpose).
+
+Announcing is **manual by default** (`messaging.rns.announce_mode: manual`):
+nothing is broadcast until you press **Announce now** on the Direct Messages page
+(a send also announces once so the recipient can find a path back). Set
+`announce_mode: auto` to re-announce the `lxmf.delivery` destination every
+`announce_interval_secs`. See [messaging-internals.md](messaging-internals.md).
+Off by default; the RNS/LXMF libraries load only when enabled.
 
 ## Troubleshooting
 

@@ -73,13 +73,14 @@ Everything flows one direction, from one file:
 | `api.py` | FastAPI app (`nucleusd`, :8080): REST API + web UI, mounts the routers below. |
 | `cli.py` | `nucleusctl` — thin wrapper over the same modules. |
 | `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon. |
-| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`), attaching to the shared `rnsd` as a client; off by default. |
+| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`), attaching to the shared `rnsd` as a client; off by default. Peers are explicit **contact cards** (imported over the mesh / link / QR), not flooded announces; the node announces only on operator request. |
 | `voice/` | PTT voice daemon (OpenVLM hardware + browser soft PTT) + router. |
 | `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |
 | `reticulum.py`, `reticulum_router.py` | Read-only rnsd status via the shared-instance control socket. |
 | `update.py` | Self-update: version check + launches `nucleus-update.sh`. |
 | `templates/` | Jinja2 templates, named after their destination. |
-| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum monitor is a page in `app.js`. |
+| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum monitor and the Direct Messages/contacts page are in `app.js`. |
+| `mesh_peers.py` | Shared mesh-neighbour discovery helper: Babel neighbours (monitor on `[::1]:33123`) → per-node HTTP pulls. Used to fetch peers' contact cards for one-tap add. |
 
 Routers are thin HTTP layers: logic stays in the module/daemon they wrap.
 

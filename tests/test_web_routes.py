@@ -94,15 +94,6 @@ def test_messaging_log_is_bottom_anchored():
         "log is no longer bottom-anchored"
 
 
-def test_reticulum_nodes_route_degrades_cleanly():
-    """GET /api/v1/reticulum/nodes must return an empty list (200) rather than
-    erroring when the messaging daemon / RNS lane isn't reachable — the UI
-    renders a clean 'none discovered' state from it."""
-    r = client.get("/api/v1/reticulum/nodes")
-    assert r.status_code == 200
-    assert r.json() == {"nodes": []}
-
-
 def test_messaging_rns_routes_degrade_cleanly():
     """The RNS direct-message routes relay to the messaging daemon's control
     socket. They must never 500: either the daemon answers (200) or it's
@@ -110,12 +101,19 @@ def test_messaging_rns_routes_degrade_cleanly():
     here because the daemon wherever the suite runs may be absent, an older
     snapshot, or the current build."""
     assert client.get("/api/v1/messaging/rns/status").status_code in (200, 503)
-    assert client.get("/api/v1/messaging/rns/peers").status_code in (200, 503)
+    assert client.get("/api/v1/messaging/rns/contacts").status_code in (200, 503)
+    assert client.get("/api/v1/messaging/rns/card").status_code in (200, 503)
+
+
+def test_reticulum_nodes_route_removed():
+    """The announce-driven /reticulum/nodes endpoint is gone — discovery moved to
+    the contact book at /messaging/rns/contacts."""
+    assert client.get("/api/v1/reticulum/nodes").status_code == 404
 
 
 def test_rns_direct_message_ui_wired():
-    """The messaging page links to the Reticulum node list, which opens a
-    per-peer conversation; pin that wiring in the static assets (no Node here)."""
+    """The Reticulum page links to the Direct Messages contact list, which opens
+    a per-peer conversation; pin that wiring in the static assets (no Node here)."""
     web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
     app_js = (web / "app.js").read_text()
     cli_js = (web / "cli.js").read_text()
@@ -123,11 +121,11 @@ def test_rns_direct_message_ui_wired():
     # stickBottom log auto-scrolls and makes the link hard to click).
     reti_block = app_js[app_js.index("reticulum: {"):app_js.index("meshtastic: {")]
     assert 'to: "rns_nodes"' in reti_block, "Reticulum page lost the Direct Messages link"
-    msg_block = app_js[app_js.index("messaging: {"):app_js.index("rns_nodes:")]
-    assert 'to: "rns_nodes"' not in msg_block, "Direct Messages link should not be on the Messaging page"
     assert "rns_nodes:" in app_js and "rns_chat:" in app_js, "RNS pages missing"
-    assert 'S.go("rns_chat"' in app_js, "node list no longer opens a conversation"
+    assert 'S.go("rns_chat"' in app_js, "contact list no longer opens a conversation"
     assert "function rnsSend" in app_js, "RNS send handler removed"
+    assert "/rns/contacts" in app_js, "contact list not wired to the contacts API"
+    assert "/rns/card" in app_js, "this-node card/QR not wired"
     assert 'obj.event === "rns_message"' in app_js, "WS no longer routes rns_message"
     # The shell must support param-passing navigation for the per-peer page.
     assert "go(pageKey, params = null)" in cli_js, "S.go param navigation removed"

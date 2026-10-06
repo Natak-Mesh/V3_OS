@@ -1,9 +1,22 @@
 """Reticulum/LXMF direct-message lane for the nucleus-messaging daemon.
 
 This is the live-stack half of the Reticulum messaging feature (the pure wire
-format + peer bookkeeping live in ``rns_proto.py``). It is imported and started
-by ``service.py`` ONLY when ``messaging.rns.enabled`` is set, so nodes with the
-lane off never pay the ~27 MB cost of loading the RNS/LXMF libraries.
+format + contact helpers live in ``rns_proto.py``; the persistent contact book in
+``rns_contacts.py``). It is imported and started by ``service.py`` ONLY when
+``messaging.rns.enabled`` is set, so nodes with the lane off never pay the
+~27 MB cost of loading the RNS/LXMF libraries.
+
+Discovery is contact-based, not announce-based
+----------------------------------------------
+There is no custom flooded ``nucleus.node`` announce any more. A node is
+reachable once its contact card (lxmf.delivery address + identity public key) has
+been imported into the ContactStore — over the WiFi mesh, by pasting a link, or
+by scanning a QR. On ``start`` every stored contact's public key is loaded into
+RNS (``Identity.remember``/``recall``) so we can send to it with no path-table or
+announce dependency; if a path isn't cached yet LXMF requests it and retries.
+The only announce we ever emit is the standard ``lxmf.delivery`` one, and only
+when asked — manually via ``announce()`` (operator button / on send) or, in
+``auto`` mode, on a timer.
 
 Hard rule — never start a second Reticulum stack
 ------------------------------------------------
@@ -18,8 +31,8 @@ to initialise if it is not reachable — the caller retries later.
 Identity
 --------
 A single NODE identity persisted at ``/var/lib/nucleus/rns/identity`` (created
-once, 0600). It is not tied to any phone/user. Both the standard lxmf.delivery
-destination and our custom nucleus.node destination are derived from it.
+once, 0600). It is not tied to any phone/user. The lxmf.delivery destination and
+this node's own shareable contact card are derived from it.
 """
 
 from __future__ import annotations
@@ -85,30 +98,38 @@ def rnsd_available() -> bool:
 class RnsLane:
     """Owns the RNS instance handle, the node identity and the LXMF router.
 
-    ``on_message(peer_hash, text, ts)`` is called for each inbound LXMF message;
-    the service wires it to its per-peer store. The RNS/LXMF imports happen in
-    ``start`` so merely constructing the lane (e.g. in a test) pulls in nothing.
+    ``on_message(peer_hash, text, ts, pubkey)`` is called for each inbound LXMF
+    message (``pubkey`` is the sender's hex public key when known, else None, so
+    the service can auto-add the sender as a contact). ``contacts`` is the
+    persistent ``ContactStore`` whose keyed entries are loaded into RNS on start.
+    The RNS/LXMF imports happen in ``start`` so merely constructing the lane
+    (e.g. in a test) pulls in nothing.
     """
 
-    def __init__(self, appdata: dict, display_name: str,
+    def __init__(self, display_name: str,
+                 node_id: Optional[int] = None,
+                 announce_mode: str = "manual",
                  announce_interval_secs: int = 1800,
                  propagation_node: bool = False,
-                 on_message: Optional[Callable[[str, str, float], None]] = None):
-        self.appdata = appdata
+                 contacts=None,
+                 on_message: Optional[Callable[..., None]] = None):
         self.display_name = display_name
+        self.node_id = node_id
+        self.announce_mode = announce_mode
         self.announce_interval = announce_interval_secs
         self.propagation_node = propagation_node
+        self.contacts = contacts
         self.on_message = on_message
-        self.peers = proto.PeerTable()
 
         self._rns = None
         self._identity = None
         self._router = None
         self._delivery = None            # our lxmf.delivery destination
-        self._node_dest = None           # our custom nucleus.node destination
         self._delivery_hash: Optional[bytes] = None
+        self._pubkey: Optional[bytes] = None   # our identity public key (for the card)
         self._stop = threading.Event()
         self._announce_thread: Optional[threading.Thread] = None
+        self._announced_for_send = False
         self._started = False
 
     # ── identity ────────────────────────────────────────────────
@@ -163,14 +184,7 @@ class RnsLane:
             self._identity, display_name=self.display_name
         )
         self._delivery_hash = self._delivery.hash
-
-        # Our custom nucleus.node destination. It must be an IN destination to be
-        # announceable (RNS only announces IN destinations); we never receive on
-        # it — discovery is via the announce handler — so no callbacks are set.
-        self._node_dest = RNS.Destination(
-            self._identity, RNS.Destination.IN, RNS.Destination.SINGLE,
-            proto.NUCLEUS_APP_NAME, proto.NUCLEUS_NODE_ASPECT,
-        )
+        self._pubkey = self._identity.get_public_key()
 
         if self.propagation_node:
             try:
@@ -179,13 +193,18 @@ class RnsLane:
             except Exception as e:
                 log(f"could not enable propagation node: {e}")
 
-        self._register_announce_handler()
+        # Load every stored contact's public key into RNS so we can address them
+        # with no announce/path dependency (replaces the old announce handler).
+        self._preload_contacts()
 
         self._started = True
-        self._announce_thread = threading.Thread(target=self._announce_loop, daemon=True)
-        self._announce_thread.start()
+        # Only run the announce timer in auto mode. In manual mode (the default)
+        # nothing is ever broadcast until announce() is called explicitly.
+        if self.announce_mode == "auto":
+            self._announce_thread = threading.Thread(target=self._announce_loop, daemon=True)
+            self._announce_thread.start()
         log(f"lane up; lxmf.delivery={RNS.prettyhexrep(self._delivery_hash)} "
-            f"display={self.display_name!r}")
+            f"display={self.display_name!r} announce_mode={self.announce_mode}")
         return True
 
     def stop(self) -> None:
@@ -201,64 +220,92 @@ class RnsLane:
             return None
         return self._delivery_hash.hex()
 
-    # ── announce ────────────────────────────────────────────────
-    def announce(self) -> None:
-        """Announce both destinations once (lxmf.delivery + nucleus.node)."""
-        if not self._started:
+    @property
+    def pubkey_hex(self) -> Optional[str]:
+        if self._pubkey is None:
+            return None
+        return self._pubkey.hex()
+
+    def card(self) -> Optional[dict]:
+        """This node's shareable contact card (None until the lane is up).
+
+        The card is everything a peer needs to message us: our lxmf.delivery
+        address and identity public key (plus a display name/id). Peers import it
+        over the mesh, as a pasted link, or via QR — no announce involved.
+        """
+        if not (self._delivery_hash and self._pubkey):
+            return None
+        return {
+            "v": proto.CARD_VERSION,
+            "name": self.display_name,
+            "id": self.node_id,
+            "lxmf_hash": self._delivery_hash.hex(),
+            "pubkey": self._pubkey.hex(),
+        }
+
+    # ── contact preload (replaces the announce handler) ──────────
+    def _preload_contacts(self) -> None:
+        """Teach RNS every known contact's identity so sends resolve offline.
+
+        As a shared-instance client RNS does not persist learned identities for
+        us, so each start we re-register every stored contact's public key with
+        ``Identity.remember`` (keyed by its lxmf.delivery hash). After this,
+        ``Identity.recall`` returns a usable identity for those peers with no
+        announce ever heard — a path request fills in routing on first send.
+        """
+        if self.contacts is None:
             return
+        n = 0
+        for c in self.contacts.with_keys():
+            if self.remember_contact(c.get("lxmf_hash", ""), c.get("pubkey", "")):
+                n += 1
+        if n:
+            log(f"preloaded {n} contact identit{'y' if n == 1 else 'ies'} into RNS")
+
+    def remember_contact(self, lxmf_hash_hex: str, pubkey_hex: str) -> bool:
+        """Register one contact's public key against its lxmf.delivery hash.
+
+        Returns True on success. Safe to call after start for a freshly imported
+        contact so it is immediately messageable without a restart.
+        """
+        import RNS
+        try:
+            dest_hash = bytes.fromhex(lxmf_hash_hex)
+            pub = bytes.fromhex(pubkey_hex)
+        except (ValueError, TypeError):
+            return False
+        try:
+            # packet_hash is only used for dedup/age bookkeeping; a hash of the
+            # key is a stable, collision-free stand-in since we have no packet.
+            RNS.Identity.remember(proto._sha256(pub), dest_hash, pub, app_data=None)
+            return True
+        except Exception as e:
+            log(f"could not remember contact {lxmf_hash_hex[:8]}: {e}")
+            return False
+
+    # ── announce (lxmf.delivery only, on demand) ─────────────────
+    def announce(self) -> bool:
+        """Announce our lxmf.delivery destination once. Returns True if emitted.
+
+        Called by the operator "Announce" button, automatically on the first
+        send so a fresh contact can resolve a path back to us, and (auto mode
+        only) on the interval timer. There is no custom node announce any more.
+        """
+        if not self._started:
+            return False
         try:
             self._router.announce(self._delivery_hash)
+            return True
         except Exception as e:
             log(f"lxmf.delivery announce error: {e}")
-        try:
-            self._node_dest.announce(app_data=proto.encode_node_appdata(self.appdata))
-        except Exception as e:
-            log(f"nucleus.node announce error: {e}")
+            return False
 
     def _announce_loop(self) -> None:
-        # First announce shortly after start so peers learn us quickly, then on
-        # the configured interval.
+        # Auto mode only. First announce shortly after start, then on the interval.
         time.sleep(5)
         while not self._stop.is_set():
             self.announce()
             self._stop.wait(self.announce_interval)
-
-    # ── discovery (nucleus.node announce handler) ────────────────
-    def _register_announce_handler(self) -> None:
-        import RNS
-
-        lane = self
-
-        class _NodeAnnounceHandler:
-            # Only fire for our custom aspect, not every announce on the mesh.
-            aspect_filter = f"{proto.NUCLEUS_APP_NAME}.{proto.NUCLEUS_NODE_ASPECT}"
-
-            def received_announce(self, destination_hash, announced_identity,
-                                  app_data):
-                lane._handle_node_announce(destination_hash, announced_identity, app_data)
-
-        RNS.Transport.register_announce_handler(_NodeAnnounceHandler())
-
-    def _handle_node_announce(self, destination_hash, announced_identity, app_data) -> None:
-        import RNS
-        parsed = proto.parse_node_appdata(app_data)
-        if parsed is None:
-            return
-        # The peer's lxmf.delivery address derives from the same identity that
-        # signed this nucleus.node announce — compute it so we know where to send.
-        try:
-            delivery_hash = RNS.Destination.hash(
-                announced_identity, proto.LXMF_APP_NAME, proto.LXMF_DELIVERY_ASPECT
-            )
-            delivery_hex = delivery_hash.hex()
-        except Exception:
-            delivery_hex = None
-        hops = None
-        try:
-            hops = RNS.Transport.hops_to(destination_hash)
-        except Exception:
-            pass
-        self.peers.update(parsed, delivery_hex, hops=hops)
 
     # ── inbound LXMF ─────────────────────────────────────────────
     def _on_lxmf(self, message) -> None:
@@ -270,8 +317,25 @@ class RnsLane:
         except Exception as e:
             log(f"inbound LXMF parse error: {e}")
             return
+        # Capture the sender's public key when the message carried a validated
+        # source identity (or RNS already knows it), so the service can auto-add
+        # the sender as a fully-usable contact for replies.
+        pubkey_hex = self._sender_pubkey(src)
         if self.on_message and text:
-            self.on_message(peer_hex, text, float(ts))
+            self.on_message(peer_hex, text, float(ts), pubkey_hex)
+
+    def _sender_pubkey(self, src_hash) -> Optional[str]:
+        """Best-effort hex public key for an inbound sender, or None."""
+        if not src_hash:
+            return None
+        import RNS
+        try:
+            ident = RNS.Identity.recall(src_hash)
+            if ident is not None:
+                return ident.get_public_key().hex()
+        except Exception:
+            pass
+        return None
 
     # ── outbound LXMF ────────────────────────────────────────────
     def send(self, dest_hash_hex: str, text: str) -> dict:
@@ -293,12 +357,23 @@ class RnsLane:
         except ValueError:
             return {"ok": False, "error": "bad destination hash"}
 
-        # We need the recipient identity to build an outbound destination. If the
-        # path/identity isn't known yet, ask the network and bail for now.
+        # The recipient identity is needed to build an outbound destination. For
+        # an imported contact it was loaded by _preload_contacts/remember_contact,
+        # so recall() returns it even though we've never heard an announce. If it
+        # is genuinely unknown (no contact), request a path and bail — but this is
+        # the exception now, not the norm.
         recipient_identity = RNS.Identity.recall(dest_hash)
         if recipient_identity is None:
             RNS.Transport.request_path(dest_hash)
-            return {"ok": False, "error": "path unknown; requested, retry shortly"}
+            return {"ok": False, "error": "unknown contact; no key on file — import its card"}
+
+        # Announce our own delivery destination once so the recipient can resolve
+        # a path back to us (we never announce on a timer in manual mode). First
+        # outbound to a peer also triggers a path request on their side via LXMF.
+        if not self._announced_for_send:
+            self.announce()
+            RNS.Transport.request_path(dest_hash)
+            self._announced_for_send = True
 
         dest = RNS.Destination(
             recipient_identity, RNS.Destination.OUT, RNS.Destination.SINGLE,

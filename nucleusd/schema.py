@@ -22,7 +22,7 @@ import hashlib
 import ipaddress
 import re
 import socket
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -268,19 +268,30 @@ class RnsMessagingConfig(BaseModel):
     to the already-running rnsd shared instance as a client (it never starts a
     second Reticulum stack); if rnsd is down the lane is simply skipped.
 
-    Only primitives live here — the announced app_data (node id, host, IPs,
-    version, capabilities) is DERIVED from the rest of the config and the VERSION
-    file, never hand-entered. The identity is created once at runtime under
-    /var/lib/nucleus/rns/ and is a NODE identity (phones never hold it).
+    Node discovery is NOT done with a custom flooded announce anymore. Each node
+    publishes a contact card (its lxmf.delivery address + identity public key)
+    that peers import out-of-band — over the WiFi mesh, by pasting a link, or by
+    scanning a QR — see ``messaging/rns_proto.py`` and ``rns_contacts.py``. The
+    only thing announced is the standard ``lxmf.delivery`` destination, and that
+    is MANUAL by default (``announce_mode: manual``): nothing is broadcast until
+    an operator presses "Announce" (or sends a message). Set ``announce_mode:
+    auto`` to also re-announce on ``announce_interval_secs``.
+
+    The identity is created once at runtime under /var/lib/nucleus/rns/ and is a
+    NODE identity (phones never hold it).
     """
 
     enabled: bool = Field(
         True,
         description="Enable the Reticulum/LXMF direct-message lane in nucleus-messaging.",
     )
+    announce_mode: Literal["manual", "auto"] = Field(
+        "manual",
+        description="manual = never announce lxmf.delivery automatically (operator triggers it); auto = re-announce every announce_interval_secs.",
+    )
     announce_interval_secs: int = Field(
         1800, ge=60, le=86400,
-        description="How often to re-announce the lxmf.delivery + nucleus.node destinations.",
+        description="In auto mode, how often to re-announce the lxmf.delivery destination.",
     )
     propagation_node: bool = Field(
         False,
@@ -506,42 +517,6 @@ class NucleusConfig(BaseModel):
         digest = hashlib.sha1(self.web.password.encode()).digest()
         return f"{self.web.user}:{{SHA}}{base64.b64encode(digest).decode()}"
 
-    # ---- Reticulum/LXMF node announce (derived; see RnsMessagingConfig) ----
-    @property
-    def node_capabilities(self) -> list[str]:
-        """Which Nucleus services this node currently offers, for the announce.
-
-        Derived from the enabled subsystems so a peer hearing a nucleus.node
-        announce knows what it can talk to. Order is stable for test fixtures.
-        """
-        caps: list[str] = []
-        if self.messaging.enabled:
-            caps.append("msg")
-        if self.voice.enabled:
-            caps.append("voice")
-        if self.meshtastic.enabled:
-            caps.append("lora")
-        if self.tak.variant != "none":
-            caps.append("tak")
-        return caps
-
-    def rns_announce_appdata(self, version: str) -> dict:
-        """Compact, msgpack-able payload for the custom `nucleus.node` announce.
-
-        Every value is derived (node id/host/IPs from the schema, version from
-        the VERSION file, caps from enabled services) — nothing here is operator
-        hand-entered. Kept small so the whole announce stays within Reticulum's
-        packet limit. `v` is the payload schema version for forward compat.
-        """
-        return {
-            "v": 1,
-            "id": self.node.id,
-            "host": self.node.hostname,
-            "mesh_ip": self.mesh_ip,
-            "br_lan": self.br_lan_ip,
-            "sw": version,
-            "caps": self.node_capabilities,
-        }
 
     @property
     def web_trusted_cidrs(self) -> list[str]:

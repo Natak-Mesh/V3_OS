@@ -11,7 +11,7 @@ import asyncio
 import json
 import socket
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/messaging", tags=["messaging"])
@@ -27,6 +27,12 @@ class SendBody(BaseModel):
 class RnsSendBody(BaseModel):
     dest: str = ""   # recipient lxmf.delivery hash (hex)
     text: str = ""
+
+
+class RnsImportBody(BaseModel):
+    link: str | None = None    # a nucleus-rns:// card link (or bare token)
+    card: dict | None = None   # or the raw card dict (e.g. pulled over the mesh)
+    source: str = "link"       # provenance tag: link / qr / mesh
 
 
 def _rpc(req: dict) -> dict:
@@ -64,8 +70,10 @@ def send(body: SendBody) -> dict:
 
 
 # ── Reticulum/LXMF direct-message lane ───────────────────────────
-# Per-peer DMs over LXMF (via rnsd), distinct from the WiFi/LoRa broadcast log
-# above. The daemon owns the lane + per-peer store; these just relay control
+# Per-contact DMs over LXMF (via rnsd), distinct from the WiFi/LoRa broadcast
+# log above. Contacts are explicit now (no custom announce): import a peer's
+# card over the mesh / as a link / via QR, or let an inbound message auto-add
+# the sender. The daemon owns the lane + stores; these just relay control
 # commands. All return cleanly (empty lists / disabled flags) when the lane is
 # off, so the UI can render without special-casing.
 @router.get("/rns/status")
@@ -73,9 +81,79 @@ def rns_status() -> dict:
     return _rpc({"cmd": "status"}).get("rns", {"enabled": False})
 
 
-@router.get("/rns/peers")
-def rns_peers() -> dict:
-    return _rpc({"cmd": "rns_peers"})
+@router.get("/rns/contacts")
+def rns_contacts() -> dict:
+    """Imported/known contacts (replaces the old announce-discovered peers)."""
+    return _rpc({"cmd": "rns_contacts"})
+
+
+@router.post("/rns/contacts")
+def rns_import(body: RnsImportBody) -> dict:
+    """Import a contact from a nucleus-rns:// link, a raw card, or a mesh pull."""
+    res = _rpc({"cmd": "rns_import", "link": body.link,
+                "card": body.card, "source": body.source})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "import failed"))
+    return res
+
+
+@router.get("/rns/mesh-peers")
+def rns_mesh_peers() -> dict:
+    """Nucleus nodes reachable over the WiFi mesh, each with its contact card.
+
+    Mirrors the Meshtastic one-click-join discovery: find neighbours from Babel,
+    pull each one's ``/rns/card`` over HTTP, and return the verifiable cards so
+    the UI can offer a one-tap "Add". Nodes that don't answer / have the lane off
+    are simply omitted. No card is trusted here — import verifies address↔key.
+    """
+    from .. import mesh_peers
+    out = []
+    for ip in mesh_peers.babel_peer_ips():
+        data = mesh_peers.fetch_peer_json(ip, "/api/v1/messaging/rns/card")
+        card = (data or {}).get("card")
+        link = (data or {}).get("link")
+        if card and link:
+            out.append({"ip": ip, "card": card, "link": link})
+    return {"ok": True, "peers": out}
+
+
+@router.delete("/rns/contacts/{dest}")
+def rns_remove(dest: str) -> dict:
+    res = _rpc({"cmd": "rns_remove", "dest": dest})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "remove failed"))
+    return res
+
+
+@router.get("/rns/card")
+def rns_card() -> dict:
+    """This node's own shareable contact card + its nucleus-rns:// link."""
+    return _rpc({"cmd": "rns_card"})
+
+
+@router.get("/rns/card/qr")
+def rns_card_qr() -> Response:
+    """SVG QR code of this node's card link, scannable by another node."""
+    res = _rpc({"cmd": "rns_card"})
+    link = res.get("link")
+    if not link:
+        raise HTTPException(status_code=503, detail=res.get("error", "card not ready"))
+    from . import rns_proto as proto
+    try:
+        svg = proto.card_qr_svg(link)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return Response(content=svg, media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@router.post("/rns/announce")
+def rns_announce() -> dict:
+    """Emit this node's lxmf.delivery announce once (operator-triggered)."""
+    res = _rpc({"cmd": "rns_announce"})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "announce failed"))
+    return res
 
 
 @router.get("/rns/messages")

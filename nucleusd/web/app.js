@@ -134,6 +134,7 @@ function msgUpsert(m) {
 // Reticulum/LXMF direct-message state. Separate from the broadcast chat above:
 // DMs are per-peer, keyed by the peer's lxmf.delivery hash.
 let RNS_DRAFT = "";
+let RNS_IMPORT = "";       // paste box draft for importing a nucleus-rns:// card
 let RNS_CACHE = {};        // peer hash -> ordered (oldest→newest) message list
 // Merge a DM into the per-peer cache (by peer+ts+direction; no server id).
 function rnsUpsert(m) {
@@ -838,8 +839,10 @@ const PAGES = {
     },
   },
 
-  // Reticulum/LXMF node list: every Nucleus node discovered via its
-  // nucleus.node announce. Selecting one opens a per-peer conversation.
+  // Reticulum/LXMF Direct Messages. No announce-based discovery any more:
+  // this page shows (1) THIS node's shareable contact card + QR, (2) the saved
+  // contacts (each opens a conversation), (3) Nucleus nodes found over the WiFi
+  // mesh with a one-tap Add, and (4) a paste box to import a nucleus-rns:// link.
   rns_nodes: {
     title: "Direct Messages",
     dynamic: 5000,
@@ -859,25 +862,50 @@ const PAGES = {
       let head = `<div class="content"><div class="kv"><span>status ` +
         `<b class="${s.started ? "ok" : "warn"}">${s.started ? "up" : "starting…"}</b></span></div>`;
       if (s.address) head += `<div class="kv"><span>this node <b>${esc(s.address)}</b></span></div>`;
-      head += `</div>`;
+      head += `<div class="kv"><span>announce <b>${esc(s.announce_mode || "manual")}</b></span></div>`;
+      head += `<div id="rns-card-slot"></div></div>`;
       items.push({ type: "content", html: head });
+      items.push({ type: "button", label: "» Show my contact card / QR", onEnter: rnsShowCard });
+      items.push({ type: "button", label: "» Announce now (make me discoverable)", onEnter: rnsAnnounce });
 
-      const r = await jget("/api/v1/messaging/rns/peers");
-      const peers = (r.ok && r.d.peers) ? r.d.peers : [];
+      // ── saved contacts ──────────────────────────────────────
+      const r = await jget("/api/v1/messaging/rns/contacts");
+      const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
       items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">Nucleus nodes</div>` +
-        (peers.length ? "" : `<div class="off">no nodes discovered yet</div>`) + `</div>` });
-      peers.forEach((p) => {
-        const caps = (p.caps || []).join(",") || "—";
-        const hops = p.hops != null ? `${p.hops}h` : "—";
+        `<div class="page-title" style="padding-left:0">Contacts</div>` +
+        (contacts.length ? "" : `<div class="off">no contacts yet — add one below</div>`) + `</div>` });
+      contacts.forEach((c) => {
+        const who = c.name || (c.id != null ? String(c.id) : c.lxmf_hash.slice(0, 10));
+        const key = c.pubkey ? "" : "  ·  no key yet";
+        const seen = c.last_seen ? `  ·  seen ${ago(c.last_seen)}` : "";
         items.push({
           type: "nav",
-          label: `${p.host || p.id || "?"}  ·  ${hops}  ·  ${caps}  ·  seen ${ago(p.last_seen)}`,
+          label: `${who}  ·  ${c.source}${key}${seen}`,
           to: "rns_chat",
-          // onEnter navigates with params (the peer's delivery hash + host).
-          onEnter: (S) => S.go("rns_chat", { hash: p.lxmf_hash, host: p.host || String(p.id) }),
+          onEnter: (S) => S.go("rns_chat", { hash: c.lxmf_hash, host: who }),
         });
       });
+
+      // ── Nucleus nodes on the WiFi mesh (pull their cards) ────
+      const mp = await jget("/api/v1/messaging/rns/mesh-peers");
+      const mesh = (mp.ok && mp.d.peers) ? mp.d.peers : [];
+      const known = new Set(contacts.map((c) => c.lxmf_hash));
+      const addable = mesh.filter((p) => p.card && !known.has(p.card.lxmf_hash));
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">On the WiFi mesh</div>` +
+        (addable.length ? "" : `<div class="off">no new nodes found on the mesh</div>`) + `</div>` });
+      addable.forEach((p) => {
+        const who = p.card.name || String(p.card.id || p.ip);
+        items.push({ type: "button", label: `» Add ${who} (${p.ip})`,
+          onEnter: (S) => rnsAddMesh(S, p.card) });
+      });
+
+      // ── paste-import a card link ─────────────────────────────
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">Import a card link</div></div>` });
+      items.push({ type: "ftext", label: "Card link", value: RNS_IMPORT, max: 400,
+        onChange: (v) => RNS_IMPORT = v });
+      items.push({ type: "button", label: "» Import pasted link", onEnter: rnsImportLink });
       return { items };
     },
   },
@@ -1149,6 +1177,52 @@ async function rnsSend(S, peer, text) {
   RNS_DRAFT = "";
   S.msg("sent");
   // Inbound/echoed DMs also arrive over the WS; reload for an immediate view.
+  return S.reload();
+}
+
+// Show this node's own contact card: its nucleus-rns:// link + a scannable QR.
+// Another node imports it by scanning the QR (then pasting) or pasting the link.
+async function rnsShowCard(S) {
+  const { ok, d } = await jget("/api/v1/messaging/rns/card");
+  const slot = document.getElementById("rns-card-slot");
+  if (!ok || !d.link) {
+    if (slot) slot.innerHTML = "";
+    return S.msg("card not ready — rnsd/lane still starting", false);
+  }
+  let svg = "";
+  try { svg = await (await fetch("/api/v1/messaging/rns/card/qr")).text(); } catch (e) {}
+  if (slot) slot.innerHTML =
+    `<div class="kv"><span>my card <b>${esc(d.card.name || "")}</b></span></div>` +
+    (svg ? `<div class="qr">${svg}</div>` : "") +
+    `<div class="hint" style="padding-left:0;word-break:break-all">${esc(d.link)}</div>`;
+  S.msg("");
+}
+
+// Announce this node's lxmf.delivery once so peers can resolve a path to it.
+async function rnsAnnounce(S) {
+  const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/announce", {});
+  if (!ok) return S.msg("announce failed: " + (d.detail || "error"), false);
+  return S.msg("announced");
+}
+
+// Add a contact pulled from a mesh node's card (verified server-side on import).
+async function rnsAddMesh(S, card) {
+  const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/contacts",
+    { card, source: "mesh" });
+  if (!ok) return S.msg("add failed: " + (d.detail || "error"), false);
+  S.msg("added " + (card.name || card.id || "contact"));
+  return S.reload();
+}
+
+// Import a contact from a pasted nucleus-rns:// link.
+async function rnsImportLink(S) {
+  const link = (RNS_IMPORT || "").trim();
+  if (!link) return S.msg("paste a nucleus-rns:// link first", false);
+  const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/contacts",
+    { link, source: "link" });
+  if (!ok) return S.msg("import failed: " + (d.detail || "error"), false);
+  RNS_IMPORT = "";
+  S.msg("imported " + ((d.contact && (d.contact.name || d.contact.id)) || "contact"));
   return S.reload();
 }
 

@@ -656,25 +656,11 @@ def _read_cache():
 def _babel_peer_ips():
     """Return mesh node IPs discovered from Babel routes.
 
-    `ip route show proto babel` gives next-hop IPs, each of which is a
-    reachable mesh node running nucleusd.
+    Thin wrapper over the shared ``nucleusd.mesh_peers`` helper so Meshtastic
+    channel sharing and the Reticulum contact exchange use one discovery path.
     """
-    ips = []
-    try:
-        import re
-        result = subprocess.run(
-            ['ip', 'route', 'show', 'proto', 'babel', 'dev', 'wlan1'],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in result.stdout.strip().split('\n'):
-            if not line:
-                continue
-            m = re.search(r'via\s+(\S+)', line)
-            if m and m.group(1) not in ips:
-                ips.append(m.group(1))
-    except Exception:
-        pass
-    return ips
+    from .. import mesh_peers
+    return mesh_peers.babel_peer_ips()
 
 
 def _fetch_peer_config(ip):
