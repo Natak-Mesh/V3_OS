@@ -77,6 +77,16 @@ def main() -> None:
     else:
         print(f"radio_init: region already {current}")
 
+    # Read the radio config into the cache so peers can see our channel and
+    # offer a one-click Join without an operator first pressing "Read" in the
+    # UI. Same function the Read button runs. Best-effort: never block boot.
+    try:
+        from .meshtastic_api import _read_config_from_radio
+        _read_config_from_radio()
+        print("radio_init: radio config cached")
+    except Exception as e:  # noqa: BLE001 — best-effort init
+        print(f"radio_init: config read failed: {e}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()
