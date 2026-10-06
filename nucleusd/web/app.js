@@ -148,8 +148,11 @@ function rnsUpsert(m) {
 let VOICE_CH = null;
 
 // Tailscale page state: auth-key input draft + selected tailnet profile.
+// TS_ACCT holds the chosen dropdown label; TS_ACCT_IDS maps label -> profile id
+// (an account can be logged into multiple tailnets, so the id disambiguates).
 let TS_AUTHKEY = "";
 let TS_ACCT = null;
+let TS_ACCT_IDS = {};
 
 function meshFillFrom(cfg) {
   M = {
@@ -423,8 +426,19 @@ const PAGES = {
       const { d: ad } = await jget("/api/v1/tailscale/accounts");
       const accts = (ad && ad.accounts) || [];
       if (accts.length > 1) {
-        if (!TS_ACCT) TS_ACCT = (accts.find((a) => a.active) || accts[0]).account;
-        const opts = accts.map((a) => a.account);
+        // Label each option by tailnet + account so profiles are distinguishable
+        // even when one account is logged into several tailnets; map back to the
+        // unique profile id, which is what we send to /switch.
+        TS_ACCT_IDS = {};
+        const opts = accts.map((a) => {
+          const label = `${a.tailnet || "?"} — ${a.account}` + (a.active ? " *" : "");
+          TS_ACCT_IDS[label] = a.id;
+          return label;
+        });
+        const activeAcct = accts.find((a) => a.active) || accts[0];
+        if (!TS_ACCT || !(TS_ACCT in TS_ACCT_IDS)) {
+          TS_ACCT = opts[accts.indexOf(activeAcct)];
+        }
         items.push(
           { type: "content", html: `<div class="content"><div class="page-title" ` +
             `style="padding-left:0">Switch tailnet</div></div>` },
@@ -1278,8 +1292,10 @@ async function tsLogout(S) {
 
 async function tsSwitch(S) {
   if (!TS_ACCT) return S.msg("pick a tailnet first", false);
+  const id = TS_ACCT_IDS[TS_ACCT];
+  if (!id) return S.msg("unknown profile", false);
   S.msg("switching…");
-  const { ok, d } = await jsend("POST", "/api/v1/tailscale/switch", { account: TS_ACCT });
+  const { ok, d } = await jsend("POST", "/api/v1/tailscale/switch", { account: id });
   if (!ok) return S.msg("switch failed: " + (d.detail || "error"), false);
   S.msg("switched to " + TS_ACCT);
   return S.reload();

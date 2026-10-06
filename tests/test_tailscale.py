@@ -104,6 +104,38 @@ def test_accounts_parses_switch_list(monkeypatch):
     ]
 
 
+def test_accounts_same_account_multiple_tailnets(monkeypatch):
+    # One account logged into two tailnets: the profile ids must stay distinct
+    # so the UI can switch to the right one.
+    out = (
+        "ID     Tailnet          Account\n"
+        "abc123 personal.ts.net  alice@example.com*\n"
+        "def456 acme-corp.ts.net alice@example.com\n"
+    )
+    monkeypatch.setattr(ts.shutil, "which", lambda _: "/usr/bin/tailscale")
+    monkeypatch.setattr(ts, "_run", lambda *a, **k: _cp(out=out))
+    accts = ts.accounts()
+    assert accts == [
+        {"id": "abc123", "tailnet": "personal.ts.net", "account": "alice@example.com", "active": True},
+        {"id": "def456", "tailnet": "acme-corp.ts.net", "account": "alice@example.com", "active": False},
+    ]
+    assert accts[0]["id"] != accts[1]["id"]
+
+
+def test_switch_by_profile_id(monkeypatch):
+    seen = {}
+
+    def fake(args, **k):
+        seen["args"] = args
+        return _cp(rc=0)
+
+    monkeypatch.setattr(ts.shutil, "which", lambda _: "/usr/bin/tailscale")
+    monkeypatch.setattr(ts, "_run", fake)
+    r = ts.switch("def456")
+    assert r == {"switched": "def456"}
+    assert seen["args"] == ["switch", "def456"]
+
+
 def test_switch_builds_command(monkeypatch):
     seen = {}
 
