@@ -121,6 +121,21 @@ Poll update state + log while an update runs.
 curl -s http://localhost:8080/api/v1/update/progress
 ```
 
+### `POST /api/v1/power/reboot`
+Reboot the node. Returns before the node goes down.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/power/reboot
+# {"started":true}
+```
+
+### `POST /api/v1/power/poweroff`
+Power off the node. Returns before the node goes down; a power off needs physical
+access to bring the node back.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/power/poweroff
+# {"started":true}
+```
+
 
 ---
 

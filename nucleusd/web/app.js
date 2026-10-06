@@ -200,6 +200,7 @@ const PAGES = {
         items.push({ type: "nav", label, to: "tak" });
       }
       items.push({ type: "nav", label: "SYSTEM UPDATE", to: "update" });
+      items.push({ type: "nav", label: "POWER", to: "power" });
       return { items };
     },
   },
@@ -755,6 +756,23 @@ const PAGES = {
     },
   },
 
+  // Power: reboot / power off this node. Each action confirms first (see
+  // powerOp) because it takes the node — and its mesh links — down immediately.
+  power: {
+    title: "Power",
+    async build() {
+      return {
+        items: [
+          { type: "content", html: `<div class="content"><div class="kv">` +
+            `<span class="warn">These actions take this node down immediately.` +
+            ` A power off needs physical access to bring it back.</span></div></div>` },
+          { type: "button", label: "» Reboot", onEnter: (S) => powerOp(S, "reboot") },
+          { type: "button", label: "» Power off", onEnter: (S) => powerOp(S, "poweroff") },
+        ],
+      };
+    },
+  },
+
   // Messaging: one conversation, delivered over WiFi + LoRa into a single store.
   // A message from a plain Meshtastic radio appears here like any other; the
   // per-message badge shows which transport(s) delivered it.
@@ -1265,6 +1283,22 @@ async function tsSwitch(S) {
   if (!ok) return S.msg("switch failed: " + (d.detail || "error"), false);
   S.msg("switched to " + TS_ACCT);
   return S.reload();
+}
+
+// Reboot / power off the node. The API returns before the transition, after
+// which the node (and its web UI) drops — so there is no progress to poll.
+async function powerOp(S, action) {
+  const verb = action === "poweroff" ? "Power off" : "Reboot";
+  if (!confirm(`${verb} this node now? It will go down immediately` +
+    (action === "poweroff" ? " and needs physical access to restart." : ".")))
+    return;
+  S.msg(`${verb.toLowerCase()}…`);
+  const { ok, d } = await jsend("POST", `/api/v1/power/${action}`);
+  if (ok && d.started) {
+    S.msg(action === "poweroff" ? "powering off — node going down" : "rebooting — node going down");
+  } else {
+    S.msg("failed: " + (d.detail || "error"), false);
+  }
 }
 
 // Launch the node update, then poll progress. The update restarts nucleusd

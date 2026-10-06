@@ -84,6 +84,7 @@ Selectable item types: navigation links, action buttons, and editable fields
 | TAK SERVER *(optional)* | [TAK Server](takserver.md) |
 | OPENTAKSERVER *(optional)* | [OpenTAKServer](opentakserver.md#web-ui-page) |
 | SYSTEM UPDATE | [Update](update.md) |
+| POWER | [Power](power.md) |
 
 Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md),
 [OpenTAKServer](opentakserver.md) (either/or).

@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from . import config as cfgio
 from . import status as statusmod
+from . import power as powermod
 from . import update as updatemod
 from .apply import apply as apply_config
 from .schema import NucleusConfig
@@ -233,6 +234,18 @@ def post_update_start() -> dict:
 def get_update_progress() -> dict:
     """Stream update status + log from the on-disk state files."""
     return updatemod.progress()
+
+
+@app.post("/api/v1/power/reboot")
+def post_power_reboot() -> dict:
+    """Reboot the node (returns before the node goes down)."""
+    return powermod.reboot()
+
+
+@app.post("/api/v1/power/poweroff")
+def post_power_poweroff() -> dict:
+    """Power off the node (returns before the node goes down)."""
+    return powermod.poweroff()
 
 
 # --- Web UI (mounted last so it doesn't shadow /api routes) -----------------
