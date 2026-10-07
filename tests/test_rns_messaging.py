@@ -227,3 +227,98 @@ def test_lane_preloads_contacts_into_rns():
         del _sys.modules["RNS"]
 
     assert remembered == [(FIXTURE_LXMF, FIXTURE_PUB)]
+
+
+# ── path discovery is explicit and send emits nothing on its own ─
+class _FakeTransport:
+    """Records request_path calls and answers has_path from a fixed set."""
+
+    requested: list = []
+    paths: set = set()
+    hops_map: dict = {}
+
+    @classmethod
+    def reset(cls):
+        cls.requested = []
+        cls.paths = set()
+        cls.hops_map = {}
+
+    @staticmethod
+    def request_path(dest_hash):
+        _FakeTransport.requested.append(dest_hash.hex())
+
+    @staticmethod
+    def has_path(dest_hash):
+        return dest_hash.hex() in _FakeTransport.paths
+
+    @staticmethod
+    def hops_to(dest_hash):
+        return _FakeTransport.hops_map.get(dest_hash.hex())
+
+    @staticmethod
+    def next_hop_interface(dest_hash):
+        return "TCPInterface[Entry Node]"
+
+
+def _started_lane(monkeypatch):
+    """An RnsLane marked started, with RNS.Transport/Identity faked out."""
+    from nucleusd.messaging import rns_lane
+
+    _FakeTransport.reset()
+    fake_rns = types.ModuleType("RNS")
+    fake_rns.Transport = _FakeTransport
+    fake_rns.Identity = types.SimpleNamespace(recall=lambda h: object())
+    monkeypatch.setitem(sys.modules, "RNS", fake_rns)
+    monkeypatch.setitem(sys.modules, "LXMF", types.ModuleType("LXMF"))
+    lane = rns_lane.RnsLane(display_name="0042-nucleus")
+    lane._started = True
+    return lane
+
+
+def test_request_path_emits_one_request(monkeypatch):
+    lane = _started_lane(monkeypatch)
+    res = lane.request_path(FIXTURE_LXMF)
+    assert res["ok"] is True
+    assert _FakeTransport.requested == [FIXTURE_LXMF]
+
+
+def test_request_path_rejects_bad_hash(monkeypatch):
+    lane = _started_lane(monkeypatch)
+    res = lane.request_path("nothex")
+    assert res["ok"] is False
+    assert _FakeTransport.requested == []
+
+
+def test_path_info_reads_table_without_emitting(monkeypatch):
+    lane = _started_lane(monkeypatch)
+    _FakeTransport.paths = {FIXTURE_LXMF}
+    _FakeTransport.hops_map = {FIXTURE_LXMF: 3}
+    info = lane.path_info(FIXTURE_LXMF)
+    assert info == {"known": True, "hops": 3, "interface": "TCPInterface[Entry Node]"}
+    # Reading the path table must never request a path.
+    assert _FakeTransport.requested == []
+
+
+def test_path_info_unknown_when_no_path(monkeypatch):
+    lane = _started_lane(monkeypatch)
+    info = lane.path_info(FIXTURE_LXMF)
+    assert info == {"known": False, "hops": None, "interface": None}
+
+
+def test_send_without_path_refuses_and_emits_nothing(monkeypatch):
+    """LPI: a send with no known path must NOT announce or request a path; it
+    refuses so LXMF never fires its own path requests on delivery attempts."""
+    lane = _started_lane(monkeypatch)
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False
+    assert "no path" in res["error"]
+    assert _FakeTransport.requested == []
+
+
+def test_send_unknown_contact_does_not_request_path(monkeypatch):
+    """A send to a contact with no recalled key refuses without emitting."""
+    lane = _started_lane(monkeypatch)
+    sys.modules["RNS"].Identity = types.SimpleNamespace(recall=lambda h: None)
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False
+    assert _FakeTransport.requested == []

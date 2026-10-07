@@ -136,6 +136,7 @@ function msgUpsert(m) {
 let RNS_DRAFT = "";
 let RNS_IMPORT = "";       // paste box draft for importing a nucleus-rns:// card
 let RNS_CACHE = {};        // peer hash -> ordered (oldest→newest) message list
+let RNS_PATH_SEEN = {};    // peer hash -> epoch of the last operator path request
 // Merge a DM into the per-peer cache (by peer+ts+direction; no server id).
 function rnsUpsert(m) {
   if (!m || !m.peer) return;
@@ -463,6 +464,7 @@ const PAGES = {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
       const items = [
         { type: "nav", label: "» DIRECT MESSAGES (Reticulum)", to: "rns_nodes" },
+        { type: "nav", label: "» INTERFACES", to: "rns_interfaces" },
       ];
 
       if (!ok || !s.running) {
@@ -479,6 +481,21 @@ const PAGES = {
         `<div class="kv"><span>rx <b>${fmtBytes(t.rxb)}</b></span>` +
         `<span>tx <b>${fmtBytes(t.txb)}</b></span></div></div>`;
       items.push({ type: "content", html: head });
+
+      return { items };
+    },
+  },
+
+  // Reticulum interfaces table, split off the main Reticulum page.
+  rns_interfaces: {
+    title: "Reticulum Interfaces",
+    dynamic: 5000,
+    async build() {
+      const { ok, d: s } = await jget("/api/v1/reticulum/status");
+      if (!ok || !s.running) {
+        return { items: [{ type: "content", html: `<div class="content">` +
+          `<div class="off">rnsd is not running — no Reticulum status available</div></div>` }] };
+      }
 
       const ifaces = s.interfaces || [];
       let h = `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div>`;
@@ -499,9 +516,7 @@ const PAGES = {
         h += `</table>`;
       }
       h += `</div>`;
-      items.push({ type: "content", html: h });
-
-      return { items };
+      return { items: [{ type: "content", html: h }] };
     },
   },
 
@@ -930,6 +945,26 @@ const PAGES = {
       if (r.ok) (r.d.messages || []).forEach(rnsUpsert);
       const list = RNS_CACHE[peer] || [];
       let h = `<div class="hint">Direct LXMF message to ${esc(p.host || peer)}.</div>`;
+
+      // Path status: whether rnsd has a path to this contact right now, how many
+      // hops, and how long since it was last heard (contact last_seen). Reading
+      // this emits nothing; the operator requests a path explicitly below.
+      const pr = await jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer) + "/path");
+      const path = (pr.ok && pr.d.path) ? pr.d.path : { known: false };
+      let ph = `<div class="content"><div class="kv"><span>path ` +
+        `<b class="${path.known ? "ok" : "warn"}">${path.known ? "known" : "none"}</b></span>`;
+      if (path.known) {
+        ph += `<span>hops <b>${path.hops != null ? path.hops : "—"}</b></span>`;
+        if (path.interface) ph += `<span>via <b>${esc(path.interface)}</b></span>`;
+      }
+      ph += `</div>`;
+      const seen = RNS_PATH_SEEN[peer];
+      if (seen) ph += `<div class="kv"><span>path requested <b>${ago(seen)} ago</b></span></div>`;
+      ph += `</div>`;
+      items.push({ type: "content", html: ph });
+      items.push({ type: "button", label: "» Request path (find this contact)",
+        onEnter: (S) => rnsRequestPath(S, peer) });
+
       h += `<div class="content">`;
       if (!r.ok) h += `<div class="warn">messaging service unavailable</div>`;
       else if (!list.length) h += `<div class="off">no messages yet</div>`;
@@ -944,15 +979,12 @@ const PAGES = {
         h += `</table>`;
       }
       h += `</div>`;
-      return {
-        items: [
-          { type: "content", html: h },
-          { type: "compose", key: "rns_text", value: RNS_DRAFT, max: 200,
-            placeholder: "Type a message",
-            sendLabel: "Send", onChange: (v) => RNS_DRAFT = v,
-            onSubmit: (S, text) => rnsSend(S, peer, text) },
-        ],
-      };
+      items.push({ type: "content", html: h });
+      items.push({ type: "compose", key: "rns_text", value: RNS_DRAFT, max: 200,
+        placeholder: "Type a message",
+        sendLabel: "Send", onChange: (v) => RNS_DRAFT = v,
+        onSubmit: (S, text) => rnsSend(S, peer, text) });
+      return { items };
     },
   },
 
@@ -1203,6 +1235,19 @@ async function rnsAnnounce(S) {
   const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/announce", {});
   if (!ok) return S.msg("announce failed: " + (d.detail || "error"), false);
   return S.msg("announced");
+}
+
+// Emit ONE path request for a contact (announces off → this is how we find it).
+// Records the request time so the page can show how long since we last looked.
+async function rnsRequestPath(S, peer) {
+  const { ok, d } = await jsend("POST",
+    "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer) + "/path", {});
+  if (!ok) return S.msg("path request failed: " + (d.detail || "error"), false);
+  RNS_PATH_SEEN[peer] = Math.floor(Date.now() / 1000);
+  const known = d.path && d.path.known;
+  S.msg(known ? "path known (" + (d.path.hops != null ? d.path.hops + " hops" : "—") + ")"
+              : "path requested — waiting for a response");
+  return S.reload();
 }
 
 // Add a contact pulled from a mesh node's card (verified server-side on import).

@@ -331,10 +331,20 @@ message also auto-adds its sender.
   untrusted until imported (import re-verifies address↔key).
 - `POST /rns/announce` — emit this node's `lxmf.delivery` announce once
   (operator-triggered): `{"ok":true,"announced":bool}`.
+- `GET /rns/contacts/{dest}/path` — read-only path state for a contact:
+  `{"ok":true,"path":{"known":bool,"hops":<n|null>,"interface":"<name>|null"}}`.
+  Reads rnsd's local path table only — **emits no radio traffic**. Pair `known`
+  with the contact's `last_seen` for path age.
+- `POST /rns/contacts/{dest}/path` — operator-triggered path discovery: emit
+  **one** path request for the contact over every RNS interface; does not retry.
+  Returns `{"ok":true,"requested":true,"path":{...}}`. With announces off this is
+  the only way a contact becomes reachable. `400` if the lane is down.
 - `GET /rns/messages?peer=<hash>&since=<ts>` — conversation history (omit `peer`
   for all peers merged).
-- `POST /rns/messages` — send a DM. Body `{"dest":"<lxmf hash>","text":"..."}`;
-  `400` on failure (e.g. path not yet known — retry shortly).
+- `POST /rns/messages` — send a DM. Body `{"dest":"<lxmf hash>","text":"..."}`.
+  A send **never** announces or requests a path on its own (LPI). It `400`s with
+  `no path to contact — request a path first` when no path is known — request one
+  via `POST /rns/contacts/{dest}/path`, then send.
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/messaging/rns/messages \
   -H 'Content-Type: application/json' -d '{"dest":"<hex>","text":"hi node"}'

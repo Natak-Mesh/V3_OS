@@ -103,6 +103,9 @@ def test_messaging_rns_routes_degrade_cleanly():
     assert client.get("/api/v1/messaging/rns/status").status_code in (200, 503)
     assert client.get("/api/v1/messaging/rns/contacts").status_code in (200, 503)
     assert client.get("/api/v1/messaging/rns/card").status_code in (200, 503)
+    # Per-contact path status (read-only) and the explicit path-request POST.
+    assert client.get("/api/v1/messaging/rns/contacts/abc/path").status_code in (200, 503)
+    assert client.post("/api/v1/messaging/rns/contacts/abc/path").status_code in (200, 400, 503)
 
 
 def test_reticulum_nodes_route_removed():
@@ -127,6 +130,11 @@ def test_rns_direct_message_ui_wired():
     assert "/rns/contacts" in app_js, "contact list not wired to the contacts API"
     assert "/rns/card" in app_js, "this-node card/QR not wired"
     assert 'obj.event === "rns_message"' in app_js, "WS no longer routes rns_message"
+    # Explicit path discovery: a Request path button + its handler, wired to the
+    # per-contact path endpoint. Must be operator-triggered (no auto path calls).
+    assert "function rnsRequestPath" in app_js, "path request handler removed"
+    assert '/path"' in app_js, "contact path endpoint not wired"
+    assert "Request path" in app_js, "Request path button removed"
     # The shell must support param-passing navigation for the per-peer page.
     assert "go(pageKey, params = null)" in cli_js, "S.go param navigation removed"
 

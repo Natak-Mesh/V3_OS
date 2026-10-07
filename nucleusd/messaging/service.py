@@ -370,6 +370,10 @@ class MessagingService:
             return self._rns_remove(req.get("dest", ""))
         if cmd == "rns_announce":
             return self._rns_announce()
+        if cmd == "rns_path":
+            return self._rns_path(req.get("dest", ""))
+        if cmd == "rns_request_path":
+            return self._rns_request_path(req.get("dest", ""))
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
 
     # ── Reticulum/LXMF lane helpers ──────────────────────────────
@@ -433,6 +437,18 @@ class MessagingService:
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
             return {"ok": False, "error": "rns lane not available"}
         return {"ok": True, "announced": self._rns_lane.announce()}
+
+    def _rns_path(self, dest: str) -> dict:
+        """Read-only path-table state for one contact (emits nothing)."""
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": False, "error": "rns lane not available"}
+        return {"ok": True, "path": self._rns_lane.path_info(dest)}
+
+    def _rns_request_path(self, dest: str) -> dict:
+        """Operator-triggered: emit ONE path request for a contact."""
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": False, "error": "rns lane not available"}
+        return self._rns_lane.request_path(dest)
 
     def _rns_history(self, peer, since: float) -> dict:
         if not (self.rns_enabled and self._rns_store):

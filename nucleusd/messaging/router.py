@@ -156,6 +156,29 @@ def rns_announce() -> dict:
     return res
 
 
+@router.get("/rns/contacts/{dest}/path")
+def rns_path(dest: str) -> dict:
+    """Read-only path-table state for a contact (known/hops/interface).
+
+    Reads rnsd's local path table only — emits no radio traffic. Pair ``known``
+    with the contact's last_seen for path age in the UI.
+    """
+    return _rpc({"cmd": "rns_path", "dest": dest})
+
+
+@router.post("/rns/contacts/{dest}/path")
+def rns_request_path(dest: str) -> dict:
+    """Operator-triggered: emit ONE path request for a contact.
+
+    The only thing that makes a contact reachable with announces off. Sends a
+    single path request over every RNS interface; does not retry.
+    """
+    res = _rpc({"cmd": "rns_request_path", "dest": dest})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "path request failed"))
+    return res
+
+
 @router.get("/rns/messages")
 def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
     return _rpc({"cmd": "rns_history", "peer": peer, "since": since})

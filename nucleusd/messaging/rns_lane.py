@@ -129,7 +129,6 @@ class RnsLane:
         self._pubkey: Optional[bytes] = None   # our identity public key (for the card)
         self._stop = threading.Event()
         self._announce_thread: Optional[threading.Thread] = None
-        self._announced_for_send = False
         self._started = False
 
     # ── identity ────────────────────────────────────────────────
@@ -287,9 +286,9 @@ class RnsLane:
     def announce(self) -> bool:
         """Announce our lxmf.delivery destination once. Returns True if emitted.
 
-        Called by the operator "Announce" button, automatically on the first
-        send so a fresh contact can resolve a path back to us, and (auto mode
-        only) on the interval timer. There is no custom node announce any more.
+        Called by the operator "Announce" button and (auto mode only) on the
+        interval timer. A send never announces implicitly — under LPI nothing is
+        emitted unless the operator asks. There is no custom node announce.
         """
         if not self._started:
             return False
@@ -299,6 +298,51 @@ class RnsLane:
         except Exception as e:
             log(f"lxmf.delivery announce error: {e}")
             return False
+
+    # ── path discovery (explicit, operator-driven) ──────────────
+    def request_path(self, dest_hash_hex: str) -> dict:
+        """Emit ONE path request for a contact's lxmf.delivery hash (hex).
+
+        This is the only way the operator makes a contact reachable with
+        announces off: the request is carried over every RNS interface and any
+        node that knows a path answers with a path-response announce. Sends
+        nothing else and does not retry. Returns the post-request path_info.
+        """
+        if not self._started:
+            return {"ok": False, "error": "rns lane not started"}
+        import RNS
+        try:
+            dest_hash = bytes.fromhex(dest_hash_hex)
+        except (ValueError, TypeError):
+            return {"ok": False, "error": "bad destination hash"}
+        try:
+            RNS.Transport.request_path(dest_hash)
+        except Exception as e:
+            return {"ok": False, "error": f"path request failed: {e}"}
+        return {"ok": True, "requested": True, "path": self.path_info(dest_hash_hex)}
+
+    def path_info(self, dest_hash_hex: str) -> dict:
+        """Read-only local path-table state for a contact. Emits nothing.
+
+        Returns ``{known, hops, interface}``. ``known`` is whether rnsd currently
+        has a path; ``hops``/``interface`` are the next-hop details when known.
+        The UI pairs this with the contact's own last-seen for path age.
+        """
+        if not self._started:
+            return {"known": False, "hops": None, "interface": None}
+        import RNS
+        try:
+            dest_hash = bytes.fromhex(dest_hash_hex)
+        except (ValueError, TypeError):
+            return {"known": False, "hops": None, "interface": None}
+        if not RNS.Transport.has_path(dest_hash):
+            return {"known": False, "hops": None, "interface": None}
+        try:
+            hops = RNS.Transport.hops_to(dest_hash)
+            iface = RNS.Transport.next_hop_interface(dest_hash)
+        except Exception:
+            hops, iface = None, None
+        return {"known": True, "hops": hops, "interface": str(iface) if iface else None}
 
     def _announce_loop(self) -> None:
         # Auto mode only. First announce shortly after start, then on the interval.
@@ -360,20 +404,18 @@ class RnsLane:
         # The recipient identity is needed to build an outbound destination. For
         # an imported contact it was loaded by _preload_contacts/remember_contact,
         # so recall() returns it even though we've never heard an announce. If it
-        # is genuinely unknown (no contact), request a path and bail — but this is
-        # the exception now, not the norm.
+        # is genuinely unknown (no contact), bail — we do NOT request a path here.
         recipient_identity = RNS.Identity.recall(dest_hash)
         if recipient_identity is None:
-            RNS.Transport.request_path(dest_hash)
             return {"ok": False, "error": "unknown contact; no key on file — import its card"}
 
-        # Announce our own delivery destination once so the recipient can resolve
-        # a path back to us (we never announce on a timer in manual mode). First
-        # outbound to a peer also triggers a path request on their side via LXMF.
-        if not self._announced_for_send:
-            self.announce()
-            RNS.Transport.request_path(dest_hash)
-            self._announced_for_send = True
+        # LPI: sending must never emit radio traffic the operator did not ask for.
+        # A send neither announces us nor requests a path. If no path is known we
+        # refuse rather than let LXMF emit its own path requests on delivery
+        # attempts (LXMRouter does this when Transport.has_path is false). The
+        # operator requests a path explicitly first (request_path / the button).
+        if not RNS.Transport.has_path(dest_hash):
+            return {"ok": False, "error": "no path to contact — request a path first"}
 
         dest = RNS.Destination(
             recipient_identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
