@@ -137,6 +137,19 @@ let RNS_DRAFT = "";
 let RNS_IMPORT = "";       // paste box draft for importing a nucleus-rns:// card
 let RNS_CACHE = {};        // peer hash -> ordered (oldest→newest) message list
 let RNS_PATH_SEEN = {};    // peer hash -> epoch of the last operator path request
+// Shorten an rnsd interface string to a readable label for the contact row.
+// rnsd reports the real interface a path was learned on, e.g.
+// "AutoInterfacePeer[wlan1/fe80::…]", "TCPInterface[Entry Node/1.2.3.4:4243]",
+// "RNodeInterface[LoRa]". We keep the interface TYPE and its configured
+// name/first field so any transport (not just WiFi) is shown truthfully.
+function rnsIface(raw) {
+  if (!raw) return "unknown iface";
+  const m = /^([A-Za-z0-9_]+?)(?:Peer)?\[(.+)\]$/.exec(raw);
+  if (!m) return raw;
+  const type = m[1].replace(/Interface$/, "");
+  const inner = m[2].split("/")[0].trim();   // "wlan1", "Entry Node", "LoRa"
+  return inner ? `${type}:${inner}` : type;
+}
 // Merge a DM into the per-peer cache (by peer+ts+direction; no server id).
 function rnsUpsert(m) {
   if (!m || !m.peer) return;
@@ -899,16 +912,20 @@ const PAGES = {
         const path = (pr && pr.ok && pr.d.path) ? pr.d.path : { known: false };
         let pstr;
         if (path.known) {
-          const hops = path.hops != null ? `${path.hops}h` : "?h";
+          // Show the ACTUAL Reticulum interface the path was learned on (any
+          // transport — RNode, TCP, AutoInterface, …), not an assumed "mesh".
+          const via = rnsIface(path.interface);
+          const hops = path.hops != null
+            ? `${path.hops} hop${path.hops === 1 ? "" : "s"}` : "? hops";
           const age = path.updated ? `, ${ago(path.updated)}` : "";
-          pstr = `path ${hops}${age}`;
+          pstr = `${via} · ${hops}${age}`;
         } else {
           const seen = RNS_PATH_SEEN[c.lxmf_hash];
           pstr = seen ? `no path · req ${ago(seen)} ago` : "no path";
         }
         items.push({
           type: "nav",
-          label: `${who}  ·  ${c.source}${key}  ·  ${pstr}`,
+          label: `${who}${key}  ·  ${pstr}`,
           to: "rns_chat",
           onEnter: (S) => S.go("rns_chat", { hash: c.lxmf_hash, host: who }),
           action: { label: "req path", onRun: (S) => rnsRequestPath(S, c.lxmf_hash) },

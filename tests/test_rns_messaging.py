@@ -294,21 +294,49 @@ def test_request_path_rejects_bad_hash(monkeypatch):
     assert _FakeTransport.requested == []
 
 
-def test_path_info_reads_table_without_emitting(monkeypatch):
+def test_path_info_reports_real_interface_from_rnsd(monkeypatch):
+    """path_info must read rnsd's OWN path table (over its RPC socket) so it
+    reports the ACTUAL interface a path was learned on — any transport, not an
+    assumed WiFi "mesh". The lane's client-side table only ever shows the local
+    shared-instance socket, so it must not be used."""
     lane = _started_lane(monkeypatch)
-    _FakeTransport.paths = {FIXTURE_LXMF}
-    _FakeTransport.hops_map = {FIXTURE_LXMF: 3}
-    # IDX_PT_TIMESTAMP slot carries the path age; everything after it is ignored.
-    _FakeTransport.path_table = {bytes.fromhex(FIXTURE_LXMF): [1700000000.0, "x", 3, "y"]}
+    from nucleusd.messaging import rns_lane
+    # Real rnsd path_table() reply shape: list of dicts keyed by hex hash. Include
+    # an unrelated entry to prove we match on hash, plus the AutoInterfacePeer
+    # format rnsd actually emits for a wlan1-learned path.
+    monkeypatch.setattr(rns_lane.reti, "path_table", lambda: [
+        {"hash": "deadbeef" * 4, "via": "aa", "hops": 9,
+         "interface": "TCPInterface[Entry Node/1.2.3.4:4243]", "timestamp": 1.0},
+        {"hash": FIXTURE_LXMF, "via": "34dd0a1dd2aae0d5c90c9b6a6879b458", "hops": 1,
+         "interface": "AutoInterfacePeer[wlan1/fe80::8ae5:2ce0:5629:f96e]",
+         "timestamp": 1700000000.0},
+    ])
     info = lane.path_info(FIXTURE_LXMF)
-    assert info == {"known": True, "hops": 3,
-                    "interface": "TCPInterface[Entry Node]", "updated": 1700000000.0}
+    assert info == {"known": True, "hops": 1,
+                    "interface": "AutoInterfacePeer[wlan1/fe80::8ae5:2ce0:5629:f96e]",
+                    "updated": 1700000000.0}
     # Reading the path table must never request a path.
     assert _FakeTransport.requested == []
 
 
-def test_path_info_unknown_when_no_path(monkeypatch):
+def test_path_info_unknown_when_not_in_rnsd_table(monkeypatch):
     lane = _started_lane(monkeypatch)
+    from nucleusd.messaging import rns_lane
+    monkeypatch.setattr(rns_lane.reti, "path_table", lambda: [])
+    info = lane.path_info(FIXTURE_LXMF)
+    assert info == {"known": False, "hops": None, "interface": None, "updated": None}
+
+
+def test_path_info_unknown_when_rnsd_unreachable(monkeypatch):
+    """If the rnsd RPC socket errors, path_info degrades to 'no path', never
+    raising — the contact row must still render."""
+    lane = _started_lane(monkeypatch)
+    from nucleusd.messaging import rns_lane
+
+    def _boom():
+        raise rns_lane.reti.ReticulumError("socket down")
+
+    monkeypatch.setattr(rns_lane.reti, "path_table", _boom)
     info = lane.path_info(FIXTURE_LXMF)
     assert info == {"known": False, "hops": None, "interface": None, "updated": None}
 
