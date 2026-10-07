@@ -192,6 +192,23 @@ def path_table(max_hops: int | None = None) -> list[dict]:
     return out
 
 
+def drop_path(dest_hash_hex: str) -> bool:
+    """Drop rnsd's stored path for one destination (hex hash).
+
+    Asks the shared instance to expire its path_table entry (the same operation
+    as ``rnpath -d``). Returns rnsd's reply: True if a path was dropped, False if
+    none was stored. Raises ReticulumError if the RPC socket is unreachable.
+
+    A path must be dropped before a fresh request, or rnsd answers the request
+    from its own cached announce and the request never reaches the network.
+    """
+    try:
+        dest_hash = bytes.fromhex(dest_hash_hex)
+    except (ValueError, TypeError) as e:
+        raise ReticulumError(f"bad destination hash: {e}") from e
+    return bool(_rpc({"drop": "path", "destination_hash": dest_hash}))
+
+
 def status() -> dict:
     """Full read-only snapshot for the API/UI.
 
