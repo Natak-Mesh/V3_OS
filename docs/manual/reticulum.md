@@ -66,8 +66,13 @@ import out-of-band:
   Babel routes (same discovery as Meshtastic channel sharing) and offers a
   one-tap **Add** that pulls and verifies the peer's card.
 - **By link:** copy another node's `nucleus-rns://…` card link and paste it into
-  the import box.
+  the import box on the **Identity** page.
 - **By QR:** show a node's card QR and scan it on the other device, then paste.
+
+This node's own shareable contact card — its `nucleus-rns://…` link and
+scannable QR — plus the paste-import box live on the Reticulum **Identity**
+page (Reticulum → Identity). Direct Messages holds only the conversations,
+contacts and mesh-peer discovery.
 
 Imported contacts are saved to `/var/lib/nucleus/rns/contacts.json`. Because the
 card carries the peer's public key, the node can address and message it directly
@@ -75,6 +80,13 @@ with **no announce ever required** — on import (and at daemon start) the key i
 loaded into RNS so `rnpath`/delivery resolve on demand. An inbound message from
 an unknown sender auto-adds that sender as a contact (if it has your address it
 got your card on purpose).
+
+Each contact row on the Direct Messages page shows that contact's current path
+state inline — `path <hops>h, <age>` when rnsd knows a route (age is how long ago
+the path was recorded), or `no path` otherwise — with an inline **req path**
+button that emits a single path request for just that contact. Reading the state
+emits nothing; only the button does. Tap the rest of the row to open the
+conversation.
 
 Announcing is **manual by default** (`messaging.rns.announce_mode: manual`):
 nothing is broadcast until you press **Announce now** on the Direct Messages page

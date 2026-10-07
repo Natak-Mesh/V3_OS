@@ -74,9 +74,17 @@
           valHtml = `<span class="val">${escHtml(shown)}${editing ? " ◂▸" : ""}</span>`;
         }
       }
+      // Optional inline action button at the row's right end (it.action = {label,
+      // onRun}). The rest of the row still activates normally; only the button
+      // runs the action. A keyboard → on the selected row triggers it too.
+      let actHtml = "";
+      if (it.action) {
+        actHtml = `<button class="row-act" data-act="${idx}">` +
+          `${escHtml(it.action.label || "GO")}</button>`;
+      }
       html += `<div class="row-wrap" data-idx="${idx}"><div class="${cls}">` +
         `<span class="cur">${cur}</span>` +
-        `<span class="label">${escHtml(it.label || "")}</span>${valHtml}</div></div>`;
+        `<span class="label">${escHtml(it.label || "")}</span>${valHtml}${actHtml}</div></div>`;
     });
 
     // Preserve focus + caret across rebuilds (dynamic refresh / WS push) so a
@@ -117,6 +125,12 @@
         state.sel = idx;
         render();
       });
+    });
+
+    // Inline row-action buttons run their own handler, not the row's activate.
+    view.querySelectorAll(".row-act").forEach((btn) => {
+      const idx = parseInt(btn.getAttribute("data-act"), 10);
+      btn.addEventListener("click", (ev) => { ev.stopPropagation(); runRowAction(idx); });
     });
 
     if (state.editing) {
@@ -273,6 +287,18 @@
     render();
   }
 
+  // Run an inline row-action button (it.action.onRun). Selects the row first so
+  // the operator sees which one fired, then invokes the handler with the shell.
+  function runRowAction(idx) {
+    const it = state.items[idx];
+    if (!it || !it.action || !it.action.onRun) return;
+    state.editing = false;
+    state.sel = idx;
+    S.msg("");
+    render();
+    return it.action.onRun(S);
+  }
+
   // In-edit value change for fselect (cycle) / fnum (step).
   function adjust(delta) {
     const it = state.items[state.sel];
@@ -348,7 +374,12 @@
       case "ArrowUp": e.preventDefault(); move(-1); break;
       case "ArrowDown": e.preventDefault(); move(1); break;
       case "ArrowLeft": if (state.editing) { e.preventDefault(); adjust(-1); } break;
-      case "ArrowRight": if (state.editing) { e.preventDefault(); adjust(1); } break;
+      case "ArrowRight":
+        if (state.editing) { e.preventDefault(); adjust(1); }
+        else if (state.items[state.sel] && state.items[state.sel].action) {
+          e.preventDefault(); runRowAction(state.sel);
+        }
+        break;
       case "Enter": e.preventDefault(); activate(); break;
       case "Escape": e.preventDefault(); back(); break;
     }

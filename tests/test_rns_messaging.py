@@ -236,12 +236,17 @@ class _FakeTransport:
     requested: list = []
     paths: set = set()
     hops_map: dict = {}
+    # Real rnsd path-table shape: dest_hash(bytes) -> list whose IDX_PT_TIMESTAMP
+    # (0) slot is the epoch the path was recorded. path_info reads it for age.
+    IDX_PT_TIMESTAMP = 0
+    path_table: dict = {}
 
     @classmethod
     def reset(cls):
         cls.requested = []
         cls.paths = set()
         cls.hops_map = {}
+        cls.path_table = {}
 
     @staticmethod
     def request_path(dest_hash):
@@ -293,8 +298,11 @@ def test_path_info_reads_table_without_emitting(monkeypatch):
     lane = _started_lane(monkeypatch)
     _FakeTransport.paths = {FIXTURE_LXMF}
     _FakeTransport.hops_map = {FIXTURE_LXMF: 3}
+    # IDX_PT_TIMESTAMP slot carries the path age; everything after it is ignored.
+    _FakeTransport.path_table = {bytes.fromhex(FIXTURE_LXMF): [1700000000.0, "x", 3, "y"]}
     info = lane.path_info(FIXTURE_LXMF)
-    assert info == {"known": True, "hops": 3, "interface": "TCPInterface[Entry Node]"}
+    assert info == {"known": True, "hops": 3,
+                    "interface": "TCPInterface[Entry Node]", "updated": 1700000000.0}
     # Reading the path table must never request a path.
     assert _FakeTransport.requested == []
 
@@ -302,7 +310,7 @@ def test_path_info_reads_table_without_emitting(monkeypatch):
 def test_path_info_unknown_when_no_path(monkeypatch):
     lane = _started_lane(monkeypatch)
     info = lane.path_info(FIXTURE_LXMF)
-    assert info == {"known": False, "hops": None, "interface": None}
+    assert info == {"known": False, "hops": None, "interface": None, "updated": None}
 
 
 def test_send_without_path_refuses_and_emits_nothing(monkeypatch):

@@ -324,25 +324,39 @@ class RnsLane:
     def path_info(self, dest_hash_hex: str) -> dict:
         """Read-only local path-table state for a contact. Emits nothing.
 
-        Returns ``{known, hops, interface}``. ``known`` is whether rnsd currently
-        has a path; ``hops``/``interface`` are the next-hop details when known.
-        The UI pairs this with the contact's own last-seen for path age.
+        Returns ``{known, hops, interface, updated}``. ``known`` is whether rnsd
+        currently has a path; ``hops``/``interface`` are the next-hop details and
+        ``updated`` is the epoch when rnsd last recorded the path (path age),
+        read straight from the path table — all None when no path is known.
         """
+        unknown = {"known": False, "hops": None, "interface": None, "updated": None}
         if not self._started:
-            return {"known": False, "hops": None, "interface": None}
+            return unknown
         import RNS
         try:
             dest_hash = bytes.fromhex(dest_hash_hex)
         except (ValueError, TypeError):
-            return {"known": False, "hops": None, "interface": None}
+            return unknown
         if not RNS.Transport.has_path(dest_hash):
-            return {"known": False, "hops": None, "interface": None}
+            return unknown
         try:
             hops = RNS.Transport.hops_to(dest_hash)
             iface = RNS.Transport.next_hop_interface(dest_hash)
         except Exception:
             hops, iface = None, None
-        return {"known": True, "hops": hops, "interface": str(iface) if iface else None}
+        # Path-table entry is a list; index IDX_PT_TIMESTAMP (0) is when the path
+        # was last recorded. Read it directly — hops_to/next_hop_interface expose
+        # no timestamp. Guard everything so a schema change can't break status.
+        updated = None
+        try:
+            idx = getattr(RNS.Transport, "IDX_PT_TIMESTAMP", 0)
+            entry = RNS.Transport.path_table.get(dest_hash)
+            if entry is not None:
+                updated = entry[idx]
+        except Exception:
+            updated = None
+        return {"known": True, "hops": hops,
+                "interface": str(iface) if iface else None, "updated": updated}
 
     def _announce_loop(self) -> None:
         # Auto mode only. First announce shortly after start, then on the interval.

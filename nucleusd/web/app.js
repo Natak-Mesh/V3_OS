@@ -464,6 +464,7 @@ const PAGES = {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
       const items = [
         { type: "nav", label: "» DIRECT MESSAGES (Reticulum)", to: "rns_nodes" },
+        { type: "nav", label: "» IDENTITY (contact card)", to: "rns_identity" },
         { type: "nav", label: "» INTERFACES", to: "rns_interfaces" },
       ];
 
@@ -877,10 +878,8 @@ const PAGES = {
       let head = `<div class="content"><div class="kv"><span>status ` +
         `<b class="${s.started ? "ok" : "warn"}">${s.started ? "up" : "starting…"}</b></span></div>`;
       if (s.address) head += `<div class="kv"><span>this node <b>${esc(s.address)}</b></span></div>`;
-      head += `<div class="kv"><span>announce <b>${esc(s.announce_mode || "manual")}</b></span></div>`;
-      head += `<div id="rns-card-slot"></div></div>`;
+      head += `<div class="kv"><span>announce <b>${esc(s.announce_mode || "manual")}</b></span></div></div>`;
       items.push({ type: "content", html: head });
-      items.push({ type: "button", label: "» Show my contact card / QR", onEnter: rnsShowCard });
       items.push({ type: "button", label: "» Announce now (make me discoverable)", onEnter: rnsAnnounce });
 
       // ── saved contacts ──────────────────────────────────────
@@ -889,15 +888,30 @@ const PAGES = {
       items.push({ type: "content", html: `<div class="content">` +
         `<div class="page-title" style="padding-left:0">Contacts</div>` +
         (contacts.length ? "" : `<div class="off">no contacts yet — add one below</div>`) + `</div>` });
-      contacts.forEach((c) => {
+      // Path state per contact (known/hops + age) is shown on the same row, with
+      // an inline REQ PATH button. Reads are parallel and emit no RNS traffic.
+      const paths = await Promise.all(contacts.map((c) =>
+        jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(c.lxmf_hash) + "/path")));
+      contacts.forEach((c, i) => {
         const who = c.name || (c.id != null ? String(c.id) : c.lxmf_hash.slice(0, 10));
         const key = c.pubkey ? "" : "  ·  no key yet";
-        const seen = c.last_seen ? `  ·  seen ${ago(c.last_seen)}` : "";
+        const pr = paths[i];
+        const path = (pr && pr.ok && pr.d.path) ? pr.d.path : { known: false };
+        let pstr;
+        if (path.known) {
+          const hops = path.hops != null ? `${path.hops}h` : "?h";
+          const age = path.updated ? `, ${ago(path.updated)}` : "";
+          pstr = `path ${hops}${age}`;
+        } else {
+          const seen = RNS_PATH_SEEN[c.lxmf_hash];
+          pstr = seen ? `no path · req ${ago(seen)} ago` : "no path";
+        }
         items.push({
           type: "nav",
-          label: `${who}  ·  ${c.source}${key}${seen}`,
+          label: `${who}  ·  ${c.source}${key}  ·  ${pstr}`,
           to: "rns_chat",
           onEnter: (S) => S.go("rns_chat", { hash: c.lxmf_hash, host: who }),
+          action: { label: "req path", onRun: (S) => rnsRequestPath(S, c.lxmf_hash) },
         });
       });
 
@@ -914,6 +928,32 @@ const PAGES = {
         items.push({ type: "button", label: `» Add ${who} (${p.ip})`,
           onEnter: (S) => rnsAddMesh(S, p.card) });
       });
+
+      return { items };
+    },
+  },
+
+  // Reticulum identity: this node's shareable contact card (nucleus-rns:// link +
+  // scannable QR) and the paste box to import another node's card link. Split off
+  // the Direct Messages page — identity management, not a conversation.
+  rns_identity: {
+    title: "Identity",
+    async build() {
+      const st = await jget("/api/v1/messaging/rns/status");
+      const items = [];
+      const s = st.ok ? st.d : {};
+      if (!s.enabled) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">Reticulum messaging is disabled</div>` +
+          `<div class="hint" style="padding-left:0">Enable messaging.rns.enabled ` +
+          `in the config, then apply.</div></div>` });
+        return { items };
+      }
+      let head = `<div class="content">`;
+      if (s.address) head += `<div class="kv"><span>this node <b>${esc(s.address)}</b></span></div>`;
+      head += `<div id="rns-card-slot"></div></div>`;
+      items.push({ type: "content", html: head });
+      items.push({ type: "button", label: "» Show my contact card / QR", onEnter: rnsShowCard });
 
       // ── paste-import a card link ─────────────────────────────
       items.push({ type: "content", html: `<div class="content">` +
@@ -944,26 +984,8 @@ const PAGES = {
       const r = await jget("/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer));
       if (r.ok) (r.d.messages || []).forEach(rnsUpsert);
       const list = RNS_CACHE[peer] || [];
-      let h = `<div class="hint">Direct LXMF message to ${esc(p.host || peer)}.</div>`;
-
-      // Path status: whether rnsd has a path to this contact right now, how many
-      // hops, and how long since it was last heard (contact last_seen). Reading
-      // this emits nothing; the operator requests a path explicitly below.
-      const pr = await jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer) + "/path");
-      const path = (pr.ok && pr.d.path) ? pr.d.path : { known: false };
-      let ph = `<div class="content"><div class="kv"><span>path ` +
-        `<b class="${path.known ? "ok" : "warn"}">${path.known ? "known" : "none"}</b></span>`;
-      if (path.known) {
-        ph += `<span>hops <b>${path.hops != null ? path.hops : "—"}</b></span>`;
-        if (path.interface) ph += `<span>via <b>${esc(path.interface)}</b></span>`;
-      }
-      ph += `</div>`;
-      const seen = RNS_PATH_SEEN[peer];
-      if (seen) ph += `<div class="kv"><span>path requested <b>${ago(seen)} ago</b></span></div>`;
-      ph += `</div>`;
-      items.push({ type: "content", html: ph });
-      items.push({ type: "button", label: "» Request path (find this contact)",
-        onEnter: (S) => rnsRequestPath(S, peer) });
+      let h = `<div class="hint">Direct LXMF message to ${esc(p.host || peer)}. ` +
+        `Path status and the req-path button are on the Direct Messages contact list.</div>`;
 
       h += `<div class="content">`;
       if (!r.ok) h += `<div class="warn">messaging service unavailable</div>`;

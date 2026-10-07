@@ -118,6 +118,24 @@ html, body {
 .row.editing { background: #062616; color: var(--text-primary); }
 .row.editing .cur { color: var(--warn); }
 
+/* Inline row-action button (e.g. per-contact "req path"), pinned to the row's
+   right end. Stays tappable while the rest of the row navigates. */
+.row .row-act {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.row .row-act:active { background: var(--accent); color: #05120b; }
+.row.sel .row-act { border-color: #05120b; color: #05120b; }
+
 .row .val input, .row .val select {
   background: var(--bg-primary);
   color: var(--text-primary);
