@@ -477,7 +477,7 @@ const PAGES = {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
       const items = [
         { type: "nav", label: "» DIRECT MESSAGES (Reticulum)", to: "rns_nodes" },
-        { type: "nav", label: "» IDENTITY (contact card)", to: "rns_identity" },
+        { type: "nav", label: "» ADD CONTACTS (my card / mesh / link)", to: "rns_identity" },
         { type: "nav", label: "» INTERFACES", to: "rns_interfaces" },
       ];
 
@@ -868,10 +868,9 @@ const PAGES = {
     },
   },
 
-  // Reticulum/LXMF Direct Messages. No announce-based discovery any more:
-  // this page shows (1) THIS node's shareable contact card + QR, (2) the saved
-  // contacts (each opens a conversation), (3) Nucleus nodes found over the WiFi
-  // mesh with a one-tap Add, and (4) a paste box to import a nucleus-rns:// link.
+  // Reticulum/LXMF Direct Messages: the saved contacts, each opening a
+  // conversation. Adding new contacts (my card, mesh nodes, paste link) lives
+  // on the Add Contacts page (rns_identity), not here.
   rns_nodes: {
     title: "Direct Messages",
     dynamic: 5000,
@@ -932,29 +931,16 @@ const PAGES = {
         });
       });
 
-      // ── Nucleus nodes on the WiFi mesh (pull their cards) ────
-      const mp = await jget("/api/v1/messaging/rns/mesh-peers");
-      const mesh = (mp.ok && mp.d.peers) ? mp.d.peers : [];
-      const known = new Set(contacts.map((c) => c.lxmf_hash));
-      const addable = mesh.filter((p) => p.card && !known.has(p.card.lxmf_hash));
-      items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">On the WiFi mesh</div>` +
-        (addable.length ? "" : `<div class="off">no new nodes found on the mesh</div>`) + `</div>` });
-      addable.forEach((p) => {
-        const who = p.card.name || String(p.card.id || p.ip);
-        items.push({ type: "button", label: `» Add ${who} (${p.ip})`,
-          onEnter: (S) => rnsAddMesh(S, p.card) });
-      });
-
       return { items };
     },
   },
 
-  // Reticulum identity: this node's shareable contact card (nucleus-rns:// link +
-  // scannable QR) and the paste box to import another node's card link. Split off
-  // the Direct Messages page — identity management, not a conversation.
+  // Add Contacts: everything for adding Reticulum contacts — this node's own
+  // shareable card (nucleus-rns:// link + scannable QR), Nucleus nodes found over
+  // the WiFi mesh with a one-tap Add, and a paste box to import another node's
+  // card link. Split off the Direct Messages page, which only lists conversations.
   rns_identity: {
-    title: "Identity",
+    title: "Add Contacts",
     async build() {
       const st = await jget("/api/v1/messaging/rns/status");
       const items = [];
@@ -971,6 +957,22 @@ const PAGES = {
       head += `<div id="rns-card-slot"></div></div>`;
       items.push({ type: "content", html: head });
       items.push({ type: "button", label: "» Show my contact card / QR", onEnter: rnsShowCard });
+
+      // ── Nucleus nodes on the WiFi mesh (pull their cards) ────
+      const r = await jget("/api/v1/messaging/rns/contacts");
+      const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
+      const mp = await jget("/api/v1/messaging/rns/mesh-peers");
+      const mesh = (mp.ok && mp.d.peers) ? mp.d.peers : [];
+      const known = new Set(contacts.map((c) => c.lxmf_hash));
+      const addable = mesh.filter((p) => p.card && !known.has(p.card.lxmf_hash));
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">On the WiFi mesh</div>` +
+        (addable.length ? "" : `<div class="off">no new nodes found on the mesh</div>`) + `</div>` });
+      addable.forEach((p) => {
+        const who = p.card.name || String(p.card.id || p.ip);
+        items.push({ type: "button", label: `» Add ${who} (${p.ip})`,
+          onEnter: (S) => rnsAddMesh(S, p.card) });
+      });
 
       // ── paste-import a card link ─────────────────────────────
       items.push({ type: "content", html: `<div class="content">` +
