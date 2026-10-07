@@ -307,6 +307,13 @@ class RnsLane:
         announces off: the request is carried over every RNS interface and any
         node that knows a path answers with a path-response announce. Sends
         nothing else and does not retry. Returns the post-request path_info.
+
+        rnsd's stored path (if any) is dropped FIRST. Otherwise rnsd answers the
+        request from its own cached announce and the request never reaches the
+        network, so a stale or dead path would be reported as current. Dropping
+        forces a real round-trip: the row then shows the fresh path, or 'no
+        path' if the contact is unreachable — the truth either way. A failed
+        drop (e.g. rnsd socket hiccup) is non-fatal; we still send the request.
         """
         if not self._started:
             return {"ok": False, "error": "rns lane not started"}
@@ -315,6 +322,15 @@ class RnsLane:
             dest_hash = bytes.fromhex(dest_hash_hex)
         except (ValueError, TypeError):
             return {"ok": False, "error": "bad destination hash"}
+        try:
+            reti.drop_path(dest_hash_hex)
+        except reti.ReticulumError as e:
+            log(f"path drop before request failed (continuing): {e}")
+        # Wait a full 2 s after dropping so rnsd has culled the stale entry
+        # before we request. Otherwise rnsd still sees the dropped-but-not-yet-
+        # removed entry and answers our local request from its cached announce,
+        # so the request never reaches the network.
+        time.sleep(2)
         try:
             RNS.Transport.request_path(dest_hash)
         except Exception as e:

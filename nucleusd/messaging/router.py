@@ -35,10 +35,10 @@ class RnsImportBody(BaseModel):
     source: str = "link"       # provenance tag: link / qr / mesh
 
 
-def _rpc(req: dict) -> dict:
+def _rpc(req: dict, timeout: float = TIMEOUT) -> dict:
     """One-shot request/reply against the daemon's UDP control socket."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(TIMEOUT)
+    s.settimeout(timeout)
     try:
         s.sendto(json.dumps(req).encode("utf-8"), CONTROL_ADDR)
         data, _ = s.recvfrom(65535)
@@ -173,7 +173,9 @@ def rns_request_path(dest: str) -> dict:
     The only thing that makes a contact reachable with announces off. Sends a
     single path request over every RNS interface; does not retry.
     """
-    res = _rpc({"cmd": "rns_request_path", "dest": dest})
+    # The daemon drops the stale path, waits 2 s for rnsd to cull it, then
+    # requests — so this call blocks longer than the default timeout.
+    res = _rpc({"cmd": "rns_request_path", "dest": dest}, timeout=8.0)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error", "path request failed"))
     return res

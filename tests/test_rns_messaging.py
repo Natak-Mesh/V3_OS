@@ -236,6 +236,9 @@ class _FakeTransport:
     requested: list = []
     paths: set = set()
     hops_map: dict = {}
+    # Ordered record of (op, dest_hex) across drop_path + request_path, so tests
+    # can assert the stored path is dropped BEFORE the request is emitted.
+    ops: list = []
     # Real rnsd path-table shape: dest_hash(bytes) -> list whose IDX_PT_TIMESTAMP
     # (0) slot is the epoch the path was recorded. path_info reads it for age.
     IDX_PT_TIMESTAMP = 0
@@ -246,11 +249,13 @@ class _FakeTransport:
         cls.requested = []
         cls.paths = set()
         cls.hops_map = {}
+        cls.ops = []
         cls.path_table = {}
 
     @staticmethod
     def request_path(dest_hash):
         _FakeTransport.requested.append(dest_hash.hex())
+        _FakeTransport.ops.append(("request", dest_hash.hex()))
 
     @staticmethod
     def has_path(dest_hash):
@@ -275,6 +280,14 @@ def _started_lane(monkeypatch):
     fake_rns.Identity = types.SimpleNamespace(recall=lambda h: object())
     monkeypatch.setitem(sys.modules, "RNS", fake_rns)
     monkeypatch.setitem(sys.modules, "LXMF", types.ModuleType("LXMF"))
+
+    # drop_path is an rnsd RPC; record the call (ordered with request_path) and
+    # report a path was dropped, without touching a real control socket.
+    def _fake_drop(dest_hex):
+        _FakeTransport.ops.append(("drop", dest_hex))
+        return True
+
+    monkeypatch.setattr(rns_lane.reti, "drop_path", _fake_drop)
     lane = rns_lane.RnsLane(display_name="0042-nucleus")
     lane._started = True
     return lane
@@ -287,11 +300,37 @@ def test_request_path_emits_one_request(monkeypatch):
     assert _FakeTransport.requested == [FIXTURE_LXMF]
 
 
+def test_request_path_drops_stored_path_before_requesting(monkeypatch):
+    """The stored rnsd path must be dropped BEFORE the request is emitted, or
+    rnsd answers from its cached announce and the request never reaches the
+    network — reporting a stale/dead path as current."""
+    lane = _started_lane(monkeypatch)
+    res = lane.request_path(FIXTURE_LXMF)
+    assert res["ok"] is True
+    assert _FakeTransport.ops == [("drop", FIXTURE_LXMF), ("request", FIXTURE_LXMF)]
+
+
+def test_request_path_continues_when_drop_fails(monkeypatch):
+    """A failed drop (rnsd socket hiccup) is non-fatal: the request is still
+    emitted so the operator isn't blocked."""
+    from nucleusd.messaging import rns_lane
+    lane = _started_lane(monkeypatch)
+
+    def _boom(_dest_hex):
+        raise rns_lane.reti.ReticulumError("socket down")
+
+    monkeypatch.setattr(rns_lane.reti, "drop_path", _boom)
+    res = lane.request_path(FIXTURE_LXMF)
+    assert res["ok"] is True
+    assert _FakeTransport.requested == [FIXTURE_LXMF]
+
+
 def test_request_path_rejects_bad_hash(monkeypatch):
     lane = _started_lane(monkeypatch)
     res = lane.request_path("nothex")
     assert res["ok"] is False
     assert _FakeTransport.requested == []
+    assert _FakeTransport.ops == []
 
 
 def test_path_info_reports_real_interface_from_rnsd(monkeypatch):
