@@ -147,6 +147,30 @@ def test_rns_direct_message_ui_wired():
     assert "go(pageKey, params = null)" in cli_js, "S.go param navigation removed"
 
 
+def test_rns_contact_admin_lives_on_modify_page():
+    """Rename/remove are contact admin, not messaging, so they must NOT clutter
+    the per-peer message log (rns_chat). They live on a dedicated Modify
+    Contacts page (rns_edit) reached from a button at the bottom of the Direct
+    Messages contact list. Pin the wiring in the static assets (no Node here)."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+
+    # The message log must be messaging-only: no rename/remove buttons on it.
+    chat_block = app_js[app_js.index("rns_chat: {"):app_js.index("voice: {")]
+    assert "rnsRename" not in chat_block, "rename button back on the message log"
+    assert "rnsRemove" not in chat_block, "remove button back on the message log"
+
+    # The contact list links to the Modify Contacts page via one button.
+    nodes_block = app_js[app_js.index("rns_nodes: {"):app_js.index("rns_add: {")]
+    assert 'to: "rns_edit"' in nodes_block, "no Modify contacts link on the contact list"
+
+    # The Modify Contacts page exists and wires rename + remove per contact.
+    assert "rns_edit:" in app_js, "Modify Contacts page missing"
+    edit_block = app_js[app_js.index("rns_edit: {"):app_js.index("// ── Actions")]
+    assert "rnsRename(S, c.lxmf_hash" in edit_block, "rename not wired on Modify page"
+    assert "rnsRemove(S, c.lxmf_hash" in edit_block, "remove not wired on Modify page"
+
+
 def test_peer_join_is_a_selectable_item():
     """Regression: the peer Join action was an inline <button onclick> injected
     into a `content` block, which the shell cursor skips (and any rebuild wiped).

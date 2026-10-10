@@ -97,11 +97,12 @@ stays messageable across restarts. An inbound message from an unknown sender
 auto-adds that sender as a contact.
 
 **Naming.** Hashes aren't human-readable, so each contact carries a local
-**nickname** (set when adding by hash, or later via **Rename contact** on the
-conversation) and an **announced name** (the peer's LXMF display name, learned
+**nickname** (set when adding by hash, or later via **Rename** on the **Modify
+contacts** page) and an **announced name** (the peer's LXMF display name, learned
 with the key). The UI shows the nickname if set, otherwise the announced name,
-otherwise a short hash. **Remove contact** (with a confirm prompt) forgets a
-contact locally.
+otherwise a short hash. **Remove** (with a confirm prompt) forgets a contact
+locally. Both live on the **Modify contacts** page (reached from the button at
+the bottom of the Direct Messages page), not in the per-contact message log.
 
 Each contact row on the Direct Messages page shows that contact's current path
 state inline — `path <hops>h, <age>` when rnsd knows a route (age is how long ago

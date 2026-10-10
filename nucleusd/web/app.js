@@ -1012,6 +1012,40 @@ const PAGES = {
         });
       });
 
+      // Rename/remove live off the message log — they're contact admin, not
+      // messaging — so they sit behind one page reached from here.
+      if (contacts.length) {
+        items.push({ type: "nav", label: "» Modify contacts", to: "rns_edit" });
+      }
+
+      return { items };
+    },
+  },
+
+  // Modify Contacts: rename or remove any saved contact. Kept off the per-peer
+  // message log (rns_chat) so the log is messaging only. Both actions transmit
+  // nothing — they just edit/forget the local contact store.
+  rns_edit: {
+    title: "Modify Contacts",
+    async build() {
+      const items = [];
+      const r = await jget("/api/v1/messaging/rns/contacts");
+      const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">Modify contacts</div>` +
+        `<div class="hint" style="padding-left:0">Rename or remove a saved contact. ` +
+        `Both are local only — nothing is transmitted.</div>` +
+        (contacts.length ? "" : `<div class="off">no contacts yet</div>`) + `</div>` });
+      contacts.forEach((c) => {
+        const who = rnsName(c);
+        const hash = (c.lxmf_hash || "").slice(0, 10);
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="kv"><span>${esc(who)}</span><span class="hint">${esc(hash)}</span></div></div>` });
+        items.push({ type: "button", label: `» Rename ${who}`,
+          onEnter: (S) => rnsRename(S, c.lxmf_hash, who) });
+        items.push({ type: "button", label: `» Remove ${who}`,
+          onEnter: (S) => rnsRemove(S, c.lxmf_hash, who) });
+      });
       return { items };
     },
   },
@@ -1118,10 +1152,6 @@ const PAGES = {
         placeholder: "Type a message",
         sendLabel: "Send", onChange: (v) => RNS_DRAFT = v,
         onSubmit: (S, text) => rnsSend(S, peer, text) });
-      items.push({ type: "button", label: "» Rename contact",
-        onEnter: (S) => rnsRename(S, peer, p.host) });
-      items.push({ type: "button", label: "» Remove contact",
-        onEnter: (S) => rnsRemove(S, peer, p.host) });
       return { items };
     },
   },
@@ -1415,7 +1445,7 @@ async function rnsRemove(S, peer, who) {
     "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer));
   if (!ok) return S.msg("remove failed: " + (d.detail || "error"), false);
   S.msg("removed");
-  return S.go("rns_nodes");
+  return S.reload();
 }
 
 // ── Messaging live push (WebSocket) ────────────────────────────
