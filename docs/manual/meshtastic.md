@@ -64,6 +64,10 @@ nodes (names absent) still list the sender by hardware id.
 - **Heartbeat** — `on` / `off`.
 - **Interval (s)** — 60–3600 (60s steps).
 - **Save heartbeat** — active within one bridge cycle (~10s).
+- **Send heartbeat now** — broadcasts one heartbeat immediately, even when the
+  periodic heartbeat is off. Requires the CoT bridge to be running. This also
+  restarts the interval timer, so the next automatic heartbeat is a full
+  interval away.
 
 ## TX rate limit
 

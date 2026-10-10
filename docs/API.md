@@ -154,6 +154,16 @@ curl -s http://localhost:8080/api/v1/meshtastic/status
 ### `GET /logs`
 Recent bridge log lines.
 
+### `POST /heartbeat`
+Broadcast a presence heartbeat now. Relayed to the CoT bridge (which owns the
+radio); works even when the periodic heartbeat is disabled and resets the
+periodic timer. `404` if the bridge isn't running or doesn't respond; `400` if
+the bridge reports the send failed.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/meshtastic/heartbeat
+# {"success":true,"sent":true}
+```
+
 ### Configuring the radio — read this first
 
 Radio reads and writes are **asynchronous**. `POST /config/read` and

@@ -47,6 +47,12 @@ RADIO_REBOOT_WAIT_SECS = 30
 MESHTASTICD_HOST = "localhost"
 MESHTASTICD_PORT = 4403
 
+# cot-bridge manual-heartbeat control socket (must match cot_bridge.py). The
+# bridge owns the radio, so a "send heartbeat now" request is relayed to it over
+# this localhost UDP socket: one JSON request, one JSON reply.
+HEARTBEAT_CONTROL_ADDR = ("127.0.0.1", 5563)
+HEARTBEAT_CONTROL_TIMEOUT = 5
+
 # Only one radio config operation at a time (they stop/start the bridge
 # and hold the serial port)
 _config_lock = threading.Lock()
@@ -183,6 +189,43 @@ def status():
         'service_enabled': _service_is_enabled(),
         'radio_detected': _radio_detected(),
     }
+
+
+def send_heartbeat():
+    """Ask the cot-bridge to broadcast a presence heartbeat right now.
+
+    The bridge owns the radio connection, so we cannot send the packet here.
+    We send one JSON datagram to the bridge's heartbeat control socket and wait
+    for its reply. Sends even when the periodic heartbeat is disabled, and resets
+    the bridge's periodic timer so the next automatic heartbeat is a full
+    interval away.
+
+    Raises RadioNotReady if the bridge isn't running, or RadioBadRequest if the
+    bridge reports the send failed (e.g. radio link down).
+    """
+    if not _service_is_active():
+        raise RadioNotReady('cot-bridge is not running')
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(HEARTBEAT_CONTROL_TIMEOUT)
+        sock.sendto(json.dumps({'cmd': 'heartbeat'}).encode('utf-8'),
+                    HEARTBEAT_CONTROL_ADDR)
+        try:
+            data, _ = sock.recvfrom(512)
+        except socket.timeout:
+            raise RadioNotReady('cot-bridge did not respond')
+        try:
+            reply = json.loads(data.decode('utf-8'))
+        except Exception:
+            raise RadioBadRequest('invalid reply from cot-bridge')
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    if not reply.get('ok'):
+        raise RadioBadRequest(reply.get('error') or 'heartbeat send failed')
+    return {'success': True, 'sent': True}
 
 
 def bridge_logs():

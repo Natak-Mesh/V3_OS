@@ -51,6 +51,12 @@ def logs() -> dict:
     return mx.bridge_logs()
 
 
+@router.post("/heartbeat")
+def send_heartbeat() -> dict:
+    """Broadcast a presence heartbeat now (relayed to the cot-bridge)."""
+    return _handle(mx.send_heartbeat)
+
+
 @router.get("/config")
 def config_cached() -> dict:
     return mx.config_cached()

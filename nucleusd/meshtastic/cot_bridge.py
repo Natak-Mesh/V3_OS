@@ -917,6 +917,19 @@ HEARTBEAT_V2 = 0x02
 HB_SHORT_MAX = 16   # bytes; firmware short_name is <= 4, allow headroom
 HB_LONG_MAX = 40    # bytes; firmware long_name is <= 40
 
+# Manual "send heartbeat now" control socket. The bridge owns the radio, so a
+# web/CLI request cannot send a heartbeat itself; it asks the bridge over this
+# localhost UDP socket (one JSON request -> one JSON reply), the same pattern the
+# messaging daemon uses for its control port. Sends even when the periodic
+# heartbeat is disabled, and resets the periodic timer so the next automatic one
+# is a full interval away. See meshtastic_api.send_heartbeat().
+HEARTBEAT_CONTROL_LISTEN = ("127.0.0.1", 5563)
+
+# Epoch seconds of the last heartbeat sent (automatic or manual). Module-level so
+# the control thread and the main loop share one timer.
+_last_heartbeat = 0.0
+_last_heartbeat_lock = threading.Lock()
+
 
 def _parse_heartbeat_names(num, payload):
     """Record names from a v2 presence heartbeat; ignore v1/malformed ones.
@@ -1085,7 +1098,7 @@ def _send_heartbeat():
     real names — with no ATAK traffic and without ever sending a NODEINFO_APP.
     """
     if iface is None:
-        return
+        raise RuntimeError("radio interface not connected")
     try:
         iface.sendData(_build_heartbeat_payload(),
                        portNum=HEARTBEAT_PORTNUM, wantAck=False)
@@ -1096,6 +1109,48 @@ def _send_heartbeat():
         # writing heartbeats into a dead socket.
         logger.warning(f"Heartbeat TX error, flagging radio disconnect: {e}")
         _radio_disconnected.set()
+        raise
+    # Reset the shared periodic timer so the next automatic heartbeat is a full
+    # interval away from this send (whether this was automatic or manual).
+    with _last_heartbeat_lock:
+        global _last_heartbeat
+        _last_heartbeat = time.time()
+
+
+def _heartbeat_control_loop(sock):
+    """Thread loop: a localhost JSON request asks us to send a heartbeat now.
+
+    One datagram in, one JSON reply out. The only command is
+    ``{"cmd": "heartbeat"}``; it sends a presence heartbeat immediately,
+    regardless of whether the periodic heartbeat is enabled. The reply is
+    ``{"ok": true}`` on success or ``{"ok": false, "error": "..."}`` so the
+    caller (meshtastic_api.send_heartbeat) can report the real result.
+    """
+    logger.info(
+        f"Heartbeat control: listening on "
+        f"{HEARTBEAT_CONTROL_LISTEN[0]}:{HEARTBEAT_CONTROL_LISTEN[1]}"
+    )
+    while True:
+        try:
+            data, addr = sock.recvfrom(512)
+        except OSError:
+            break
+        try:
+            req = json.loads(data.decode("utf-8")) if data else {}
+        except Exception:
+            req = {}
+        reply = {"ok": False, "error": "unknown command"}
+        if req.get("cmd") == "heartbeat":
+            try:
+                _send_heartbeat()
+                reply = {"ok": True}
+            except Exception as e:
+                reply = {"ok": False, "error": str(e)}
+        try:
+            sock.sendto(json.dumps(reply).encode("utf-8"), addr)
+        except Exception:
+            pass
+    logger.info("Heartbeat control exiting")
 
 
 def _radio_is_alive():
@@ -1308,6 +1363,19 @@ def main():
         text_relay_sock = None
         text_fwd_sock = None
 
+    # ── Manual heartbeat control socket ──────────────────────
+    hb_control_sock = None
+    try:
+        hb_control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        hb_control_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        hb_control_sock.bind(HEARTBEAT_CONTROL_LISTEN)
+        threading.Thread(
+            target=_heartbeat_control_loop, args=(hb_control_sock,), daemon=True,
+        ).start()
+    except Exception as e:
+        logger.error(f"Could not start heartbeat control: {e}")
+        hb_control_sock = None
+
     # ── LoRa voice stream relay (live Codec2) ────────────────
     stream_portnum, stream_hop_limit = _load_stream_config()
     stream_raw_sock = None
@@ -1361,6 +1429,11 @@ def main():
                 text_relay_sock.close()
             except Exception:
                 pass
+        if hb_control_sock:
+            try:
+                hb_control_sock.close()
+            except Exception:
+                pass
         if voice_relay_sock:
             try:
                 voice_relay_sock.close()
@@ -1396,7 +1469,6 @@ def main():
 
     # ── Keep alive ───────────────────────────────────────────
     last_node_dump = 0
-    last_heartbeat = 0
     try:
         while True:
             time.sleep(10)
@@ -1426,9 +1498,15 @@ def main():
                         _hb_iv = max(60, int(_hb.get("HEARTBEAT_INTERVAL", "300")))
                     except ValueError:
                         _hb_iv = 300
-                    if now - last_heartbeat >= _hb_iv:
-                        _send_heartbeat()
-                        last_heartbeat = now
+                    # _send_heartbeat() updates _last_heartbeat; a manual send
+                    # (control socket) resets it too, so it defers the next auto.
+                    with _last_heartbeat_lock:
+                        due = now - _last_heartbeat >= _hb_iv
+                    if due:
+                        try:
+                            _send_heartbeat()
+                        except Exception:
+                            pass  # already logged + flagged for reconnect
 
                 # Periodic cleanup of expired RX UIDs
                 with _rx_lock:

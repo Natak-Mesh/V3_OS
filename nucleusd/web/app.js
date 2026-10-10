@@ -681,6 +681,7 @@ const PAGES = {
           { type: "fnum", key: "hb_interval", label: "Interval (s)", value: HB.interval_secs,
             min: 60, max: 3600, step: 60, onChange: (v) => HB.interval_secs = v },
           { type: "button", label: "» Save heartbeat", onEnter: saveHeartbeat },
+          { type: "button", label: "» Send heartbeat now", onEnter: sendHeartbeatNow },
         ],
       };
     },
@@ -1280,6 +1281,15 @@ async function saveHeartbeat(S) {
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("heartbeat saved — active within one bridge cycle (~10s)");
   else S.msg("save failed: " + JSON.stringify(d.detail), false);
+}
+
+// Ask the cot-bridge to broadcast a presence heartbeat immediately. Works even
+// when the periodic heartbeat is off; the bridge must be running.
+async function sendHeartbeatNow(S) {
+  S.msg("sending heartbeat…");
+  const { ok, d } = await jsend("POST", "/api/v1/meshtastic/heartbeat", {});
+  if (ok) S.msg("heartbeat sent");
+  else S.msg("send failed: " + (d.detail || "error"), false);
 }
 
 async function saveTxRateLimit(S) {
