@@ -883,13 +883,28 @@ NODE_DUMP_INTERVAL = 15  # seconds
 NODE_MAX_AGE = 900  # seconds (15 min) — exclude nodes not heard in this long
 
 # Presence heartbeat: tiny broadcast on a PRIVATE_APP portnum so peers keep
-# seeing this node in their list without any ATAK traffic. Receiving bridges
-# count ANY packet toward _node_last_seen, so no RX handling is needed.
+# seeing this node in their list without any ATAK traffic. onReceive() records
+# every packet's sender in _node_last_seen, and _dump_nodes() lists every node
+# in _node_last_seen — including ones the meshtastic library never added to
+# iface.nodes (that only happens on a NODEINFO_APP packet). So a heartbeat alone
+# is enough to make a node appear and stay visible; no NODEINFO_APP is required.
 HEARTBEAT_PORTNUM = 258
 
 
 def _dump_nodes():
-    """Write iface.nodes to a JSON file for the web dashboard.
+    """Write the heard-node list to a JSON file for the web dashboard.
+
+    The list is the union of two sources, keyed by node number:
+      - iface.nodes: nodes the meshtastic library knows. It only adds a node
+        here when it receives that node's NODEINFO_APP packet (or the radio
+        replays its saved node DB at connect), so this carries the real name,
+        SNR and hop count.
+      - _node_last_seen: updated by onReceive() for EVERY received packet,
+        including bare presence heartbeats (HEARTBEAT_PORTNUM). A node that has
+        only sent heartbeats never appears in iface.nodes, so without this it
+        would be invisible despite being heard. For those we synthesize a
+        minimal entry (id/name from the node number) the same way the library
+        does in _getOrCreateByNum.
 
     Writes atomically (tmp file + rename) to avoid partial reads.
     Excludes the local node (my_node_num) from the list.
@@ -909,29 +924,50 @@ def _dump_nodes():
         except Exception:
             pass
 
-        # Snapshot the dict to avoid RuntimeError from concurrent modification
-        # (meshtastic library updates iface.nodes from its own thread)
-        nodes_snapshot = dict(iface.nodes)
-        nodes_list = []
-        for node_id, node in nodes_snapshot.items():
-            # Skip our own node (by num or by matching long name)
+        # Snapshot both sources to avoid RuntimeError from concurrent
+        # modification (the meshtastic library and onReceive() both run on
+        # their own threads). Build a node_num -> library-node map; a heartbeat-
+        # only node has no library entry, so we fall back to a synthetic one.
+        by_num = {}
+        for node in dict(iface.nodes).values():
             num = node.get("num")
+            if num is not None:
+                by_num[num] = node
+        seen_snapshot = dict(_node_last_seen)
+
+        nodes_list = []
+        for num in set(by_num) | set(seen_snapshot):
+            # Skip our own node (by num below; by long name after we have user)
             if num == my_node_num:
                 continue
-            user = node.get("user", {})
+
+            node = by_num.get(num)
+            if node is None:
+                # Heard over RF but no NODEINFO_APP yet: synthesize the same
+                # minimal identity the library would (!<hex>, last 4 hex digits).
+                presumptive_id = f"!{num:08x}"
+                user = {
+                    "id": presumptive_id,
+                    "shortName": presumptive_id[-4:],
+                    "longName": f"Meshtastic {presumptive_id[-4:]}",
+                }
+                node = {}
+            else:
+                user = node.get("user", {})
+
             if local_long_name and user.get("longName") == local_long_name:
                 continue
 
             last_heard = node.get("lastHeard") or 0
             # Use our own tracking if more recent than firmware's lastHeard
-            our_seen = _node_last_seen.get(num, 0)
+            our_seen = seen_snapshot.get(num, 0)
             last_heard = max(last_heard, our_seen)
             # Skip nodes never heard or too old
             if not last_heard or (now - last_heard) > NODE_MAX_AGE:
                 continue
 
             nodes_list.append({
-                "id": user.get("id", node_id),
+                "id": user.get("id", f"!{num:08x}"),
                 "short_name": user.get("shortName", "?"),
                 "long_name": user.get("longName", ""),
                 "last_heard": last_heard,
@@ -960,8 +996,10 @@ def _send_heartbeat():
     """Broadcast a tiny presence packet so peers keep us in their node list.
 
     Sent on HEARTBEAT_PORTNUM with no ACK and a 1-byte payload — cheap airtime.
-    Any received packet updates the peer's _node_last_seen, so this alone keeps
-    a node visible with no ATAK traffic.
+    On the receiving bridge, onReceive() records the sender in _node_last_seen
+    and _dump_nodes() lists every node in _node_last_seen, so this packet alone
+    is enough to make this node appear and stay visible in peers' lists with no
+    ATAK traffic and without ever sending a NODEINFO_APP packet.
     """
     if iface is None:
         return

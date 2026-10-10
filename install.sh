@@ -199,6 +199,12 @@ systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd b
 echo "==> restart app daemons (pick up new code)"
 systemctl restart nucleusd.service nucleus-messaging.service nucleus-voice.service
 
+# cot-bridge also runs the new venv code but is enabled/disabled by `nucleusctl
+# apply` (it depends on meshtastic config), not here. try-restart picks up the
+# new code only when it's already running, so nodes with the bridge disabled are
+# left untouched and their enabled-state is still owned by apply.
+systemctl try-restart cot-bridge.service
+
 echo
 echo "Install complete. Next:"
 echo "  1. edit /etc/nucleus/config.yaml  (set node.id etc.)"
