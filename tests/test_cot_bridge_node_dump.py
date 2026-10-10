@@ -143,6 +143,26 @@ def test_local_node_excluded(dump_env, monkeypatch):
     assert _read_dump(out)["nodes"] == []
 
 
+def _placeholder_node(num, *, last_heard, snr=12.5, hops=0):
+    """The minimal entry the meshtastic library synthesizes for a node it has
+    heard a packet from but never a NODEINFO_APP (see
+    MeshInterface._getOrCreateByNum): a 'Meshtastic <hex>' name, hwModel UNSET.
+    """
+    presumptive_id = f"!{num:08x}"
+    return {
+        "num": num,
+        "user": {
+            "id": presumptive_id,
+            "shortName": presumptive_id[-4:],
+            "longName": f"Meshtastic {presumptive_id[-4:]}",
+            "hwModel": "UNSET",
+        },
+        "lastHeard": last_heard,
+        "snr": snr,
+        "hopsAway": hops,
+    }
+
+
 def test_heartbeat_v2_names_used_for_heartbeat_only_node(dump_env, monkeypatch):
     out, now = dump_env
     monkeypatch.setattr(cot_bridge, "iface", _FakeIface({}))
@@ -159,6 +179,50 @@ def test_heartbeat_v2_names_used_for_heartbeat_only_node(dump_env, monkeypatch):
     hb = nodes["!488fd743"]
     assert hb["short_name"] == "0053"
     assert hb["long_name"] == "0053-nucleus"
+
+
+def test_heartbeat_names_override_library_placeholder(dump_env, monkeypatch):
+    """Regression: the library synthesizes a 'Meshtastic <hex>' placeholder for
+    any heard node, so a heartbeat-only node IS in iface.nodes. The heartbeat
+    names must still win over that placeholder; SNR/hops stay from the library.
+    """
+    out, now = dump_env
+    iface = _FakeIface({
+        "!488fd743": _placeholder_node(
+            HEARTBEAT_ONLY_NUM, last_heard=now - 10, snr=12.5, hops=0
+        ),
+    })
+    monkeypatch.setattr(cot_bridge, "iface", iface)
+    cot_bridge._node_last_seen[HEARTBEAT_ONLY_NUM] = now - 10
+    cot_bridge._node_names[HEARTBEAT_ONLY_NUM] = {
+        "short_name": "0053",
+        "long_name": "0053-nucleus",
+    }
+
+    cot_bridge._dump_nodes()
+    nodes = {n["id"]: n for n in _read_dump(out)["nodes"]}
+
+    hb = nodes["!488fd743"]
+    assert hb["short_name"] == "0053"
+    assert hb["long_name"] == "0053-nucleus"
+    # Signal metrics still come from the library entry.
+    assert hb["snr"] == 12.5
+    assert hb["hops_away"] == 0
+
+
+def test_nodeinfo_name_kept_when_no_heartbeat(dump_env, monkeypatch):
+    """A node with a real NODEINFO name and no heartbeat keeps its real name."""
+    out, now = dump_env
+    iface = _FakeIface({
+        "!21d4c2cc": _nodeinfo_node(
+            PEER_NODEINFO_NUM, "0052", "0052-nucleus", last_heard=now - 5
+        ),
+    })
+    monkeypatch.setattr(cot_bridge, "iface", iface)
+
+    cot_bridge._dump_nodes()
+    nodes = {n["id"]: n for n in _read_dump(out)["nodes"]}
+    assert nodes["!21d4c2cc"]["long_name"] == "0052-nucleus"
 
 
 def test_parse_heartbeat_names_v2():

@@ -1007,22 +1007,33 @@ def _dump_nodes():
                 continue
 
             node = by_num.get(num)
+            presumptive_id = f"!{num:08x}"
             if node is None:
-                # Heard over RF but no NODEINFO_APP yet. Prefer names learned
-                # from a v2 presence heartbeat; otherwise synthesize the same
-                # minimal identity the library would (!<hex>, last 4 hex digits).
-                presumptive_id = f"!{num:08x}"
-                hb_names = _node_names.get(num)
-                user = {
-                    "id": presumptive_id,
-                    "shortName": (hb_names or {}).get("short_name")
-                    or presumptive_id[-4:],
-                    "longName": (hb_names or {}).get("long_name")
-                    or f"Meshtastic {presumptive_id[-4:]}",
-                }
+                # Heard over RF but the meshtastic library has no entry at all.
+                user = {"id": presumptive_id}
                 node = {}
             else:
-                user = node.get("user", {})
+                user = dict(node.get("user", {}))
+
+            # Prefer names from a v2 presence heartbeat. The library synthesizes a
+            # placeholder entry ("Meshtastic <hex>") for any node it has heard a
+            # packet from but never a NODEINFO_APP, so a heartbeat-only node is in
+            # iface.nodes yet carries no real name. The heartbeat does, so it wins
+            # whenever we have it; SNR/hops/lastHeard still come from the library.
+            # A node that also sent NODEINFO has identical names (same radio
+            # setting), so this is a no-op for it.
+            hb_names = _node_names.get(num)
+            if hb_names:
+                if hb_names.get("short_name"):
+                    user["shortName"] = hb_names["short_name"]
+                if hb_names.get("long_name"):
+                    user["longName"] = hb_names["long_name"]
+
+            # Fall back to the same minimal identity the library would synthesize
+            # (!<hex>, last 4 hex digits) when we still have no real name.
+            user.setdefault("id", presumptive_id)
+            user.setdefault("shortName", presumptive_id[-4:])
+            user.setdefault("longName", f"Meshtastic {presumptive_id[-4:]}")
 
             if local_long_name and user.get("longName") == local_long_name:
                 continue
