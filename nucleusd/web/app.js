@@ -519,8 +519,27 @@ const PAGES = {
       const n = (r.ok && r.d.contacts) ? r.d.contacts.length : 0;
       items.push({ type: "nav", label: `» DIRECT MESSAGES (${n} contact${n === 1 ? "" : "s"})`, to: "rns_nodes" });
       items.push({ type: "nav", label: "» ADD CONTACTS (my card / mesh / link)", to: "rns_add" });
+      items.push({ type: "nav", label: "» INTERFACES", to: "rns_ifaces" });
 
-      // ── interfaces (hide the internal Shared Instance row) ────
+      return { items };
+    },
+  },
+
+  // Reticulum interfaces (rnsd): per-interface traffic + client counts. Split
+  // off the main Reticulum page to keep that page focused on status/contacts.
+  // Data comes from the shared-instance control socket via /api/v1/reticulum.
+  rns_ifaces: {
+    title: "Interfaces",
+    dynamic: 5000,
+    async build() {
+      const { ok, d: s } = await jget("/api/v1/reticulum/status");
+      const items = [];
+      if (!ok || !s.running) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">rnsd is not running — no Reticulum status available</div></div>` });
+        return { items };
+      }
+      // Hide the internal Shared Instance row.
       const ifaces = (s.interfaces || []).filter((i) =>
         !(i.short_name || i.name || "").startsWith("Shared Instance"));
       let h = `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div>`;
@@ -542,7 +561,6 @@ const PAGES = {
       }
       h += `</div>`;
       items.push({ type: "content", html: h });
-
       return { items };
     },
   },
@@ -1033,8 +1051,7 @@ const PAGES = {
       const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
       items.push({ type: "content", html: `<div class="content">` +
         `<div class="page-title" style="padding-left:0">Modify contacts</div>` +
-        `<div class="hint" style="padding-left:0">Rename or remove a saved contact. ` +
-        `Both are local only — nothing is transmitted.</div>` +
+        `<div class="hint" style="padding-left:0">Rename or remove a saved contact.</div>` +
         (contacts.length ? "" : `<div class="off">no contacts yet</div>`) + `</div>` });
       contacts.forEach((c) => {
         const who = rnsName(c);
@@ -1130,10 +1147,7 @@ const PAGES = {
       const r = await jget("/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer));
       if (r.ok) (r.d.messages || []).forEach(rnsUpsert);
       const list = RNS_CACHE[peer] || [];
-      let h = `<div class="hint">Direct LXMF message to ${esc(p.host || peer)}. ` +
-        `Path status and the req-path button are on the Direct Messages contact list.</div>`;
-
-      h += `<div class="content">`;
+      let h = `<div class="content">`;
       if (!r.ok) h += `<div class="warn">messaging service unavailable</div>`;
       else if (!list.length) h += `<div class="off">no messages yet</div>`;
       else {
@@ -1440,7 +1454,7 @@ async function rnsRename(S, peer, cur) {
 // Remove a contact after confirmation. Transmits nothing.
 async function rnsRemove(S, peer, who) {
   if (typeof confirm === "function" &&
-      !confirm("Remove contact " + (who || peer) + "? This only forgets it locally.")) return;
+      !confirm("Remove contact " + (who || peer) + "?")) return;
   const { ok, d } = await jsend("DELETE",
     "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer));
   if (!ok) return S.msg("remove failed: " + (d.detail || "error"), false);
