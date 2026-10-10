@@ -68,6 +68,7 @@ def dump_env(tmp_path, monkeypatch):
     monkeypatch.setattr(cot_bridge, "NODE_DUMP_PATH", str(out))
     monkeypatch.setattr(cot_bridge, "my_node_num", LOCAL_NUM)
     cot_bridge._node_last_seen.clear()
+    cot_bridge._node_names.clear()
     # Freeze time so NODE_MAX_AGE math is deterministic.
     now = 1_791_650_000
     monkeypatch.setattr(cot_bridge.time, "time", lambda: now)
@@ -140,6 +141,86 @@ def test_local_node_excluded(dump_env, monkeypatch):
 
     cot_bridge._dump_nodes()
     assert _read_dump(out)["nodes"] == []
+
+
+def test_heartbeat_v2_names_used_for_heartbeat_only_node(dump_env, monkeypatch):
+    out, now = dump_env
+    monkeypatch.setattr(cot_bridge, "iface", _FakeIface({}))
+    # 0053 heard only via a v2 heartbeat that carried its real names.
+    cot_bridge._node_last_seen[HEARTBEAT_ONLY_NUM] = now - 10
+    cot_bridge._node_names[HEARTBEAT_ONLY_NUM] = {
+        "short_name": "0053",
+        "long_name": "0053-nucleus",
+    }
+
+    cot_bridge._dump_nodes()
+    nodes = {n["id"]: n for n in _read_dump(out)["nodes"]}
+
+    hb = nodes["!488fd743"]
+    assert hb["short_name"] == "0053"
+    assert hb["long_name"] == "0053-nucleus"
+
+
+def test_parse_heartbeat_names_v2():
+    cot_bridge._node_names.clear()
+    payload = b"\x02" + b"0053" + b"\x00" + b"0053-nucleus"
+    cot_bridge._parse_heartbeat_names(HEARTBEAT_ONLY_NUM, payload)
+    assert cot_bridge._node_names[HEARTBEAT_ONLY_NUM] == {
+        "short_name": "0053",
+        "long_name": "0053-nucleus",
+    }
+
+
+def test_parse_heartbeat_names_v1_ignored():
+    cot_bridge._node_names.clear()
+    # v1 bare beacon carries no names → nothing recorded.
+    cot_bridge._parse_heartbeat_names(HEARTBEAT_ONLY_NUM, b"\x01")
+    assert HEARTBEAT_ONLY_NUM not in cot_bridge._node_names
+
+
+def test_parse_heartbeat_names_malformed_ignored():
+    cot_bridge._node_names.clear()
+    # v2 marker but no NUL separator → ignored, no crash.
+    cot_bridge._parse_heartbeat_names(HEARTBEAT_ONLY_NUM, b"\x02nosep")
+    assert HEARTBEAT_ONLY_NUM not in cot_bridge._node_names
+    # Empty payload → ignored.
+    cot_bridge._parse_heartbeat_names(HEARTBEAT_ONLY_NUM, b"")
+    assert HEARTBEAT_ONLY_NUM not in cot_bridge._node_names
+
+
+def test_build_heartbeat_payload_v2():
+    class _NamedIface:
+        def getShortName(self):
+            return "0042"
+
+        def getLongName(self):
+            return "0042-nucleus"
+
+    cot_bridge.iface = _NamedIface()
+    try:
+        payload = cot_bridge._build_heartbeat_payload()
+    finally:
+        cot_bridge.iface = None
+    assert payload == b"\x02" + b"0042" + b"\x00" + b"0042-nucleus"
+    # Round-trips through the parser.
+    cot_bridge._node_names.clear()
+    cot_bridge._parse_heartbeat_names(LOCAL_NUM, payload)
+    assert cot_bridge._node_names[LOCAL_NUM]["long_name"] == "0042-nucleus"
+
+
+def test_build_heartbeat_payload_falls_back_to_v1():
+    class _NoNameIface:
+        def getShortName(self):
+            return ""
+
+        def getLongName(self):
+            return ""
+
+    cot_bridge.iface = _NoNameIface()
+    try:
+        assert cot_bridge._build_heartbeat_payload() == b"\x01"
+    finally:
+        cot_bridge.iface = None
 
 
 def test_local_node_excluded_by_long_name(dump_env, monkeypatch):

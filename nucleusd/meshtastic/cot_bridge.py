@@ -157,6 +157,12 @@ RX_UID_EXPIRY = 60  # seconds
 # Track last-seen time per node for web dashboard (updated on every RX)
 _node_last_seen = {}  # node_num → timestamp
 
+# Names learned from v2 presence heartbeats (payload \x02 short \x00 long), so a
+# node heard only via heartbeat shows its real names instead of its hardware id.
+# Populated by onReceive(); consumed by _dump_nodes() only for nodes the
+# meshtastic library has no NODEINFO entry for.
+_node_names = {}  # node_num → {"short_name": str, "long_name": str}
+
 # Set when the radio connection drops; the main loop reconnects
 _radio_disconnected = threading.Event()
 
@@ -745,6 +751,15 @@ def onReceive(packet, interface):
     decoded = packet.get("decoded", {})
     portnum = decoded.get("portnum", "")
 
+    # Presence heartbeat (HEARTBEAT_PORTNUM). A v2 heartbeat carries this node's
+    # names (\x02 short \x00 long) so peers can show them without a NODEINFO_APP
+    # packet; a v1 heartbeat is a bare \x01 and carries no names. Record the
+    # names (if any) and stop — a heartbeat is only a presence beacon.
+    if portnum in (HEARTBEAT_PORTNUM, str(HEARTBEAT_PORTNUM)):
+        if isinstance(sender, int):
+            _parse_heartbeat_names(sender, decoded.get("payload"))
+        return
+
     # LoRa voice stream chunk → forward to the voice daemon (localhost UDP)
     if stream_portnum is not None and portnum in stream_port_match:
         _handle_stream_rx(packet, decoded)
@@ -890,6 +905,56 @@ NODE_MAX_AGE = 900  # seconds (15 min) — exclude nodes not heard in this long
 # is enough to make a node appear and stay visible; no NODEINFO_APP is required.
 HEARTBEAT_PORTNUM = 258
 
+# Heartbeat payload formats:
+#   v1: b"\x01"                        — bare presence beacon, no names
+#   v2: b"\x02" + short + b"\x00" + long  (both UTF-8) — carries this node's names
+# v2 lets a peer heard only via heartbeat show real names instead of its
+# hardware id, without ever sending a NODEINFO_APP packet. Bounds keep the
+# payload small (still well under a NODEINFO packet, which also carries a
+# 32-byte public key and more).
+HEARTBEAT_V1 = b"\x01"
+HEARTBEAT_V2 = 0x02
+HB_SHORT_MAX = 16   # bytes; firmware short_name is <= 4, allow headroom
+HB_LONG_MAX = 40    # bytes; firmware long_name is <= 40
+
+
+def _parse_heartbeat_names(num, payload):
+    """Record names from a v2 presence heartbeat; ignore v1/malformed ones.
+
+    v2 payload is b"\\x02" + short_utf8 + b"\\x00" + long_utf8. Anything that
+    doesn't match (v1 bare beacon, missing separator, decode error) is ignored
+    so the node still appears by hardware id via _node_last_seen.
+    """
+    if not payload or payload[0] != HEARTBEAT_V2:
+        return
+    try:
+        body = payload[1:]
+        sep = body.index(0x00)
+        short = body[:sep].decode("utf-8", "replace")[:HB_SHORT_MAX]
+        long_name = body[sep + 1:].decode("utf-8", "replace")[:HB_LONG_MAX]
+    except ValueError:
+        return  # no NUL separator
+    if short or long_name:
+        _node_names[num] = {"short_name": short, "long_name": long_name}
+
+
+def _build_heartbeat_payload():
+    """Build the v2 heartbeat payload from this node's owner names.
+
+    Falls back to the v1 bare beacon if names can't be read, so a heartbeat is
+    always sent.
+    """
+    if iface is None:
+        return HEARTBEAT_V1
+    try:
+        short = (iface.getShortName() or "").encode("utf-8")[:HB_SHORT_MAX]
+        long_name = (iface.getLongName() or "").encode("utf-8")[:HB_LONG_MAX]
+    except Exception:
+        return HEARTBEAT_V1
+    if not short and not long_name:
+        return HEARTBEAT_V1
+    return bytes([HEARTBEAT_V2]) + short + b"\x00" + long_name
+
 
 def _dump_nodes():
     """Write the heard-node list to a JSON file for the web dashboard.
@@ -943,13 +1008,17 @@ def _dump_nodes():
 
             node = by_num.get(num)
             if node is None:
-                # Heard over RF but no NODEINFO_APP yet: synthesize the same
+                # Heard over RF but no NODEINFO_APP yet. Prefer names learned
+                # from a v2 presence heartbeat; otherwise synthesize the same
                 # minimal identity the library would (!<hex>, last 4 hex digits).
                 presumptive_id = f"!{num:08x}"
+                hb_names = _node_names.get(num)
                 user = {
                     "id": presumptive_id,
-                    "shortName": presumptive_id[-4:],
-                    "longName": f"Meshtastic {presumptive_id[-4:]}",
+                    "shortName": (hb_names or {}).get("short_name")
+                    or presumptive_id[-4:],
+                    "longName": (hb_names or {}).get("long_name")
+                    or f"Meshtastic {presumptive_id[-4:]}",
                 }
                 node = {}
             else:
@@ -995,16 +1064,20 @@ def _dump_nodes():
 def _send_heartbeat():
     """Broadcast a tiny presence packet so peers keep us in their node list.
 
-    Sent on HEARTBEAT_PORTNUM with no ACK and a 1-byte payload — cheap airtime.
-    On the receiving bridge, onReceive() records the sender in _node_last_seen
-    and _dump_nodes() lists every node in _node_last_seen, so this packet alone
-    is enough to make this node appear and stay visible in peers' lists with no
-    ATAK traffic and without ever sending a NODEINFO_APP packet.
+    Sent on HEARTBEAT_PORTNUM with no ACK. The payload is the v2 format
+    (b"\\x02" + short + b"\\x00" + long) carrying our owner names, falling back
+    to the v1 bare beacon (b"\\x01") if names can't be read — still cheap airtime
+    and far smaller than a NODEINFO_APP packet. On the receiving bridge,
+    onReceive() records the sender in _node_last_seen (and the names, if v2, in
+    _node_names) and _dump_nodes() lists every node in _node_last_seen, so this
+    packet alone makes this node appear and stay visible in peers' lists — with
+    real names — with no ATAK traffic and without ever sending a NODEINFO_APP.
     """
     if iface is None:
         return
     try:
-        iface.sendData(b"\x01", portNum=HEARTBEAT_PORTNUM, wantAck=False)
+        iface.sendData(_build_heartbeat_payload(),
+                       portNum=HEARTBEAT_PORTNUM, wantAck=False)
         logger.info("Presence heartbeat sent")
     except Exception as e:
         # A send failure means the link to meshtasticd is broken (e.g. it

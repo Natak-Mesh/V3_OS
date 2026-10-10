@@ -56,6 +56,11 @@ Node config (not radio) — read live by the CoT bridge, so no radio reboot. Kee
 this node in peers' LoRa list without ATAK traffic; nodes drop off after 15 min
 of silence.
 
+The heartbeat carries this node's short and long names, so a peer heard only via
+heartbeats shows its real names instead of its hardware id (`!xxxxxxxx`) without
+waiting for an infrequent Meshtastic NODEINFO broadcast. Heartbeats from older
+nodes (names absent) still list the sender by hardware id.
+
 - **Heartbeat** — `on` / `off`.
 - **Interval (s)** — 60–3600 (60s steps).
 - **Save heartbeat** — active within one bridge cycle (~10s).
