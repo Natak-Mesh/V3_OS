@@ -136,7 +136,7 @@ html, body {
 .row-fselect, .row-fnum, .row-ftext { min-height: 42px; }
 .row-fselect .label, .row-fnum .label, .row-ftext .label {
   padding-left: 22px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 .row-fselect .val, .row-fnum .val, .row-ftext .val { color: var(--text-primary); }
 /* Selection + edit states keep their dark-on-accent contrast. */
@@ -149,6 +149,14 @@ html, body {
    cursor) so black-on-dark-green is never shown. Last so it wins over .sel. */
 .row.editing .label { color: var(--text-primary); }
 .row.editing .val { color: var(--warn); }
+/* Empty field showing placeholder text: render as an actual bordered input box
+   (matching the edit-mode input) so it reads as a paste target, not a hint. */
+.row .val.placeholder {
+  color: var(--text-primary); font-style: italic;
+  border: 1px solid var(--accent); border-radius: 0;
+  padding: 4px 6px; text-align: left;
+}
+.row.sel .val.placeholder { color: #05120b; border-color: #05120b; }
 
 /* Inline row-action button (e.g. per-contact "req path"), pinned to the row's
    right end. Stays tappable while the rest of the row navigates. */

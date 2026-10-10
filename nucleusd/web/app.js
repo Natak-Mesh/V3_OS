@@ -103,6 +103,9 @@ const PSK_MODES = ["keep", "random", "default", "none"];
 
 // Working copy of the radio config, filled from the cached read.
 let M = null;
+// Channel URL typed into the "Apply a channel URL" field — kept separate from M
+// so editing it never overwrites this node's displayed current channel URL.
+let MCHURL = "";
 // Working copy of the presence-heartbeat node config (separate from radio).
 let HB = null;
 // Working copy of the per-UID TX rate limit (node config, read live by cot-bridge).
@@ -588,35 +591,73 @@ const PAGES = {
     },
   },
 
-  // Set channel: share this node's channel (URL / QR), import another radio's
-  // channel URL, or copy a Nucleus peer's channel over the wifi mesh.
+  // Set channel: a small menu into three focused sub-pages so each task
+  // (share / apply / join) has its own uncluttered screen.
   mt_channel: {
     title: "Set Channel",
+    async build() {
+      return {
+        items: [
+          { type: "nav", label: "SHARE CHANNEL", to: "mt_ch_share" },
+          { type: "nav", label: "APPLY CHANNEL URL", to: "mt_ch_apply" },
+          { type: "nav", label: "JOIN PEER CHANNEL", to: "mt_ch_join" },
+        ],
+      };
+    },
+  },
+
+  // Share: this node's current channel URL + QR code, shown on open. The URL
+  // sits in a .content box so it is selectable (the page body disables select).
+  mt_ch_share: {
+    title: "Share Channel",
     async build() {
       if (!M) {
         const { d } = await jget(MB + "/config");
         if (d.config) meshFillFrom(d.config);
       }
-      const items = [];
-      if (M) {
-        items.push(
-          { type: "ftext", key: "channel_url", label: "Channel URL", value: M.channel_url, onChange: (v) => M.channel_url = v },
-          { type: "button", label: "» Import channel URL", onEnter: meshImportUrl },
-          { type: "button", label: "» Show QR code", onEnter: meshShowQr },
-          { type: "content", html: `<div id="m-qr-slot"></div>` },
-          { type: "content", html: `<div class="content"><div class="page-title" ` +
-            `style="padding-left:0">Join a peer's Meshtastic channel</div><div class="hint" ` +
-            `style="padding-left:0">Queries other Nucleus devices over the 802.11s wifi mesh ` +
-            `and compares their Meshtastic channel settings (channel name, encryption key, ` +
-            `region, modem preset, frequency slot) to this device's. Join copies those ` +
-            `settings to this device's Meshtastic radio so both LoRa radios share the channel. ` +
-            `Role, TX power and hop limit are untouched. The Meshtastic radio reboots after ` +
-            `joining.</div></div>` },
-          { type: "button", label: "» Query Nucleus peers for Meshtastic channels", onEnter: loadPeers },
-          ...peerItems(),
-        );
+      if (!M || !M.channel_url) {
+        return { items: [{ type: "content", html: `<div class="content"><div class="hint" ` +
+          `style="padding-left:0">No channel URL yet — read config first.</div></div>` }] };
       }
-      return { items };
+      let qr = "";
+      try { qr = await (await fetch(MB + "/config/qr")).text(); } catch (e) {}
+      return {
+        items: [{ type: "content", html:
+          `<div class="content"><pre>${esc(M.channel_url)}</pre>` +
+          (qr ? `<div class="qr">${qr}</div>` : "") + `</div>` }],
+      };
+    },
+  },
+
+  // Apply: paste a channel URL and write it to this radio.
+  mt_ch_apply: {
+    title: "Apply Channel URL",
+    async build() {
+      return {
+        items: [
+          { type: "ftext", key: "apply_channel_url", label: "Paste channel URL here", value: MCHURL, placeholder: "select to paste a channel URL", onChange: (v) => MCHURL = v },
+          { type: "button", label: "» Apply channel URL", onEnter: meshImportUrl },
+          { type: "content", html: `<div class="content"><div class="hint" ` +
+            `style="padding-left:0">Radio reboots after apply.</div></div>` },
+        ],
+      };
+    },
+  },
+
+  // Join: copy a Nucleus peer's channel over the wifi mesh.
+  mt_ch_join: {
+    title: "Join Peer Channel",
+    async build() {
+      return {
+        items: [
+          { type: "button", label: "» Query Nucleus peers for channels", onEnter: loadPeers },
+          { type: "content", html: `<div class="content"><div class="hint" ` +
+            `style="padding-left:0">Copies a peer's channel identity (name, key, region, ` +
+            `preset, slot) to this radio. Role, TX power and hop limit are untouched. ` +
+            `Radio reboots after joining.</div></div>` },
+          ...peerItems(),
+        ],
+      };
     },
   },
 
@@ -1156,18 +1197,9 @@ async function meshApply(S) {
 }
 
 async function meshImportUrl(S) {
-  const url = (M && M.channel_url || "").trim();
+  const url = (MCHURL || "").trim();
   if (!url) return S.msg("enter a channel URL in the field first", false);
-  return radioOp(S, MB + "/config/channel-url", { url }, "import");
-}
-
-async function meshShowQr(S) {
-  const { ok } = await jget(MB + "/config/qr");
-  const slot = document.getElementById("m-qr-slot");
-  if (!ok) { if (slot) slot.innerHTML = ""; return S.msg("no channel URL yet — read config first", false); }
-  const svg = await (await fetch(MB + "/config/qr")).text();
-  if (slot) slot.innerHTML = `<div class="qr">${svg}</div>`;
-  S.msg("");
+  return radioOp(S, MB + "/config/channel-url", { url }, "apply");
 }
 
 async function loadPeers(S) {

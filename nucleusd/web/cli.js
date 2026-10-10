@@ -73,8 +73,10 @@
           valHtml = `<span class="val"><input id="edit-input" value="${escAttr(it.value)}"` +
             (it.max ? ` maxlength="${it.max}"` : "") + `></span>`;
         } else {
-          const shown = (it.value === "" || it.value == null) ? "—" : it.value;
-          valHtml = `<span class="val">${escHtml(shown)}${editing ? " ◂▸" : ""}</span>`;
+          const empty = (it.value === "" || it.value == null);
+          const shown = empty ? (it.placeholder || "—") : it.value;
+          const ph = empty && it.placeholder ? " placeholder" : "";
+          valHtml = `<span class="val${ph}">${escHtml(shown)}${editing ? " ◂▸" : ""}</span>`;
         }
       }
       // Optional inline action button at the row's right end (it.action = {label,
@@ -268,7 +270,12 @@
 
   // ── Cursor + activation ──────────────────────────────────────
   function move(delta) {
-    if (state.editing) return adjust(delta); // in edit mode ▲▼ change value
+    if (state.editing) {
+      // In edit mode ▲▼ change the value. For a numeric field, ▲ (delta -1,
+      // "up") must INCREASE the number, so invert; fselect keeps its cycle order.
+      const it = state.items[state.sel];
+      return adjust(it && it.type === "fnum" ? -delta : delta);
+    }
     if (!state.items.length) return;
     let i = state.sel;
     for (let n = 0; n < state.items.length; n++) {
