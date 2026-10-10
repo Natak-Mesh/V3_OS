@@ -103,8 +103,6 @@ const PSK_MODES = ["keep", "random", "default", "none"];
 
 // Working copy of the radio config, filled from the cached read.
 let M = null;
-// Whether the collapsible radio-config section is expanded on the Meshtastic page.
-let MESH_CFG_OPEN = false;
 // Working copy of the presence-heartbeat node config (separate from radio).
 let HB = null;
 // Working copy of the per-UID TX rate limit (node config, read live by cot-bridge).
@@ -534,7 +532,9 @@ const PAGES = {
     },
   },
 
-  // Meshtastic radio: field list + read/apply/import/QR actions.
+  // Meshtastic: a menu of sub-pages. Each setting group is its own page so the
+  // operator sees one thing at a time (Enter to open, Back to return), instead
+  // of several collapsible sections stacked on one screen.
   meshtastic: {
     title: "Meshtastic Radio",
     async build() {
@@ -543,31 +543,33 @@ const PAGES = {
         `radio: ${s.radio_detected ? "detected" : "not detected"} · ` +
         `bridge: ${s.service_active ? "running" : "stopped"}` +
         (s.bridge_enabled ? " (enabled)" : " (disabled)");
+      return {
+        items: [
+          { type: "content", html: `<div class="content"><div class="kv">` +
+            `<span>${esc(statusLine)}</span></div></div>` },
+          { type: "nav", label: "RADIO CONFIGURATION", to: "mt_radio" },
+          { type: "nav", label: "SET CHANNEL", to: "mt_channel" },
+          { type: "nav", label: "PRESENCE HEARTBEAT", to: "mt_heartbeat" },
+          { type: "nav", label: "CoT TX RATE LIMIT", to: "mt_txrate" },
+        ],
+      };
+    },
+  },
 
-      if (MESH_CFG_OPEN && !M) {
+  // Radio configuration: the fields written to the radio by hand, plus read /
+  // apply. Loads the cached radio config (M) on entry if not already loaded.
+  mt_radio: {
+    title: "Radio Configuration",
+    async build() {
+      if (!M) {
         const { d } = await jget(MB + "/config");
         if (d.config) meshFillFrom(d.config);
       }
-
       const items = [{
-        type: "content",
-        html: `<div class="content"><div class="kv"><span>${esc(statusLine)}</span></div>` +
-          `<div class="hint" style="padding-left:0">Blue = channel identity (must match ` +
-          `across nodes) · Amber = this node only</div></div>`,
-      }, {
-        type: "button",
-        label: MESH_CFG_OPEN ? "« Radio configuration" : "» Radio configuration",
-        onEnter: (S) => { MESH_CFG_OPEN = !MESH_CFG_OPEN; return S.reload(); },
+        type: "button", label: "» Read config from radio",
+        onEnter: (S) => radioOp(S, MB + "/config/read", null, "read"),
       }];
-
-      if (MESH_CFG_OPEN) {
-        items.push({
-          type: "button", label: "» Read config from radio",
-          onEnter: (S) => radioOp(S, MB + "/config/read", null, "read"),
-        });
-      }
-
-      if (MESH_CFG_OPEN && M) {
+      if (M) {
         items.push(
           { type: "ftext", key: "owner", label: "Long name", value: M.owner, max: 39, onChange: (v) => M.owner = v },
           { type: "ftext", key: "owner_short", label: "Short name", value: M.owner_short, max: 4, onChange: (v) => M.owner_short = v },
@@ -580,6 +582,24 @@ const PAGES = {
           { type: "fnum", key: "tx_power", label: "TX power (dBm)", value: M.tx_power, min: 0, max: 30, color: "warn", onChange: (v) => M.tx_power = v },
           { type: "fselect", key: "role", label: "Role", options: ROLES, value: M.role, color: "warn", onChange: (v) => M.role = v },
           { type: "button", label: "» Apply to radio (reboots, ~30-120s)", onEnter: meshApply },
+        );
+      }
+      return { items };
+    },
+  },
+
+  // Set channel: share this node's channel (URL / QR), import another radio's
+  // channel URL, or copy a Nucleus peer's channel over the wifi mesh.
+  mt_channel: {
+    title: "Set Channel",
+    async build() {
+      if (!M) {
+        const { d } = await jget(MB + "/config");
+        if (d.config) meshFillFrom(d.config);
+      }
+      const items = [];
+      if (M) {
+        items.push(
           { type: "ftext", key: "channel_url", label: "Channel URL", value: M.channel_url, onChange: (v) => M.channel_url = v },
           { type: "button", label: "» Import channel URL", onEnter: meshImportUrl },
           { type: "button", label: "» Show QR code", onEnter: meshShowQr },
@@ -596,42 +616,54 @@ const PAGES = {
           ...peerItems(),
         );
       }
+      return { items };
+    },
+  },
 
-      // Presence heartbeat (node config, not radio) — kept in HB, saved via
-      // /api/v1/config. cot-bridge reads it live, so no radio reboot.
+  // Presence heartbeat (node config, not radio) — kept in HB, saved via
+  // /api/v1/config. cot-bridge reads it live, so no radio reboot.
+  mt_heartbeat: {
+    title: "Presence Heartbeat",
+    async build() {
       if (!HB) {
         const { d: cfg } = await jget("/api/v1/config");
         const hb = (cfg.meshtastic && cfg.meshtastic.heartbeat) || {};
         HB = { enabled: hb.enabled !== false, interval_secs: hb.interval_secs ?? 300 };
       }
-      items.push(
-        { type: "content", html: `<div class="content"><div class="page-title" ` +
-          `style="padding-left:0">Presence heartbeat</div><div class="hint" ` +
-          `style="padding-left:0">Keeps this node in peers' LoRa list without ATAK ` +
-          `traffic. Nodes drop off after 15 min of silence.</div></div>` },
-        { type: "fselect", key: "hb_enabled", label: "Heartbeat", options: ["on", "off"],
-          value: HB.enabled ? "on" : "off", onChange: (v) => HB.enabled = (v === "on") },
-        { type: "fnum", key: "hb_interval", label: "Interval (s)", value: HB.interval_secs,
-          min: 60, max: 3600, step: 60, onChange: (v) => HB.interval_secs = v },
-        { type: "button", label: "» Save heartbeat", onEnter: saveHeartbeat },
-      );
+      return {
+        items: [
+          { type: "content", html: `<div class="content"><div class="hint" ` +
+            `style="padding-left:0">Keeps this node in peers' LoRa list without ATAK ` +
+            `traffic. Nodes drop off after 15 min of silence.</div></div>` },
+          { type: "fselect", key: "hb_enabled", label: "Heartbeat", options: ["on", "off"],
+            value: HB.enabled ? "on" : "off", onChange: (v) => HB.enabled = (v === "on") },
+          { type: "fnum", key: "hb_interval", label: "Interval (s)", value: HB.interval_secs,
+            min: 60, max: 3600, step: 60, onChange: (v) => HB.interval_secs = v },
+          { type: "button", label: "» Save heartbeat", onEnter: saveHeartbeat },
+        ],
+      };
+    },
+  },
 
-      // TX rate limit (node config, not radio) — cot-bridge reads it live.
+  // CoT TX rate limit (node config, not radio) — cot-bridge reads it live.
+  mt_txrate: {
+    title: "CoT TX Rate Limit",
+    async build() {
       if (TXR === null) {
         const { d: cfg } = await jget("/api/v1/config");
         const mt = cfg.meshtastic || {};
         TXR = mt.tx_min_interval_secs ?? 30;
       }
-      items.push(
-        { type: "content", html: `<div class="content"><div class="page-title" ` +
-          `style="padding-left:0">TX rate limit</div><div class="hint" ` +
-          `style="padding-left:0">Min seconds between LoRa transmissions of the same CoT ` +
-          `UID. 0 disables the limit.</div></div>` },
-        { type: "fnum", key: "tx_min_interval", label: "TX rate limit (s)", value: TXR,
-          min: 0, max: 3600, step: 1, onChange: (v) => TXR = v },
-        { type: "button", label: "» Save TX rate limit", onEnter: saveTxRateLimit },
-      );
-      return { items };
+      return {
+        items: [
+          { type: "content", html: `<div class="content"><div class="hint" ` +
+            `style="padding-left:0">Min seconds between LoRa transmissions of the same CoT ` +
+            `UID. 0 disables the limit.</div></div>` },
+          { type: "fnum", key: "tx_min_interval", label: "TX rate limit (s)", value: TXR,
+            min: 0, max: 3600, step: 1, onChange: (v) => TXR = v },
+          { type: "button", label: "» Save TX rate limit", onEnter: saveTxRateLimit },
+        ],
+      };
     },
   },
 

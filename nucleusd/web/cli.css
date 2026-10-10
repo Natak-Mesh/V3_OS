@@ -118,6 +118,38 @@ html, body {
 .row.editing { background: #062616; color: var(--text-primary); }
 .row.editing .cur { color: var(--warn); }
 
+/* ── Row kinds: tell headers, commands and variables apart ──── */
+/* Section headers (collapse toggles): bold, uppercase, carded. */
+.row-section {
+  background: var(--bg-card);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+/* Command buttons: accent label, flush left (no indent). */
+.row-button .label { color: var(--accent); }
+.row-section .label { color: var(--text-primary); }
+/* Editable variables (fselect/fnum/ftext): indented, grey label, value in
+   normal text so the setting name and its value read as a pair, distinct
+   from the action buttons above/below them. */
+.row-fselect, .row-fnum, .row-ftext { min-height: 42px; }
+.row-fselect .label, .row-fnum .label, .row-ftext .label {
+  padding-left: 22px;
+  color: var(--text-secondary);
+}
+.row-fselect .val, .row-fnum .val, .row-ftext .val { color: var(--text-primary); }
+/* Selection + edit states keep their dark-on-accent contrast. */
+.row-section.sel .label, .row-button.sel .label { color: #05120b; }
+.row.sel .val { color: #05120b; }
+/* Selected (bright-green) field row: force BOTH label and value black so the
+   indented variable rows stay legible, matching the button/section rows. */
+.row-fselect.sel .label, .row-fnum.sel .label, .row-ftext.sel .label { color: #05120b; }
+/* Editing (dark-green) field row: light label + amber value (matching the edit
+   cursor) so black-on-dark-green is never shown. Last so it wins over .sel. */
+.row.editing .label { color: var(--text-primary); }
+.row.editing .val { color: var(--warn); }
+
 /* Inline row-action button (e.g. per-contact "req path"), pinned to the row's
    right end. Stays tappable while the rest of the row navigates. */
 .row .row-act {

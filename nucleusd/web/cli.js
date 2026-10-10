@@ -62,7 +62,10 @@
       if (it.type === "compose") { composeIdx = idx; return; }  // rendered in dock
       const sel = idx === state.sel;
       const editing = sel && state.editing;
-      const cls = "row" + (sel ? " sel" : "") + (editing ? " editing" : "");
+      // Per-type class so CSS can distinguish section headers, command buttons
+      // and editable variable rows (fselect/fnum/ftext) at a glance.
+      const cls = "row row-" + it.type + (it.section ? " row-section" : "") +
+        (sel ? " sel" : "") + (editing ? " editing" : "");
       const cur = sel ? "&gt;" : "";
       let valHtml = "";
       if (it.type === "fselect" || it.type === "fnum" || it.type === "ftext") {
