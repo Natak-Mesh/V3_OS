@@ -135,7 +135,8 @@ function msgUpsert(m) {
 // Reticulum/LXMF direct-message state. Separate from the broadcast chat above:
 // DMs are per-peer, keyed by the peer's lxmf.delivery hash.
 let RNS_DRAFT = "";
-let RNS_IMPORT = "";       // paste box draft for importing a nucleus-rns:// card
+let RNS_ADD_HASH = "";     // draft: lxmf.delivery address to add a contact by
+let RNS_ADD_NAME = "";     // draft: optional nickname for the add-by-hash above
 let RNS_CACHE = {};        // peer hash -> ordered (oldest→newest) message list
 let RNS_PATH_SEEN = {};    // peer hash -> epoch of the last operator path request
 // Shorten an rnsd interface string to a readable label for the contact row.
@@ -150,6 +151,16 @@ function rnsIface(raw) {
   const type = m[1].replace(/Interface$/, "");
   const inner = m[2].split("/")[0].trim();   // "wlan1", "Entry Node", "LoRa"
   return inner ? `${type}:${inner}` : type;
+}
+// Resolve a contact's display label: local nickname, else the LXMF announced
+// name, else a short hash. Mirrors ContactStore.display_name on the server.
+function rnsName(c) {
+  if (!c) return "?";
+  const nick = (c.name || "").trim();
+  if (nick) return nick;
+  const announced = (c.announced_name || "").trim();
+  if (announced) return announced;
+  return (c.lxmf_hash || "").slice(0, 10) || "?";
 }
 // Merge a DM into the per-peer cache (by peer+ts+direction; no server id).
 function rnsUpsert(m) {
@@ -468,19 +479,17 @@ const PAGES = {
     },
   },
 
-  // Reticulum (rnsd) read-only monitor: transport identity/uptime, configured
-  // interfaces with traffic + announce rates + attached clients, path count.
-  // Data comes from the shared-instance control socket via /api/v1/reticulum.
+  // Reticulum (rnsd) read-only monitor + hub: rnsd up/down, uptime and path
+  // count; this node's messaging address with manual announce; the configured
+  // interfaces (traffic + clients); and links to contacts and add-contacts.
+  // Data comes from the shared-instance control socket via /api/v1/reticulum
+  // and the messaging daemon via /api/v1/messaging/rns.
   reticulum: {
     title: "Reticulum",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
-      const items = [
-        { type: "nav", label: "» DIRECT MESSAGES (Reticulum)", to: "rns_nodes" },
-        { type: "nav", label: "» ADD CONTACTS (my card / mesh / link)", to: "rns_identity" },
-        { type: "nav", label: "» INTERFACES", to: "rns_interfaces" },
-      ];
+      const items = [];
 
       if (!ok || !s.running) {
         items.push({ type: "content", html: `<div class="content">` +
@@ -488,31 +497,32 @@ const PAGES = {
         return { items };
       }
 
+      // ── status ───────────────────────────────────────────────
       const t = s.transport || {};
-      let head = `<div class="content"><div class="kv">` +
-        `<span>transport <b>${esc(t.transport_id || "—")}</b></span></div>` +
-        `<div class="kv"><span>uptime <b>${t.uptime != null ? fmtDur(t.uptime) : "—"}</b></span>` +
-        `<span>paths <b>${s.path_count}</b></span></div>` +
-        `<div class="kv"><span>rx <b>${fmtBytes(t.rxb)}</b></span>` +
-        `<span>tx <b>${fmtBytes(t.txb)}</b></span></div></div>`;
-      items.push({ type: "content", html: head });
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="kv"><span>rnsd <b class="ok">up</b></span>` +
+        `<span>uptime <b>${t.uptime != null ? fmtDur(t.uptime) : "—"}</b></span>` +
+        `<span>paths <b>${s.path_count}</b></span></div></div>` });
 
-      return { items };
-    },
-  },
-
-  // Reticulum interfaces table, split off the main Reticulum page.
-  rns_interfaces: {
-    title: "Reticulum Interfaces",
-    dynamic: 5000,
-    async build() {
-      const { ok, d: s } = await jget("/api/v1/reticulum/status");
-      if (!ok || !s.running) {
-        return { items: [{ type: "content", html: `<div class="content">` +
-          `<div class="off">rnsd is not running — no Reticulum status available</div></div>` }] };
+      // ── my identity + announce ───────────────────────────────
+      const ms = await jget("/api/v1/messaging/rns/status");
+      const m = ms.ok ? ms.d : {};
+      if (m.enabled) {
+        let id = `<div class="content"><div class="page-title" style="padding-left:0">My identity</div>`;
+        id += `<div class="kv"><span>announce <b>${esc(m.announce_mode || "manual")}</b></span></div></div>`;
+        items.push({ type: "content", html: id });
+        items.push({ type: "button", label: "» Announce now (make me discoverable)", onEnter: rnsAnnounce });
       }
 
-      const ifaces = s.interfaces || [];
+      // ── contacts / add links ─────────────────────────────────
+      const r = await jget("/api/v1/messaging/rns/contacts");
+      const n = (r.ok && r.d.contacts) ? r.d.contacts.length : 0;
+      items.push({ type: "nav", label: `» DIRECT MESSAGES (${n} contact${n === 1 ? "" : "s"})`, to: "rns_nodes" });
+      items.push({ type: "nav", label: "» ADD CONTACTS (my card / mesh / link)", to: "rns_add" });
+
+      // ── interfaces (hide the internal Shared Instance row) ────
+      const ifaces = (s.interfaces || []).filter((i) =>
+        !(i.short_name || i.name || "").startsWith("Shared Instance"));
       let h = `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div>`;
       if (!ifaces.length) {
         h += `<div class="off">no interfaces configured</div>`;
@@ -531,7 +541,9 @@ const PAGES = {
         h += `</table>`;
       }
       h += `</div>`;
-      return { items: [{ type: "content", html: h }] };
+      items.push({ type: "content", html: h });
+
+      return { items };
     },
   },
 
@@ -943,8 +955,9 @@ const PAGES = {
   },
 
   // Reticulum/LXMF Direct Messages: the saved contacts, each opening a
-  // conversation. Adding new contacts (my card, mesh nodes, paste link) lives
-  // on the Add Contacts page (rns_identity), not here.
+  // conversation. Node status, this node's address and the Announce button are
+  // on the main Reticulum page; adding new contacts (my card, mesh nodes, paste
+  // link) lives on the Add Contacts page (rns_add), not here.
   rns_nodes: {
     title: "Direct Messages",
     dynamic: 5000,
@@ -961,25 +974,19 @@ const PAGES = {
           `in the config, then apply.</div></div>` });
         return { items };
       }
-      let head = `<div class="content"><div class="kv"><span>status ` +
-        `<b class="${s.started ? "ok" : "warn"}">${s.started ? "up" : "starting…"}</b></span></div>`;
-      if (s.address) head += `<div class="kv"><span>this node <b>${esc(s.address)}</b></span></div>`;
-      head += `<div class="kv"><span>announce <b>${esc(s.announce_mode || "manual")}</b></span></div></div>`;
-      items.push({ type: "content", html: head });
-      items.push({ type: "button", label: "» Announce now (make me discoverable)", onEnter: rnsAnnounce });
 
       // ── saved contacts ──────────────────────────────────────
       const r = await jget("/api/v1/messaging/rns/contacts");
       const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
       items.push({ type: "content", html: `<div class="content">` +
         `<div class="page-title" style="padding-left:0">Contacts</div>` +
-        (contacts.length ? "" : `<div class="off">no contacts yet — add one below</div>`) + `</div>` });
+        (contacts.length ? "" : `<div class="off">no contacts yet — add one on the Add Contacts page</div>`) + `</div>` });
       // Path state per contact (known/hops + age) is shown on the same row, with
       // an inline REQ PATH button. Reads are parallel and emit no RNS traffic.
       const paths = await Promise.all(contacts.map((c) =>
         jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(c.lxmf_hash) + "/path")));
       contacts.forEach((c, i) => {
-        const who = c.name || (c.id != null ? String(c.id) : c.lxmf_hash.slice(0, 10));
+        const who = rnsName(c);
         const key = c.pubkey ? "" : "  ·  no key yet";
         const pr = paths[i];
         const path = (pr && pr.ok && pr.d.path) ? pr.d.path : { known: false };
@@ -1009,11 +1016,11 @@ const PAGES = {
     },
   },
 
-  // Add Contacts: everything for adding Reticulum contacts — this node's own
-  // shareable card (nucleus-rns:// link + scannable QR), Nucleus nodes found over
-  // the WiFi mesh with a one-tap Add, and a paste box to import another node's
-  // card link. Split off the Direct Messages page, which only lists conversations.
-  rns_identity: {
+  // Add Contacts: add any LXMF contact by its destination hash (the standard
+  // Reticulum address every client shows), with an optional nickname; plus a
+  // one-tap Add for Nucleus nodes found on the WiFi mesh. This node's own
+  // destination hash to share is in the "Share me" section at the top.
+  rns_add: {
     title: "Add Contacts",
     async build() {
       const st = await jget("/api/v1/messaging/rns/status");
@@ -1026,11 +1033,30 @@ const PAGES = {
           `in the config, then apply.</div></div>` });
         return { items };
       }
-      let head = `<div class="content">`;
-      if (s.address) head += `<div class="kv"><span>this node <b>${esc(s.address)}</b></span></div>`;
-      head += `<div id="rns-card-slot"></div></div>`;
-      items.push({ type: "content", html: head });
-      items.push({ type: "button", label: "» Show my contact card / QR", onEnter: rnsShowCard });
+      // ── share: my destination hash ───────────────────────────
+      let share = `<div class="content"><div class="page-title" style="padding-left:0">Share me</div>`;
+      share += `<div class="hint" style="padding-left:0">Give this to anyone who wants to ` +
+        `message you — it works in Sideband, MeshChat, NomadNet or another Nucleus node.</div>`;
+      if (s.address) {
+        share += `<div class="kv"><span>my lxmf.delivery destination hash</span></div>` +
+          `<div class="hint" style="padding-left:0;word-break:break-all"><b>${esc(s.address)}</b></div>`;
+      } else {
+        share += `<div class="off">destination hash not ready — rnsd/lane still starting</div>`;
+      }
+      share += `</div>`;
+      items.push({ type: "content", html: share });
+
+      // ── add by destination hash (keyless, transmits nothing) ──
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">Add a contact</div>` +
+        `<div class="hint" style="padding-left:0">Paste their lxmf.delivery destination hash ` +
+        `(32 hex chars) and an optional nickname. Saved with no key yet — press ` +
+        `<b>req path</b> on the contact to fetch its key. Nothing is sent.</div></div>` });
+      items.push({ type: "ftext", label: "Destination hash", value: RNS_ADD_HASH, max: 64,
+        onChange: (v) => RNS_ADD_HASH = v });
+      items.push({ type: "ftext", label: "Nickname", value: RNS_ADD_NAME, max: 40,
+        onChange: (v) => RNS_ADD_NAME = v });
+      items.push({ type: "button", label: "» Add contact", onEnter: rnsAddHash });
 
       // ── Nucleus nodes on the WiFi mesh (pull their cards) ────
       const r = await jget("/api/v1/messaging/rns/contacts");
@@ -1047,13 +1073,6 @@ const PAGES = {
         items.push({ type: "button", label: `» Add ${who} (${p.ip})`,
           onEnter: (S) => rnsAddMesh(S, p.card) });
       });
-
-      // ── paste-import a card link ─────────────────────────────
-      items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">Import a card link</div></div>` });
-      items.push({ type: "ftext", label: "Card link", value: RNS_IMPORT, max: 400,
-        onChange: (v) => RNS_IMPORT = v });
-      items.push({ type: "button", label: "» Import pasted link", onEnter: rnsImportLink });
       return { items };
     },
   },
@@ -1099,6 +1118,10 @@ const PAGES = {
         placeholder: "Type a message",
         sendLabel: "Send", onChange: (v) => RNS_DRAFT = v,
         onSubmit: (S, text) => rnsSend(S, peer, text) });
+      items.push({ type: "button", label: "» Rename contact",
+        onEnter: (S) => rnsRename(S, peer, p.host) });
+      items.push({ type: "button", label: "» Remove contact",
+        onEnter: (S) => rnsRemove(S, peer, p.host) });
       return { items };
     },
   },
@@ -1327,24 +1350,6 @@ async function rnsSend(S, peer, text) {
   return S.reload();
 }
 
-// Show this node's own contact card: its nucleus-rns:// link + a scannable QR.
-// Another node imports it by scanning the QR (then pasting) or pasting the link.
-async function rnsShowCard(S) {
-  const { ok, d } = await jget("/api/v1/messaging/rns/card");
-  const slot = document.getElementById("rns-card-slot");
-  if (!ok || !d.link) {
-    if (slot) slot.innerHTML = "";
-    return S.msg("card not ready — rnsd/lane still starting", false);
-  }
-  let svg = "";
-  try { svg = await (await fetch("/api/v1/messaging/rns/card/qr")).text(); } catch (e) {}
-  if (slot) slot.innerHTML =
-    `<div class="kv"><span>my card <b>${esc(d.card.name || "")}</b></span></div>` +
-    (svg ? `<div class="qr">${svg}</div>` : "") +
-    `<div class="hint" style="padding-left:0;word-break:break-all">${esc(d.link)}</div>`;
-  S.msg("");
-}
-
 // Announce this node's lxmf.delivery once so peers can resolve a path to it.
 async function rnsAnnounce(S) {
   const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/announce", {});
@@ -1374,16 +1379,43 @@ async function rnsAddMesh(S, card) {
   return S.reload();
 }
 
-// Import a contact from a pasted nucleus-rns:// link.
-async function rnsImportLink(S) {
-  const link = (RNS_IMPORT || "").trim();
-  if (!link) return S.msg("paste a nucleus-rns:// link first", false);
+// Add a contact by its lxmf.delivery address (+ optional nickname). Keyless and
+// out-of-band: the server only stores it — nothing is transmitted. The key comes
+// later via req path (or an inbound message).
+async function rnsAddHash(S) {
+  const dest = (RNS_ADD_HASH || "").trim().toLowerCase();
+  if (!dest) return S.msg("enter an lxmf.delivery address first", false);
+  const name = (RNS_ADD_NAME || "").trim();
   const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/contacts",
-    { link, source: "link" });
-  if (!ok) return S.msg("import failed: " + (d.detail || "error"), false);
-  RNS_IMPORT = "";
-  S.msg("imported " + ((d.contact && (d.contact.name || d.contact.id)) || "contact"));
+    { dest, name, source: "hash" });
+  if (!ok) return S.msg("add failed: " + (d.detail || "error"), false);
+  RNS_ADD_HASH = ""; RNS_ADD_NAME = "";
+  const who = (d.contact && (d.contact.name || d.contact.lxmf_hash.slice(0, 10))) || dest.slice(0, 10);
+  S.msg("added " + who + " — no key yet (req path to fetch it)");
   return S.reload();
+}
+
+// Rename a contact (set its local nickname). Transmits nothing.
+async function rnsRename(S, peer, cur) {
+  const name = (typeof prompt === "function")
+    ? prompt("Nickname for this contact (blank to clear):", cur || "") : null;
+  if (name === null) return;
+  const { ok, d } = await jsend("PATCH",
+    "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer), { name: name.trim() });
+  if (!ok) return S.msg("rename failed: " + (d.detail || "error"), false);
+  S.msg("renamed");
+  return S.reload();
+}
+
+// Remove a contact after confirmation. Transmits nothing.
+async function rnsRemove(S, peer, who) {
+  if (typeof confirm === "function" &&
+      !confirm("Remove contact " + (who || peer) + "? This only forgets it locally.")) return;
+  const { ok, d } = await jsend("DELETE",
+    "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer));
+  if (!ok) return S.msg("remove failed: " + (d.detail || "error"), false);
+  S.msg("removed");
+  return S.go("rns_nodes");
 }
 
 // ── Messaging live push (WebSocket) ────────────────────────────

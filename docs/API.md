@@ -308,37 +308,45 @@ Per-contact one-to-one LXMF messages over `rnsd`, distinct from the broadcast
 WiFi/LoRa log above. Off unless `messaging.rns.enabled`; endpoints then return
 empty/`disabled` cleanly rather than erroring.
 
-Contacts are **explicit** — there is no flooded announce. You add a peer by
-importing its contact card (over the mesh, from a `nucleus-rns://` link, or by
-scanning its QR). Each card carries the identity public key, so an import
-verifies that the lxmf address matches the key before trusting it. An inbound
-message also auto-adds its sender.
+Contacts are **explicit** — there is no flooded announce. A contact is identified
+by its **lxmf.delivery destination hash** (the standard Reticulum/LXMF address,
+32 hex chars). The normal way to add one is by that hash alone — keyless and
+out-of-band, transmitting nothing. Nucleus nodes can also be pulled over the WiFi
+mesh (an internal card that carries the key, verified address↔key). An inbound
+message also auto-adds its sender. The public key — needed to actually send — is
+learned later (mesh pull, operator **req path**, or a signed inbound message) and
+persisted.
 
 - `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>",
-  "announce_mode":"manual"}`.
+  "announce_mode":"manual"}`. `address` is this node's lxmf.delivery destination
+  hash — the thing to share.
 - `GET /rns/contacts` — known contacts:
-  `{"ok":true,"contacts":[{"lxmf_hash":"...","pubkey":"...","name":"0009-nucleus",
-  "id":9,"source":"mesh","added":<ts>,"last_seen":<ts|null>}]}`. `source` is the
-  provenance (`link`/`qr`/`mesh`/`inbound`).
-- `POST /rns/contacts` — import a contact. Body `{"link":"nucleus-rns://..."}`
-  **or** `{"card":{...}}`, plus a `source` tag. Verifies address↔key; `400` if
-  the card is malformed or the key doesn't match the address.
+  `{"ok":true,"contacts":[{"lxmf_hash":"...","pubkey":"...","name":"","
+  "announced_name":"0009-nucleus","id":9,"source":"hash","added":<ts>,
+  "last_seen":<ts|null>}]}`. `source` is the provenance (`hash`/`mesh`/`inbound`).
+  `name` is the local nickname; `announced_name` is the peer's LXMF display name.
+  `pubkey` is `""` until the key is learned.
+- `POST /rns/contacts` — add a contact. Body `{"dest":"<lxmf hash>","name":"<opt
+  nickname>"}` (the normal case) **or** `{"card":{...}}` from a mesh pull, plus a
+  `source` tag. Add-by-hash validates the 32-hex shape and transmits nothing; a
+  card is verified address↔key. `400` on a bad hash or a key/address mismatch.
   ```bash
   curl -s -X POST http://localhost:8080/api/v1/messaging/rns/contacts \
     -H 'Content-Type: application/json' \
-    -d '{"link":"nucleus-rns://...","source":"link"}'
+    -d '{"dest":"<lxmf hash>","name":"Alice","source":"hash"}'
   ```
+- `PATCH /rns/contacts/{dest}` — set/clear the local nickname. Body `{"name":
+  "..."}` (`""` clears). Transmits nothing.
 - `DELETE /rns/contacts/{dest}` — forget a contact by its lxmf hash.
-- `GET /rns/card` — this node's own shareable card plus its link:
-  `{"ok":true,"card":{...},"link":"nucleus-rns://..."}`. `503` until the lane is
-  started.
-- `GET /rns/card/qr` — the card link as an **SVG image** (`image/svg+xml`),
-  scannable by another node.
+- `GET /rns/card` — this node's contact card (`{"ok":true,"card":{...}}`) for a
+  neighbouring Nucleus node to pull over the mesh. Not a shareable off-node
+  format — hand out the destination hash from `/rns/status` instead. `503` until
+  the lane is started.
 - `GET /rns/mesh-peers` — Nucleus nodes reachable over the WiFi mesh, each with
   its contact card for one-tap add:
-  `{"ok":true,"peers":[{"ip":"10.20.1.9","card":{...},"link":"nucleus-rns://..."}]}`.
-  Found via Babel neighbours; nodes with the lane off are omitted. Cards here are
-  untrusted until imported (import re-verifies address↔key).
+  `{"ok":true,"peers":[{"ip":"10.20.1.9","card":{...}}]}`. Found via Babel
+  neighbours; nodes with the lane off are omitted. Cards are untrusted until
+  added (which re-verifies address↔key).
 - `POST /rns/announce` — emit this node's `lxmf.delivery` announce once
   (operator-triggered): `{"ok":true,"announced":bool}`.
 - `GET /rns/contacts/{dest}/path` — read-only path state for a contact:

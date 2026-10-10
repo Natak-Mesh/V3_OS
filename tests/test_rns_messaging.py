@@ -33,6 +33,14 @@ FIXTURE_PUB = (
 )
 FIXTURE_LXMF = "54f56bb421adbfed2932e2a8973754c5"
 
+# A second real, matching hash/key pair (an lxma-style peer address as supplied
+# by an operator). Pins add-by-hash against a genuine destination hash + key.
+USER_HASH = "11efea534593c763cd173f7d62123bff"
+USER_PUB = (
+    "e7d063a4ad737dc3755ceed2960bb1d95d75b4d0e801edc62f75a2065cd86d2f"
+    "663389bbe228a8042d35d93d830ba411fd48a3b8813c6c0356f94ba741707818"
+)
+
 
 def _card(**over):
     base = {"v": 1, "name": "0042-nucleus", "id": 42,
@@ -51,29 +59,7 @@ def test_lxmf_hash_rejects_bad_key_length():
         proto.lxmf_delivery_hash(b"\x00" * 10)
 
 
-# ── contact card wire format ─────────────────────────────────────
-def test_card_roundtrip_link():
-    link = proto.encode_card(_card())
-    assert link.startswith("nucleus-rns://")
-    back = proto.decode_card(link)
-    assert back["lxmf_hash"] == FIXTURE_LXMF
-    assert back["pubkey"] == FIXTURE_PUB
-    assert back["name"] == "0042-nucleus" and back["id"] == 42
-
-
-def test_decode_accepts_bare_token():
-    link = proto.encode_card(_card())
-    token = link[len("nucleus-rns://"):]
-    assert proto.decode_card(token) == proto.decode_card(link)
-
-
-def test_decode_rejects_garbage():
-    assert proto.decode_card(None) is None
-    assert proto.decode_card("") is None
-    assert proto.decode_card("nucleus-rns://not-base64!!") is None
-    assert proto.decode_card("http://example.com") is None
-
-
+# ── mesh-pull card verification ──────────────────────────────────
 def test_verify_card_matches_and_rejects_mismatch():
     assert proto.verify_card(_card()) is True
     # Flip one nibble of the claimed address: key no longer derives it.
@@ -81,18 +67,15 @@ def test_verify_card_matches_and_rejects_mismatch():
     assert proto.verify_card(bad) is False
 
 
-def test_card_qr_svg_renders():
-    pytest.importorskip("qrcode")  # a package dep; may be absent on a bare dev venv
-    svg = proto.card_qr_svg(proto.encode_card(_card()))
-    assert svg.startswith(b"<?xml") or b"<svg" in svg
-
-
 # ── contact store ────────────────────────────────────────────────
 def test_contact_add_card_verifies():
     cs = ContactStore()
-    c = cs.add_card(_card(), source="link")
+    # A mesh-pulled card: its advertised name lands in announced_name (network-
+    # sourced), never the local nickname, which stays blank until the operator sets it.
+    c = cs.add_card(_card(), source="mesh")
     assert c["lxmf_hash"] == FIXTURE_LXMF and c["pubkey"] == FIXTURE_PUB
-    assert c["source"] == "link"
+    assert c["source"] == "mesh"
+    assert c["name"] == "" and c["announced_name"] == "0042-nucleus"
     assert [x["lxmf_hash"] for x in cs.as_list()] == [FIXTURE_LXMF]
 
 
@@ -112,6 +95,85 @@ def test_contact_inbound_autoadd_then_upgrade():
     assert c2["pubkey"] == FIXTURE_PUB and c2["added"] == 1.0
     # Only keyed contacts are offered for RNS preload.
     assert [x["lxmf_hash"] for x in cs.with_keys()] == [FIXTURE_LXMF]
+
+
+def test_valid_lxmf_hash():
+    assert proto.valid_lxmf_hash(FIXTURE_LXMF) is True
+    assert proto.valid_lxmf_hash(FIXTURE_LXMF.upper()) is True   # case-insensitive
+    assert proto.valid_lxmf_hash("  " + FIXTURE_LXMF + "  ") is True  # trimmed
+    assert proto.valid_lxmf_hash(FIXTURE_LXMF[:-1]) is False     # 31 chars
+    assert proto.valid_lxmf_hash(FIXTURE_LXMF + "ab") is False   # too long
+    assert proto.valid_lxmf_hash("zz" + FIXTURE_LXMF[2:]) is False  # non-hex
+    assert proto.valid_lxmf_hash(None) is False
+    assert proto.valid_lxmf_hash(b"\x00" * 16) is False          # bytes, not hex str
+
+
+def test_contact_add_by_hash_keyless():
+    cs = ContactStore()
+    c = cs.add_hash(FIXTURE_LXMF.upper(), ts=1.0)   # normalised to lowercase
+    assert c["lxmf_hash"] == FIXTURE_LXMF
+    assert c["pubkey"] == "" and c["source"] == "hash"
+    assert c["added"] == 1.0 and c["last_seen"] is None
+    # Keyless -> not offered for RNS preload until a key is learned.
+    assert cs.with_keys() == []
+    assert [x["lxmf_hash"] for x in cs.as_list()] == [FIXTURE_LXMF]
+
+
+def test_contact_add_by_hash_with_nickname():
+    """The real user-supplied value: an lxma-style contact, added by its hash
+    with a nickname so the operator can tell who it is."""
+    cs = ContactStore()
+    c = cs.add_hash(USER_HASH, name="Alice", ts=5.0)
+    assert c["lxmf_hash"] == USER_HASH and c["name"] == "Alice"
+    assert c["pubkey"] == "" and c["source"] == "hash"
+    # USER_HASH/USER_PUB are a real matching pair (pins the derivation).
+    assert proto.lxmf_delivery_hash(bytes.fromhex(USER_PUB)) == USER_HASH
+
+
+def test_contact_add_by_hash_rejects_bad():
+    cs = ContactStore()
+    with pytest.raises(ValueError):
+        cs.add_hash(FIXTURE_LXMF[:-1])
+    assert cs.as_list() == []
+
+
+def test_contact_add_by_hash_preserves_existing_key():
+    cs = ContactStore()
+    cs.add_card(_card(), source="mesh")            # keyed contact exists
+    cs.set_name(FIXTURE_LXMF, "Bob")               # operator set a nickname
+    c = cs.add_hash(FIXTURE_LXMF, ts=99.0)         # re-add by hash must not downgrade
+    assert c["pubkey"] == FIXTURE_PUB
+    assert c["name"] == "Bob" and c["source"] == "mesh"
+    assert c["announced_name"] == "0042-nucleus"
+
+
+def test_contact_set_name_rename_and_clear():
+    cs = ContactStore()
+    cs.add_hash(FIXTURE_LXMF)
+    assert cs.set_name(FIXTURE_LXMF, "  Charlie  ")["name"] == "Charlie"
+    assert cs.set_name(FIXTURE_LXMF, "")["name"] == ""
+    assert cs.set_name("deadbeef", "x") is None    # no such contact
+
+
+def test_contact_set_key_persists_learned_identity():
+    cs = ContactStore()
+    cs.add_hash(FIXTURE_LXMF)                       # keyless add-by-hash
+    c = cs.set_key(FIXTURE_LXMF, FIXTURE_PUB, announced_name="0042-nucleus")
+    assert c["pubkey"] == FIXTURE_PUB and c["announced_name"] == "0042-nucleus"
+    assert [x["lxmf_hash"] for x in cs.with_keys()] == [FIXTURE_LXMF]
+    # Won't downgrade an existing key, and is a no-op for an unknown contact.
+    assert cs.set_key(FIXTURE_LXMF, "00" * 64)["pubkey"] == FIXTURE_PUB
+    assert cs.set_key("deadbeef", FIXTURE_PUB) is None
+
+
+def test_display_name_resolution_order():
+    from nucleusd.messaging.rns_contacts import display_name
+    assert display_name({"name": "Nick", "announced_name": "Ann",
+                         "lxmf_hash": FIXTURE_LXMF}) == "Nick"
+    assert display_name({"name": "", "announced_name": "Ann",
+                         "lxmf_hash": FIXTURE_LXMF}) == "Ann"
+    assert display_name({"name": "", "announced_name": "",
+                         "lxmf_hash": FIXTURE_LXMF}) == FIXTURE_LXMF[:10]
 
 
 def test_contact_remove_and_persist(tmp_path):
@@ -288,6 +350,11 @@ def _started_lane(monkeypatch):
         return True
 
     monkeypatch.setattr(rns_lane.reti, "drop_path", _fake_drop)
+    # path_info() (called at the end of request_path) reads rnsd's path table over
+    # its RPC socket, which would import RNS.vendor.umsgpack — unavailable while RNS
+    # is faked above. Stub it to an empty table; the path_info-specific test
+    # overrides this with a real-shaped reply.
+    monkeypatch.setattr(rns_lane.reti, "path_table", lambda *a, **k: [])
     lane = rns_lane.RnsLane(display_name="0042-nucleus")
     lane._started = True
     return lane

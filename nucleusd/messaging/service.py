@@ -364,8 +364,10 @@ class MessagingService:
         if cmd == "rns_card":
             return self._rns_card()
         if cmd == "rns_import":
-            return self._rns_import(req.get("link"), req.get("card"),
-                                    req.get("source", "link"))
+            return self._rns_import(req.get("card"), req.get("source", "hash"),
+                                    req.get("dest"), req.get("name", ""))
+        if cmd == "rns_set_name":
+            return self._rns_set_name(req.get("dest", ""), req.get("name", ""))
         if cmd == "rns_remove":
             return self._rns_remove(req.get("dest", ""))
         if cmd == "rns_announce":
@@ -395,36 +397,59 @@ class MessagingService:
         return {"ok": True, "contacts": self._rns_contacts.as_list()}
 
     def _rns_card(self) -> dict:
-        """This node's shareable contact card + its nucleus-rns:// link."""
+        """This node's contact card (hash + key + name), for mesh-peer pulls.
+
+        Served over the local HTTP API so a neighbouring Nucleus node can one-tap
+        add us (see ``/rns/mesh-peers``). It is NOT a shareable off-node format —
+        what we hand out by hand is the plain destination hash from ``/rns/status``.
+        """
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
             return {"ok": False, "error": "rns lane not available"}
         card = self._rns_lane.card()
         if not card:
             return {"ok": False, "error": "card not ready"}
-        from . import rns_proto as proto
-        return {"ok": True, "card": card, "link": proto.encode_card(card)}
+        return {"ok": True, "card": card}
 
-    def _rns_import(self, link, card, source: str) -> dict:
-        """Import a contact from a nucleus-rns:// link or a raw card dict.
+    def _rns_import(self, card, source: str, dest=None, name="") -> dict:
+        """Add a contact by bare lxmf.delivery hash, or from a mesh-pulled card.
 
-        Verifies the card (address must match key) and, if the lane is up, loads
-        the key into RNS straight away so the contact is messageable with no
-        restart. Returns the stored contact.
+        A bare ``dest`` hash (the normal case) is stored keyless and out-of-band —
+        no verification is possible without a key and NOTHING is transmitted; the
+        contact becomes messageable once its key is learned (operator-triggered
+        req path, or an inbound message). An optional ``name`` is stored as the
+        local nickname. A ``card`` dict (only produced by a mesh pull over our own
+        HTTP API) is verified (address must match key) and its key loaded into RNS
+        straight away so the contact is messageable with no restart.
         """
         if not (self.rns_enabled and self._rns_contacts):
             return {"ok": False, "error": "rns lane not available"}
         from . import rns_proto as proto
-        parsed = card if isinstance(card, dict) else proto.decode_card(link)
-        if parsed is None:
-            return {"ok": False, "error": "could not parse contact card"}
-        if not proto.verify_card(parsed):
+        # Add-by-hash: no card, just a destination hash. Stored silently.
+        if dest and not card:
+            try:
+                contact = self._rns_contacts.add_hash(dest, name=name or "")
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+            return {"ok": True, "contact": contact}
+        if not isinstance(card, dict):
+            return {"ok": False, "error": "no destination hash or card provided"}
+        if not proto.verify_card(card):
             return {"ok": False, "error": "card failed verification (address/key mismatch)"}
         try:
-            contact = self._rns_contacts.add_card(parsed, source=source)
+            contact = self._rns_contacts.add_card(card, source=source)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
-        if self._rns_lane and self._rns_lane.started:
+        if self._rns_lane and self._rns_lane.started and contact.get("pubkey"):
             self._rns_lane.remember_contact(contact["lxmf_hash"], contact["pubkey"])
+        return {"ok": True, "contact": contact}
+
+    def _rns_set_name(self, dest: str, name: str) -> dict:
+        """Set a contact's local nickname (operator rename). Transmits nothing."""
+        if not (self.rns_enabled and self._rns_contacts):
+            return {"ok": False, "error": "rns lane not available"}
+        contact = self._rns_contacts.set_name(dest, name)
+        if contact is None:
+            return {"ok": False, "error": "no such contact"}
         return {"ok": True, "contact": contact}
 
     def _rns_remove(self, dest: str) -> dict:
@@ -445,10 +470,23 @@ class MessagingService:
         return {"ok": True, "path": self._rns_lane.path_info(dest)}
 
     def _rns_request_path(self, dest: str) -> dict:
-        """Operator-triggered: emit ONE path request for a contact."""
+        """Operator-triggered: emit ONE path request for a contact.
+
+        After the request, try to recall the peer's identity locally (the path
+        response typically carries it) and persist the key + announced name to the
+        contact book, so the contact survives a restart and gets a human label.
+        This is a local read/write only — it transmits nothing beyond the single
+        path request the lane already made.
+        """
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
             return {"ok": False, "error": "rns lane not available"}
-        return self._rns_lane.request_path(dest)
+        res = self._rns_lane.request_path(dest)
+        if res.get("ok") and self._rns_contacts:
+            learned = self._rns_lane.recall_contact(dest)
+            if learned and learned.get("pubkey"):
+                self._rns_contacts.set_key(dest, learned["pubkey"],
+                                           learned.get("announced_name", ""))
+        return res
 
     def _rns_history(self, peer, since: float) -> dict:
         if not (self.rns_enabled and self._rns_store):

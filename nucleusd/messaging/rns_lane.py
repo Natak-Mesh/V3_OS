@@ -282,6 +282,38 @@ class RnsLane:
             log(f"could not remember contact {lxmf_hash_hex[:8]}: {e}")
             return False
 
+    def recall_contact(self, dest_hash_hex: str) -> Optional[dict]:
+        """Recall a peer's public key + announced display name from RNS, if known.
+
+        After a path request the shared instance usually holds the peer's identity
+        and its latest ``lxmf.delivery`` announce app_data. We read both locally —
+        this emits nothing — so the service can persist the key (reply-ready across
+        restarts) and a human-readable name. Returns ``{"pubkey","announced_name"}``
+        or None if RNS has nothing for this hash yet.
+        """
+        if not self._started:
+            return None
+        import RNS
+        import LXMF
+        try:
+            dest_hash = bytes.fromhex(dest_hash_hex)
+        except (ValueError, TypeError):
+            return None
+        try:
+            ident = RNS.Identity.recall(dest_hash)
+        except Exception:
+            ident = None
+        if ident is None:
+            return None
+        name = ""
+        try:
+            app_data = RNS.Identity.recall_app_data(dest_hash)
+            if app_data:
+                name = LXMF.display_name_from_app_data(app_data) or ""
+        except Exception:
+            name = ""
+        return {"pubkey": ident.get_public_key().hex(), "announced_name": name}
+
     # ── announce (lxmf.delivery only, on demand) ─────────────────
     def announce(self) -> bool:
         """Announce our lxmf.delivery destination once. Returns True if emitted.

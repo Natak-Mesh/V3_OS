@@ -60,27 +60,34 @@ rnsd (shared instance) ◄──── lxmf.delivery  ───────► C
 - **Identity** — one NODE identity at `/var/lib/nucleus/rns/identity` (created
   once, 0600, survives redeploys). Not tied to any phone/user. The lxmf.delivery
   destination and this node's shareable contact card derive from it.
-- **Contact cards replace the old custom announce.** There is no `nucleus.node`
-  announce any more. A card is `{v,name,id,lxmf_hash,pubkey}`, encoded as a
-  `nucleus-rns://<base64url msgpack>` link (also rendered as a QR). On import the
-  importer recomputes `lxmf_hash` from `pubkey` and **rejects any card whose two
-  halves disagree** (`rns_proto.verify_card`) — a card can't claim an address it
-  has no key for. The address derivation (`lxmf_delivery_hash`) reproduces
+- **Contacts are identified by their lxmf.delivery destination hash** — the
+  standard Reticulum/LXMF address (32 hex chars). There is no `nucleus.node`
+  announce and no custom share format. The usual add is by hash alone
+  (`ContactStore.add_hash`, `proto.valid_lxmf_hash`): keyless, out-of-band, and
+  it transmits nothing. The address derivation (`lxmf_delivery_hash`) reproduces
   `RNS.Destination.hash(identity,"lxmf","delivery")` purely and is pinned to the
   real library by a fixture test.
-- **No announce needed to send.** On start — and whenever a contact is imported —
-  the lane calls `RNS.Identity.remember(pubkey)` for every stored contact, so
-  `RNS.Identity.recall()` returns a usable identity and sends resolve a path on
-  demand. The only thing ever announced is the standard `lxmf.delivery`
-  destination, and only **manually** (operator "Announce now" button, or once on
-  the first outbound send) unless `announce_mode: auto`.
-- **Discovery over the WiFi mesh** reuses the shared `nucleusd.mesh_peers` helper
+- **A key makes a contact messageable.** It is learned three ways, all local
+  reads that persist via `ContactStore.set_key`: pulled over the mesh (card), or
+  recalled from RNS after an operator **req path** (`RnsLane.recall_contact`
+  reads `Identity.recall` + the announce's display name), or captured from a
+  signed inbound message. On start the lane calls `RNS.Identity.remember(pubkey)`
+  for every keyed contact so `recall()` returns a usable identity. The only thing
+  ever announced is the standard `lxmf.delivery` destination, and only
+  **manually** (operator "Announce now") unless `announce_mode: auto`.
+- **Mesh discovery (Nucleus-only convenience)** reuses `nucleusd.mesh_peers`
   (Babel next-hops + per-peer HTTP), the same path as Meshtastic channel sharing:
-  `GET /rns/mesh-peers` pulls each neighbour's `/rns/card`.
-- **Unknown senders are auto-added** as contacts (`ContactStore.add_inbound`): if
-  a node has our address it got our card on purpose. The sender's public key is
-  captured from the message/`Identity.recall` when available (reply-ready), else
-  the contact is keyless until the key is learned.
+  `GET /rns/mesh-peers` pulls each neighbour's `/rns/card` (`{v,name,id,lxmf_hash,
+  pubkey}`) and `verify_card` recomputes `lxmf_hash` from `pubkey`, rejecting any
+  mismatch. This card is an internal HTTP payload, never a shareable off-node
+  format.
+- **Naming.** A contact carries a local `name` (nickname, operator-set via
+  `set_name`, always wins for display) and an `announced_name` (the peer's LXMF
+  display name, network-sourced). `display_name()` resolves nickname → announced
+  → short hash.
+- **Unknown senders are auto-added** as contacts (`ContactStore.add_inbound`).
+  The sender's public key is captured from the message/`Identity.recall` when
+  available (reply-ready), else the contact is keyless until the key is learned.
 - **Never a second stack** — `RnsLane.start()` first probes rnsd
   (`nucleusd.reticulum._rpc`) and only calls `RNS.Reticulum()` once rnsd answers,
   then with `require_shared_instance=True`. If rnsd is down the lane defers and

@@ -11,7 +11,7 @@ import asyncio
 import json
 import socket
 
-from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/messaging", tags=["messaging"])
@@ -30,9 +30,14 @@ class RnsSendBody(BaseModel):
 
 
 class RnsImportBody(BaseModel):
-    link: str | None = None    # a nucleus-rns:// card link (or bare token)
-    card: dict | None = None   # or the raw card dict (e.g. pulled over the mesh)
-    source: str = "link"       # provenance tag: link / qr / mesh
+    dest: str | None = None    # a bare lxmf.delivery hash (keyless, out-of-band)
+    name: str | None = None    # optional local nickname for an add-by-hash
+    card: dict | None = None   # or a raw card dict (only from a mesh-peer pull)
+    source: str = "hash"       # provenance tag: hash / mesh
+
+
+class RnsNameBody(BaseModel):
+    name: str = ""             # new local nickname ("" clears it)
 
 
 def _rpc(req: dict, timeout: float = TIMEOUT) -> dict:
@@ -89,9 +94,10 @@ def rns_contacts() -> dict:
 
 @router.post("/rns/contacts")
 def rns_import(body: RnsImportBody) -> dict:
-    """Import a contact from a nucleus-rns:// link, a raw card, or a mesh pull."""
-    res = _rpc({"cmd": "rns_import", "link": body.link,
-                "card": body.card, "source": body.source})
+    """Add a contact by bare lxmf.delivery hash (the normal case; keyless and
+    out-of-band — transmits nothing), or from a mesh-pulled card dict."""
+    res = _rpc({"cmd": "rns_import", "card": body.card, "dest": body.dest,
+                "name": body.name, "source": body.source})
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error", "import failed"))
     return res
@@ -111,10 +117,18 @@ def rns_mesh_peers() -> dict:
     for ip in mesh_peers.babel_peer_ips():
         data = mesh_peers.fetch_peer_json(ip, "/api/v1/messaging/rns/card")
         card = (data or {}).get("card")
-        link = (data or {}).get("link")
-        if card and link:
-            out.append({"ip": ip, "card": card, "link": link})
+        if card:
+            out.append({"ip": ip, "card": card})
     return {"ok": True, "peers": out}
+
+
+@router.patch("/rns/contacts/{dest}")
+def rns_set_name(dest: str, body: RnsNameBody) -> dict:
+    """Set (or clear) a contact's local nickname. Transmits nothing."""
+    res = _rpc({"cmd": "rns_set_name", "dest": dest, "name": body.name})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "rename failed"))
+    return res
 
 
 @router.delete("/rns/contacts/{dest}")
@@ -127,24 +141,10 @@ def rns_remove(dest: str) -> dict:
 
 @router.get("/rns/card")
 def rns_card() -> dict:
-    """This node's own shareable contact card + its nucleus-rns:// link."""
+    """This node's contact card (hash+key+name) for neighbouring Nucleus nodes to
+    pull over the mesh. Not a shareable off-node format — share the plain
+    destination hash from ``/rns/status`` instead."""
     return _rpc({"cmd": "rns_card"})
-
-
-@router.get("/rns/card/qr")
-def rns_card_qr() -> Response:
-    """SVG QR code of this node's card link, scannable by another node."""
-    res = _rpc({"cmd": "rns_card"})
-    link = res.get("link")
-    if not link:
-        raise HTTPException(status_code=503, detail=res.get("error", "card not ready"))
-    from . import rns_proto as proto
-    try:
-        svg = proto.card_qr_svg(link)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return Response(content=svg, media_type="image/svg+xml",
-                    headers={"Cache-Control": "no-cache"})
 
 
 @router.post("/rns/announce")
