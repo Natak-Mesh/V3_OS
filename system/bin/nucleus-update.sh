@@ -5,29 +5,29 @@
 # Pulls the latest code from git and re-runs the idempotent install flow,
 # preserving the separation between the git checkout and the live system: the
 # venv holds a frozen copy of the package (non-editable pip install), so this
-# script's `git pull` does not affect the running service until install.sh
-# rebuilds the venv and nucleusd is restarted.
+# script's `git pull` does not affect the installed code until install.sh
+# rebuilds the venv.
 #
 # Order of operations:
 #   1. Pre-flight WAN reachability (abort if offline)
 #   2. Record current git HEAD
 #   3. Refuse to continue on a dirty working tree (uncommitted edits)
-#   4. git pull --ff-only  (exit 1 if already up to date)
+#   4. git pull --ff-only origin $BRANCH  (exit 1 if already up to date)
 #   4b. self-update        (if the pull changed THIS script, exec the new copy
 #                           with --resume so the run uses the newest update logic)
 #   5. install.sh          (rebuilds venv from the new code, idempotent)
 #   6. nucleusctl apply    (normalize config + re-render system configs)
-#   6b. restart nucleus-voice / nucleus-messaging (config-reading daemons)
-#   7. systemctl restart nucleusd.service  (edits are not live until this)
 #
 # This script does NOT reboot. Reboot is a separate operator action.
 #
-# Exit codes (mirrored in nucleusd/update.py RC_MESSAGES):
+# Exit codes:
 #   0 updated  1 up-to-date  2 offline  3 dirty tree  4 pull failed
-#   5 install.sh failed  6 apply failed  7 restart failed  8 env error
+#   5 install.sh failed  6 apply failed  8 env error
 # ============================================================
 
 REPO_DIR="${NUCLEUS_REPO_DIR:-/home/natak/V3_OS}"
+# Branch nodes track.
+BRANCH="${NUCLEUS_BRANCH:-drone}"
 LOG_FILE="/var/log/nucleus-update.log"
 STATUS_FILE="/var/log/nucleus-update.status"
 
@@ -51,8 +51,8 @@ if ! touch "$STATUS_FILE" 2>/dev/null; then
 fi
 chmod 644 "$LOG_FILE" "$STATUS_FILE" 2>/dev/null || true
 
-# Single EXIT trap captures EVERY exit path, even if step 7 restarts nucleusd
-# (which spawned us). $? here is the script's real exit status.
+# Single EXIT trap captures EVERY exit path. $? here is the script's real
+# exit status.
 on_exit() {
     local rc=$?
     printf 'status=finished\nrc=%s\nfinished=%s\n' "$rc" "$(date '+%s')" \
@@ -66,7 +66,7 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 fail() { local code="$1"; shift; log "ERROR: $*"; log "===== update FAILED (exit $code) ====="; exit "$code"; }
 
 log "===== nucleus-update started ====="
-log "repo: $REPO_DIR"
+log "repo: $REPO_DIR (branch $BRANCH)"
 
 # --- environment checks ------------------------------------------------------
 [ -d "$REPO_DIR" ] || fail 8 "repo directory not found: $REPO_DIR"
@@ -103,7 +103,7 @@ else
 
     # --- step 4: git pull ---------------------------------------------------
     log "pulling latest code..."
-    if ! git pull --ff-only 2>&1 | tee -a "$LOG_FILE"; then
+    if ! git pull --ff-only origin "$BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
         fail 4 "git pull failed"
     fi
     AFTER_HEAD="$(git rev-parse HEAD 2>/dev/null)"
@@ -139,22 +139,6 @@ fi
 log "running nucleusctl apply..."
 if ! nucleusctl apply 2>&1 | tee -a "$LOG_FILE"; then
     fail 6 "nucleusctl apply failed"
-fi
-
-# --- step 6b: restart config-reading app daemons ----------------------------
-# nucleus-voice / nucleus-messaging read /etc/nucleus/config.yaml directly (not
-# through nucleusd). install.sh already restarted them, but that ran BEFORE step
-# 6's `nucleusctl apply` normalized the config (persisting new schema defaults),
-# so restart them again here to pick up the freshly-merged keys in this same run.
-# Non-fatal: a failure here shouldn't abort an otherwise-successful update.
-log "restarting config-reading app daemons (nucleus-voice, nucleus-messaging)..."
-systemctl restart nucleus-voice.service nucleus-messaging.service 2>&1 | tee -a "$LOG_FILE" \
-    || log "WARNING: app daemon restart failed (non-fatal); a reboot will apply changes"
-
-# --- step 7: restart nucleusd (edits are not live until this) ---------------
-log "restarting nucleusd.service..."
-if ! systemctl restart nucleusd.service 2>&1 | tee -a "$LOG_FILE"; then
-    fail 7 "nucleusd restart failed"
 fi
 
 log "update applied. A reboot is recommended to apply all changes."

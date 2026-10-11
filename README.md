@@ -2,16 +2,20 @@
 
 A clean re-implementation of the Nucleus mesh-node OS. Design goal: a **single,
 validated source of truth** for node configuration, driving every generated
-system file, exposed through one API that serves both the self-hosted web UI and
-any external app.
+system file, managed over ssh with `nucleusctl`.
 
 Target: Raspberry Pi (aarch64), Debian 13 (trixie), headless, 1 GB nodes —
 memory is a first-class concern.
 
-**Subsystems:** Wi-Fi 802.11s mesh (babeld L3 routing, smcroute multicast, HWMP
-off), Meshtastic LoRa + ATAK CoT bridge, WiFi+LoRa text messaging, mesh PTT
-voice, Reticulum (rnsd), nginx-fronted web UI, UFW host firewall. Optional per
-node: Tailscale, official TAK Server **or** OpenTAKServer (either/or; see §4).
+**`drone` branch.** A trimmed build for airborne nodes: the Pi talks to a
+flight controller over the GPIO UART, has no Meshtastic radio, and is meant to
+move to a lower-powered board. Meshtastic/CoT bridge, messaging, voice,
+Reticulum, Tailscale and TAK/OpenTAKServer are removed. Nodes on this branch
+self-update from `drone`, not `main`.
+
+**Subsystems:** Wi-Fi 802.11s mesh on `wlan1` (babeld L3 routing, smcroute
+multicast, HWMP off), `wlan0` AP + `br-lan` for local access, UFW host firewall. The GPIO UART is kept free for the flight controller
+(see §4).
 
 ---
 
@@ -30,18 +34,16 @@ Everything flows one direction, from one file:
         |
         v   (write-if-changed)
    networkd/*.network, wpa_supplicant-mesh.conf, nucleus-mesh-up.sh,
-   babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
-   ~natak/.reticulum/config, 60-nucleus-usb.rules (udev), nginx vhost + htpasswd
+   babeld.conf, smcroute.conf, hostapd.conf
         |
-        v   (restart / enable / reload only what changed)
-   networkd, nucleus-mesh, babeld, smcroute, hostapd, brlan-setup,
-   meshtasticd, cot-bridge, rnsd, udev, nginx
+        v   (restart only what changed)
+   networkd, nucleus-mesh, babeld, smcroute, hostapd, brlan-setup
 ```
 
 **Rules**
 
 - **One contract.** `schema.py` is the only definition of a valid config. The
-  API, CLI, renderer and every daemon consume it — no second place for rules or
+  CLI, renderer and every daemon consume it — no second place for rules or
   defaults to drift.
 - **Operators set primitives; the schema derives the rest.** `node.id` is
   parsed from the hostname (`NNNN-nucleus`); from it the schema computes mesh
@@ -49,16 +51,10 @@ Everything flows one direction, from one file:
 - **Templates are dumb.** They only substitute values from `render_context()`.
   All logic and validation live in Python, testable off-box.
 - **Idempotent apply.** A file is written only if its content changed; a unit is
-  touched only if one of its inputs changed. Optional services (meshtasticd,
-  cot-bridge, rnsd) are enabled/disabled to match config. `nucleusctl apply`
-  first normalizes `config.yaml` so keys added by a code update gain their
-  schema defaults.
-
-> **Known debt:** `messaging/service.py`, `voice/daemon.py`,
-> `meshtastic/meshtastic_api.py` and `meshtastic/cot_bridge.py` were ported from
-> V2 and still read `config.yaml` directly with their own defaults, bypassing
-> `config.py`/`schema.py`. This violates the rules above and is logged to fix.
-> New code must load config through `config.load()`.
+  touched only if one of its inputs changed. `nucleusctl apply` first
+  normalizes `config.yaml` so keys added by a code update gain their schema
+  defaults and sections for removed subsystems are dropped. Config must be
+  loaded through `config.load()`.
 
 ---
 
@@ -66,33 +62,12 @@ Everything flows one direction, from one file:
 
 | Module | Responsibility |
 |--------|----------------|
-| `schema.py` | Config contract + derived values, incl. the `USB_DEVICES` registry (recognised USB hardware → `/dev/nucleus/<role>`). Pure — no filesystem/hardware. |
+| `schema.py` | Config contract + derived values. Pure — no filesystem/hardware. |
 | `config.py` | Load / atomically save / normalize `config.yaml`. The only module that should do config YAML I/O. |
-| `apply.py` | Render → diff → restart. `TARGETS` maps each template to its dest + affected units. Shared by API and CLI. |
-| `status.py` | Read-only runtime status: interfaces, unit states, Babel neighbours/routes (local-port 33123), mesh-node last-seen (5 s poll, lost nodes kept 15 min, in memory). |
-| `api.py` | FastAPI app (`nucleusd`, :8080): REST API + web UI, mounts the routers below. |
+| `apply.py` | Render → diff → restart. `TARGETS` maps each template to its dest + affected units. |
+| `status.py` | Read-only runtime status: interfaces, unit states, Babel neighbours/routes (local-port 33123). |
 | `cli.py` | `nucleusctl` — thin wrapper over the same modules. |
-| `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon. |
-| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`), attaching to the shared `rnsd` as a client; off by default. Peers are explicit **contact cards** (imported over the mesh / link / QR), not flooded announces; the node announces only on operator request. |
-| `voice/` | PTT voice daemon (OpenVLM hardware + browser soft PTT) + router. |
-| `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |
-| `reticulum.py`, `reticulum_router.py` | Read-only rnsd status via the shared-instance control socket. |
-| `update.py` | Self-update: version check + launches `nucleus-update.sh`. |
 | `templates/` | Jinja2 templates, named after their destination. |
-| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum monitor and the Direct Messages/contacts page are in `app.js`. |
-| `mesh_peers.py` | Shared mesh-neighbour discovery helper: Babel neighbours (monitor on `[::1]:33123`) → per-node HTTP pulls. Used to fetch peers' contact cards for one-tap add. |
-
-Routers are thin HTTP layers: logic stays in the module/daemon they wrap.
-
-**Core endpoints** (`/api/v1`) — full reference in [docs/API.md](docs/API.md):
-
-- `GET /config` — current config + `_derived` (web password redacted)
-- `PUT /config` — validate + persist (does **not** apply)
-- `POST /apply?dry_run=<bool>` — render, write changed files, restart units
-- `GET /status` — interfaces / services / Babel / mesh-node last-seen
-
-`PUT` and `apply` are separate so a client can stage and dry-run first.
-Cross-origin browser writes are refused (CSRF guard).
 
 ---
 
@@ -109,19 +84,13 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
    - `mesh_ttl`/`mesh_element_ttl` and RTS threshold,
    - nftables NAT (WAN mode) + multicast-TTL mangle rule,
    - UFW rebuilt every run (`ufw --force reset`, then rules from config;
-     `firewall.enabled: false` disables it). TAK/OpenTAKServer/MediaMTX ports
-     on eth0 are opened only if those are installed (checked at run time).
-     nftables rules are untouched.
+     `firewall.enabled: false` disables it). nftables rules are untouched.
      See [Firewall](docs/manual/firewall.md).
 3. **babeld** — unicast routes (mesh + br-lan subnets + default route).
 4. **smcroute** — multicast between `wlan1` and `br-lan`.
 5. **hostapd** — 5 GHz AP on `wlan0`.
 6. **brlan-setup** — enslaves `wlan0` into `br-lan` (networkd can't while
    hostapd owns it). `apply` re-runs it whenever networkd or hostapd bounce.
-
-nginx fronts the UI on :80/:443 (self-signed cert, `<hostname>.local` via avahi);
-requests over eth0 need HTTP Basic auth, trusted nets (mesh, br-lan, Tailscale,
-localhost) don't.
 
 ### Hard-won lessons (ported from Nucleus_OS — keep them)
 
@@ -135,51 +104,30 @@ localhost) don't.
 
 ---
 
-## 4. Outside the pipeline (intentional)
-
-- **Tailscale** — needs a login link that connects back to Tailscale's servers,
-  and its state lives in tailscaled, not `config.yaml`. Controlled live via
-  `tailscale.py` / `/api/v1/tailscale`.
-- **Official TAK Server (+ MediaMTX)** — **separate, uncommon install**; most
-  nodes never run it, so it's kept out of `install.sh`/`apply`. Provisioned once
-  with `sudo nucleus-tak-setup.sh` (needs the tak.gov `.deb`). It still reads
-  its inputs from the `tak:` block via `nucleusctl tak-config`. See
-  [takserver.md](docs/manual/takserver.md).
-- **OpenTAKServer** — either/or alternative to the official server (never
-  both); same **separate, uncommon install**. Set `tak.variant: opentakserver`,
-  then as `natak` over SSH run the upstream installer
-  (`curl -s -L https://i.opentakserver.io/raspberry_pi_installer | bash -`),
-  then `sudo nucleus-ots-fixup.sh` — moves OTS nginx ports off 8080/443
-  (→ 8082/8444), restores the Nucleus nginx site, stages the truststore for
-  the web UI. Re-run the fixup after every OTS upgrade. See
-  [opentakserver.md](docs/manual/opentakserver.md).
-
----
-
-## 5. Repo ↔ live system
+## 4. Repo ↔ live system
 
 The **repo is the source of truth.** `install.sh` (idempotent) syncs it to the
 node:
 
-- apt packages, incl. meshtasticd (Meshtastic OBS repo) and Tailscale (its repo)
-- Python package → `/opt/nucleus/venv`; `nucleusctl` + Reticulum CLIs →
-  `/usr/local/bin`
-- `system/` → systemd units, NetworkManager conf, sudoers,
-  `nucleus-update.sh`, `nucleus-tak-setup.sh`, `nucleus-ots-fixup.sh` (inert
-  unless used). The USB udev rule (`60-nucleus-usb.rules`) is **generated** by
-  `apply`, not a static file.
-- GPS UART prep (boot config/cmdline)
+- apt packages (Debian repos only)
+- **Flight-controller UART prep:** `enable_uart=1`, serial console removed from
+  the kernel cmdline, `serial-getty@ttyS0`/`ttyAMA0` masked, so nothing but the
+  FC ever touches the GPIO UART (the cmdline change needs a reboot)
+- Python package → `/opt/nucleus/venv`; `nucleusctl` → `/usr/local/bin`
+- `system/` → systemd units, NetworkManager conf, `nucleus-update.sh`
 - `config/config.yaml` → `/etc/nucleus/config.yaml` **only if absent**
-- enables services, restarts the app daemons to pick up new code
+- removes units/rules/launchers left by a full Nucleus build (Meshtastic,
+  messaging, voice, Reticulum, TAK, Tailscale)
+- enables services
 
 Generated files are **artifacts** of `nucleusctl apply`, never hand-edited or
 git-tracked in place. Workflow: edit repo → `install.sh` → `nucleusctl apply`.
-Nodes self-update from the web UI (`nucleus-update.sh`: pull `main` → install →
-apply → restart).
+Nodes self-update over ssh with `sudo /opt/nucleus/bin/nucleus-update.sh` (pull
+`drone` → install → apply).
 
 ---
 
-## 6. Configuration
+## 5. Configuration
 
 Edit `/etc/nucleus/config.yaml`, then apply. A fresh node needs **no identity
 edits** — `node.id` comes from the hostname (`0009-nucleus` → 9). Mostly just
@@ -192,16 +140,13 @@ mesh:
   password: "..."    # SAE/WPA3 (>= 8 chars)
 ap:
   password: "..."    # AP WPA2
-web:
-  password: "..."    # eth0 web login — CHANGE the default 52235223
 ```
 
 Derived from id `9`: mesh IP `10.20.1.9`, br-lan IP `10.20.9.1`, AP SSID
 `0009-nucleus-ap`, deterministic IPv6 link-locals.
 
-Other sections: `br_lan`, `eth0`, `meshtastic`, `messaging`, `voice`,
-`reticulum`, `web`, `firewall`, `tak`. Defaults and comments are in
-[config/config.yaml](config/config.yaml); per-page detail in the
+Other sections: `br_lan`, `eth0`, `firewall`. Defaults and comments are in
+[config/config.yaml](config/config.yaml); more in the
 [manual](docs/manual/README.md).
 
 ```bash
@@ -211,28 +156,20 @@ sudo nucleusctl apply           # render + restart affected units
 nucleusctl status               # live status (JSON)
 ```
 
-Or the web UI at `http://<hostname>.local` (fallback `http://<node-ip>:8080`) —
-same operations, same API.
-
 ---
 
-## 7. Directory layout
+## 6. Directory layout
 
 ```
 V3_OS/
 ├── nucleusd/            # Python package (see §2)
-│   ├── meshtastic/  messaging/  voice/
-│   ├── templates/       # Jinja2, named after destination files
-│   └── web/             # static UI
+│   └── templates/       # Jinja2, named after destination files
 ├── system/              # static (non-rendered) system files
-│   ├── systemd/         # nucleusd, nucleus-mesh, brlan-setup, cot-bridge,
-│   │                    # nucleus-meshtastic-init, nucleus-messaging,
-│   │                    # nucleus-voice, rnsd, takserver.service.d/
-│   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh,
-│   │                    # nucleus-ots-fixup.sh
-│   └── networkmanager/  sudoers.d/
+│   ├── systemd/         # nucleus-mesh, brlan-setup
+│   ├── bin/             # nucleus-update.sh
+│   └── networkmanager/
 ├── config/config.yaml   # default config, seeded to /etc on install
-├── docs/                # API.md + operator manual
+├── docs/                # operator manual
 ├── tests/               # off-box tests
 ├── install.sh           # idempotent installer
 ├── pyproject.toml       # package + nucleusctl entry point
@@ -241,7 +178,7 @@ V3_OS/
 
 ---
 
-## 8. Development
+## 7. Development
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate

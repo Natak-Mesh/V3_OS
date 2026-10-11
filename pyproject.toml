@@ -1,35 +1,16 @@
 [project]
 name = "nucleusd"
 dynamic = ["version"]
-description = "Nucleus V3 OS — configuration daemon, control CLI, and mesh bring-up"
+description = "Nucleus V3 OS — node config CLI (nucleusctl) and mesh bring-up"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.5",
     "PyYAML>=6.0",
     "Jinja2>=3.1",
-    "fastapi>=0.110",
-    "uvicorn>=0.27",
-    # --- Meshtastic CoT bridge + radio configurator ---
-    "meshtastic>=2.3",           # radio client lib + CLI (python -m meshtastic)
-    "pypubsub>=4.0",             # cot_bridge pub/sub event delivery
-    "qrcode>=7.4",               # channel-URL QR rendering (SVG)
-    # protobuf pinned to v6 — takproto / TAKPacket-SDK generate against it.
-    "protobuf>=6,<7",
-    # TAK protocol V1 parser (Natak fork) + TAKPacketV2 compression SDK.
-    "takproto @ git+https://github.com/Natak-Mesh/takproto.git",
-    "meshtastic_tak @ git+https://github.com/meshtastic/TAKPacket-SDK.git@v0.9.1#subdirectory=python",
-    # --- Reticulum cryptographic networking stack (rnsd) ---
-    "rns>=0.7",                  # provides the rnsd daemon (rnsd.service)
-    "lxmf>=0.5",                 # LXMF messaging (nucleus-messaging RNS lane, opt-in)
-    # --- live Codec2 voice stream over LoRa (nucleus-voice STREAM transport) ---
-    "numpy",                     # frame math for the Codec2 stream encoder/decoder
-    "pycodec2",                  # Codec2 3200 bps codec (builds against libcodec2-dev)
-    # --- live mic cleanup (nucleus-voice STT tap + TX path, MicCleanup) ---
-    "webrtc-noise-gain",         # WebRTC noise suppression (~1-2 MB/instance); HPF-only fallback if absent
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 nucleusctl = "nucleusd.cli:main"
@@ -39,13 +20,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["nucleusd", "nucleusd.meshtastic", "nucleusd.messaging", "nucleusd.voice"]
+packages = ["nucleusd"]
 
 [tool.setuptools.dynamic]
 version = { file = ["VERSION"] }
 
 [tool.setuptools.package-data]
-nucleusd = ["templates/**/*.j2", "web/*"]
+nucleusd = ["templates/**/*.j2"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

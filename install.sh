@@ -23,43 +23,17 @@ fi
 echo "==> apt packages"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
-    python3 python3-venv python3-pip git curl gpg \
-    build-essential python3-dev libcodec2-dev \
+    python3 python3-venv python3-pip git \
     babeld smcroute hostapd wpasupplicant iw \
     nftables network-manager ufw \
-    nginx avahi-daemon avahi-utils openssl
+    avahi-daemon avahi-utils
 
-echo "==> meshtasticd (native, from the Meshtastic apt repo)"
-# Native meshtasticd replaces the V2 Docker container. The repo ships the
-# per-slot LoRa configs under /etc/meshtasticd/available.d, but we render the
-# full /etc/meshtasticd/config.yaml ourselves (nucleusctl apply), so overlay
-# merging is not relied upon.
-MESHREPO=/etc/apt/sources.list.d/meshtastic.list
-if [ ! -f "$MESHREPO" ]; then
-    . /etc/os-release
-    # Pick the OBS suite from the running OS — never hardcode. OBS publishes
-    # Debian_13 / Raspbian_13 (trixie) etc; a wrong suite pulls a build with
-    # unsatisfiable libs (e.g. bookworm's libgpiod2 on trixie).
-    DISTRO="Debian"; [ "$ID" = "raspbian" ] && DISTRO="Raspbian"
-    SUITE="${DISTRO}_${VERSION_ID}"
-    KEYURL="https://download.opensuse.org/repositories/network:/Meshtastic:/beta/${SUITE}/Release.key"
-    REPOBASE="https://download.opensuse.org/repositories/network:/Meshtastic:/beta/${SUITE}/"
-    mkdir -p /etc/apt/keyrings
-    # Remove any key from a previously-failed run so gpg never prompts to
-    # overwrite (--yes) and never dearmors a stale/empty file.
-    rm -f /etc/apt/keyrings/meshtastic.gpg
-    curl -fsSL "$KEYURL" | gpg --dearmor --yes -o /etc/apt/keyrings/meshtastic.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/meshtastic.gpg] ${REPOBASE} /" > "$MESHREPO"
-fi
-apt-get update -qq
-apt-get install -y meshtasticd || echo "WARNING: meshtasticd install failed — check the Meshtastic apt repo"
-# We manage meshtasticd via nucleusctl apply (enable/disable per config), so
-# disable the packaged unit's default autostart here; apply reconciles it.
-systemctl disable meshtasticd 2>/dev/null || true
-
-echo "==> GPS UART prep"
-# The RAK hat GPS is a UART GPS on the Pi GPIO header (/dev/ttyS0). Ensure the
-# UART is enabled and the serial console is NOT holding the port.
+echo "==> free the GPIO UART for the flight controller"
+# The flight controller is wired to the Pi GPIO UART (/dev/serial0 -> ttyS0).
+# Stock Pi OS puts a kernel console and a login getty on that port, which write
+# boot/login text to the FC and swallow its data. Enable the UART, drop the
+# serial console from the kernel cmdline, and mask the getty so nothing but the
+# FC link ever owns the port. The cmdline change takes effect on next reboot.
 BOOTCFG=/boot/firmware/config.txt
 [ -f "$BOOTCFG" ] || BOOTCFG=/boot/config.txt
 if [ -f "$BOOTCFG" ] && ! grep -q '^enable_uart=1' "$BOOTCFG"; then
@@ -68,10 +42,14 @@ if [ -f "$BOOTCFG" ] && ! grep -q '^enable_uart=1' "$BOOTCFG"; then
 fi
 CMDLINE=/boot/firmware/cmdline.txt
 [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
-if [ -f "$CMDLINE" ] && grep -q 'console=serial0' "$CMDLINE"; then
-    sed -i 's/console=serial0,[0-9]* //g' "$CMDLINE"
-    echo "    removed serial console from $CMDLINE (frees /dev/ttyS0 for GPS)"
+if [ -f "$CMDLINE" ] && grep -qE 'console=(serial0|ttyS0|ttyAMA0)' "$CMDLINE"; then
+    sed -i -E 's/console=(serial0|ttyS0|ttyAMA0),[0-9]+ //g' "$CMDLINE"
+    echo "    removed serial console from $CMDLINE (reboot required)"
 fi
+for tty in ttyS0 ttyAMA0; do
+    systemctl disable --now "serial-getty@$tty.service" 2>/dev/null || true
+    systemctl mask "serial-getty@$tty.service" 2>/dev/null || true
+done
 
 echo "==> python venv at $VENV"
 mkdir -p "$OPT/bin"
@@ -86,62 +64,16 @@ exec "$VENV/bin/python" -m nucleusd.cli "\$@"
 EOF
 chmod +x /usr/local/bin/nucleusctl
 
-echo "==> Reticulum CLI launchers"
-# rns ships its tools in the venv; symlink them onto PATH so operators can run
-# `rnstatus` etc. directly instead of the full venv path.
-for t in rnstatus rnpath rnprobe rnid rncp rnx rnsd; do
-    ln -sf "$VENV/bin/$t" "/usr/local/bin/$t"
-done
-
 echo "==> static system files"
 install -m 644 "$REPO/system/systemd/nucleus-mesh.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/brlan-setup.service" /etc/systemd/system/
-install -m 644 "$REPO/system/systemd/nucleusd.service" /etc/systemd/system/
-install -m 644 "$REPO/system/systemd/cot-bridge.service" /etc/systemd/system/
-install -m 644 "$REPO/system/systemd/nucleus-meshtastic-init.service" /etc/systemd/system/
-install -m 644 "$REPO/system/systemd/nucleus-messaging.service" /etc/systemd/system/
-install -m 644 "$REPO/system/systemd/nucleus-voice.service" /etc/systemd/system/
-install -m 644 "$REPO/system/systemd/rnsd.service" /etc/systemd/system/
-# The USB udev rule (/etc/udev/rules.d/60-nucleus-usb.rules) is a generated
-# artifact of `nucleusctl apply`, not a static file. Remove the obsolete
-# Meshtastic rule it supersedes if an older install left it behind.
-rm -f /etc/udev/rules.d/60-meshtastic.rules
 mkdir -p /etc/NetworkManager/conf.d
 install -m 644 "$REPO/system/networkmanager/unmanaged-devices.conf" \
     /etc/NetworkManager/conf.d/unmanaged-devices.conf
 
-# The web UI (running as user 'natak') pauses/restarts cot-bridge during radio
-# config ops. Allow only those specific systemctl actions without a password.
-cat > /etc/sudoers.d/nucleus-meshtastic <<'EOF'
-natak ALL=(root) NOPASSWD: /usr/bin/systemctl stop cot-bridge.service, /usr/bin/systemctl start cot-bridge.service, /usr/bin/systemctl restart cot-bridge.service, /usr/bin/systemctl is-active cot-bridge.service
-EOF
-chmod 440 /etc/sudoers.d/nucleus-meshtastic
-
 echo "==> node update tooling"
-# Update script the web UI (UPDATE page) launches to pull + reinstall + restart.
+# Update script, run over ssh: pull + reinstall + apply.
 install -m 755 "$REPO/system/bin/nucleus-update.sh" "$OPT/bin/nucleus-update.sh"
-# Let the web UI user launch it detached, as root, without a password.
-install -m 440 "$REPO/system/sudoers.d/nucleus-update" /etc/sudoers.d/nucleus-update
-
-echo "==> TAK Server provisioning tooling (inert unless tak.variant=official)"
-# One-shot official TAK Server provisioner. NOT wired into apply — it's a manual
-# per-node action (see README §4). Copied to every node so it's ready when
-# needed; it no-ops unless config.yaml sets tak.variant=official.
-install -m 755 "$REPO/system/bin/nucleus-tak-setup.sh" "$OPT/bin/nucleus-tak-setup.sh"
-ln -sf "$OPT/bin/nucleus-tak-setup.sh" /usr/local/bin/nucleus-tak-setup.sh
-# Boot-ordering drop-in for takserver.service. Inert on nodes without takserver
-# installed — systemd only applies a drop-in whose base unit exists.
-mkdir -p /etc/systemd/system/takserver.service.d
-install -m 644 "$REPO/system/systemd/takserver.service.d/override.conf" \
-    /etc/systemd/system/takserver.service.d/override.conf
-
-echo "==> OpenTAKServer fixup tooling (inert unless tak.variant=opentakserver)"
-# Post-install fixup for a manually-installed OpenTAKServer (moves its nginx
-# ports off 8080/443 so it coexists with the Nucleus UI). NOT wired into apply;
-# copied to every node so it's ready when needed; no-ops unless
-# config.yaml sets tak.variant=opentakserver.
-install -m 755 "$REPO/system/bin/nucleus-ots-fixup.sh" "$OPT/bin/nucleus-ots-fixup.sh"
-ln -sf "$OPT/bin/nucleus-ots-fixup.sh" /usr/local/bin/nucleus-ots-fixup.sh
 
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
@@ -152,30 +84,31 @@ else
     echo "    /etc/nucleus/config.yaml exists — left untouched"
 fi
 
-echo "==> Reticulum config is rendered by 'nucleusctl apply'"
-# rnsd runs as user 'natak' and reads ~natak/.reticulum/config. That file is a
-# rendered artifact now (templates/reticulum-config.j2), produced from the one
-# config.yaml like every other generated file — no seeding here.
-
-echo "==> Tailscale (installed from Tailscale's apt repo, left logged-out)"
-# Tailscale ships its own apt repo (pkgs.tailscale.com), one suite per Debian
-# codename. We add it directly here — same pattern as the meshtastic repo above —
-# rather than piping their curl|sh installer, which spawns its OWN apt-get and
-# collides with this script over the dpkg lock. All package installs stay in one
-# apt sequence. Run 'tailscale up' (or use the web UI) to activate.
-TSREPO=/etc/apt/sources.list.d/tailscale.list
-if [ ! -f "$TSREPO" ]; then
-    . /etc/os-release
-    CODENAME="${VERSION_CODENAME:-trixie}"
-    mkdir -p /usr/share/keyrings
-    curl -fsSL "https://pkgs.tailscale.com/stable/debian/${CODENAME}.noarmor.gpg" \
-        -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-    curl -fsSL "https://pkgs.tailscale.com/stable/debian/${CODENAME}.tailscale-keyring.list" \
-        -o "$TSREPO"
-fi
-apt-get update -qq
-apt-get install -y -o DPkg::Lock::Timeout=120 tailscale
-systemctl enable tailscaled
+echo "==> remove subsystems dropped from this build"
+# Nodes upgraded from a full Nucleus build still carry units, rules and launchers
+# for subsystems this build no longer ships (Meshtastic/CoT bridge, messaging,
+# voice, Reticulum, TAK, Tailscale, the web UI/HTTP layer). Their code is gone from the venv, so stop
+# and remove them. Idempotent: every step is a no-op on a fresh node.
+for u in cot-bridge nucleus-meshtastic-init nucleus-messaging nucleus-voice rnsd meshtasticd tailscaled nucleusd; do
+    systemctl disable --now "$u.service" 2>/dev/null || true
+done
+rm -f /etc/systemd/system/cot-bridge.service \
+      /etc/systemd/system/nucleus-meshtastic-init.service \
+      /etc/systemd/system/nucleus-messaging.service \
+      /etc/systemd/system/nucleus-voice.service \
+      /etc/systemd/system/rnsd.service \
+      /etc/systemd/system/nucleusd.service
+rm -rf /etc/systemd/system/takserver.service.d /etc/nucleus/certs
+rm -f /etc/sudoers.d/nucleus-meshtastic /etc/sudoers.d/nucleus-update \
+      /etc/nginx/sites-enabled/nucleus /etc/nginx/sites-available/nucleus \
+      /etc/nginx/nucleus.htpasswd \
+      /etc/udev/rules.d/60-nucleus-usb.rules /etc/udev/rules.d/60-meshtastic.rules \
+      /etc/apt/sources.list.d/meshtastic.list /etc/apt/sources.list.d/tailscale.list
+rm -f "$OPT/bin/nucleus-tak-setup.sh" "$OPT/bin/nucleus-ots-fixup.sh" \
+      /usr/local/bin/nucleus-tak-setup.sh /usr/local/bin/nucleus-ots-fixup.sh
+for t in rnstatus rnpath rnprobe rnid rncp rnx rnsd; do
+    rm -f "/usr/local/bin/$t"
+done
 
 echo "==> enable services"
 systemctl daemon-reload
@@ -190,27 +123,11 @@ if ! grep -q '^DAEMON_CONF="/etc/hostapd/hostapd.conf"' /etc/default/hostapd 2>/
     sed -i '/^DAEMON_CONF=/d' /etc/default/hostapd 2>/dev/null || true
     echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
 fi
-# avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
-# :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
-systemctl enable avahi-daemon nginx
-systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
-
-# Restart the always-on app daemons so a code-only re-install (new package in the
-# venv) actually takes effect — enabling alone won't reload a running process.
-# These own the API/web UI, messaging and voice; the mesh/network units are
-# reconciled by `nucleusctl apply`, so they're deliberately left to that path.
-echo "==> restart app daemons (pick up new code)"
-systemctl restart nucleusd.service nucleus-messaging.service nucleus-voice.service
-
-# cot-bridge also runs the new venv code but is enabled/disabled by `nucleusctl
-# apply` (it depends on meshtastic config), not here. try-restart picks up the
-# new code only when it's already running, so nodes with the bridge disabled are
-# left untouched and their enabled-state is still owned by apply.
-systemctl try-restart cot-bridge.service
+# avahi advertises <serial>-nucleus.local over mDNS (ssh by name).
+systemctl enable avahi-daemon
+systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service
 
 echo
 echo "Install complete. Next:"
 echo "  1. edit /etc/nucleus/config.yaml  (set node.id etc.)"
 echo "  2. sudo nucleusctl apply           (render configs + start units)"
-echo "  3. browse http://<serial>-nucleus.local  (web UI, no port; via nginx+avahi)"
-echo "     or http://<node-ip>:8080             (direct fallback)"

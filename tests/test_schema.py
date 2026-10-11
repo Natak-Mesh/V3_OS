@@ -20,35 +20,6 @@ def cfg(**over):
     return NucleusConfig.model_validate(d)
 
 
-def test_tak_defaults_off():
-    # Most nodes never touch TAK: the block defaults to variant=none and is
-    # inert (no apply-loop targets, script no-ops).
-    c = cfg()
-    assert c.tak.variant == "none"
-    assert c.tak.enrollment_validity_days == 365
-    assert c.tak.keystore_pass == "atakatak"
-    assert c.tak.cert.organization == "NATAK"
-
-
-def test_tak_ca_names_derive_from_hostname():
-    # CA common names are derived (no spaces) from the hostname, mirroring the
-    # rest of the derived-addressing scheme.
-    c = cfg()
-    assert c.tak_root_ca_name == "0009-nucleus-root"
-    assert c.tak_intermediate_ca_name == "0009-nucleus-ca"
-
-
-def test_tak_variant_accepts_opentakserver():
-    # OpenTAKServer is the either/or alternative to the official server.
-    c = cfg(tak={"variant": "opentakserver"})
-    assert c.tak.variant == "opentakserver"
-
-
-def test_tak_variant_rejects_unknown():
-    with pytest.raises(ValidationError):
-        cfg(tak={"variant": "freetakserver"})
-
-
 def test_derived_addressing():
     c = cfg()
     assert c.mesh_ip == "10.20.1.9"
@@ -64,79 +35,6 @@ def test_br_lan_prefix_override():
     assert c.br_lan_ip == "10.20.200.1"
 
 
-def test_reticulum_defaults():
-    r = cfg().reticulum
-    assert r.enabled is True
-    assert r.transport is True
-    assert r.auto_device == "wlan1"
-    assert r.tcp_server_port == 4242
-    assert r.entry_node_host == "173.230.150.24"
-    assert r.entry_node_port == 4243
-    assert r.kiss_enabled is False
-    # RNode on by default, with sane radio defaults.
-    assert r.rnode_enabled is True
-    assert r.rnode_frequency == 914875000
-    assert r.rnode_bandwidth == 250000
-    assert r.rnode_txpower == 22
-    assert r.rnode_spreadingfactor == 9
-    assert r.rnode_codingrate == 5
-
-
-def test_reticulum_loglevel_bounds():
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"loglevel": 8})
-
-
-def test_reticulum_rnode_bounds():
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"rnode_txpower": 23})
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"rnode_spreadingfactor": 13})
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"rnode_codingrate": 9})
-
-
-def test_reticulum_rnode_frequency_bounds():
-    # Outside the SX1262 range is rejected; an in-range value is accepted.
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"rnode_frequency": 100_000_000})
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"rnode_frequency": 1_000_000_000})
-    assert cfg(reticulum={"rnode_frequency": 868_000_000}).reticulum.rnode_frequency == 868_000_000
-
-
-def test_reticulum_rnode_bandwidth_must_be_a_known_step():
-    # Bandwidth is a Literal of the chip's steps; an arbitrary value is rejected.
-    with pytest.raises(ValidationError):
-        cfg(reticulum={"rnode_bandwidth": 200_000})
-    assert cfg(reticulum={"rnode_bandwidth": 125000}).reticulum.rnode_bandwidth == 125000
-
-
-def test_usb_devices_registry_unique_ids():
-    """No USB id may be claimed by two roles (ambiguous /dev/nucleus link)."""
-    from nucleusd.schema import USB_DEVICES
-
-    seen: dict[tuple[str, str], str] = {}
-    for role, ids in USB_DEVICES.items():
-        for usb_id in ids:
-            assert usb_id not in seen, f"{usb_id} claimed by {seen.get(usb_id)} and {role}"
-            seen[usb_id] = role
-    # RAK4631 is the only supported RNode for now.
-    assert USB_DEVICES["rnode"] == [("239a", "8029")]
-
-
-def test_web_defaults():
-    w = cfg().web
-    assert w.user == "admin"
-    assert w.password == "52235223"
-    assert w.eth0_access is True
-
-
-def test_web_short_password_rejected():
-    with pytest.raises(ValidationError):
-        cfg(web={"password": "12345"})
-
-
 def test_firewall_defaults():
     assert cfg().firewall.enabled is True
 
@@ -145,20 +43,6 @@ def test_firewall_disabled_in_context():
     c = cfg(firewall={"enabled": False})
     assert c.firewall.enabled is False
     assert c.render_context()["firewall_enabled"] is False
-
-
-def test_web_htpasswd_deterministic():
-    # {SHA} scheme, stable for a given password (apply idempotence).
-    c = cfg()
-    assert c.web_htpasswd.startswith("admin:{SHA}")
-    assert cfg().web_htpasswd == c.web_htpasswd
-
-
-def test_web_trusted_cidrs_derive():
-    c = cfg()
-    assert "10.20.1.0/24" in c.web_trusted_cidrs   # mesh
-    assert "10.20.9.0/24" in c.web_trusted_cidrs   # br-lan (id 9)
-    assert "100.64.0.0/10" in c.web_trusted_cidrs  # tailscale
 
 
 def test_frequency_matches_channel():
@@ -223,17 +107,17 @@ def test_subnet_collision_rejected():
         cfg(node={"id": 1})
 
 
-def test_tx_min_interval_default():
-    assert cfg().meshtastic.tx_min_interval_secs == 30
-
-
-def test_tx_min_interval_bounds_accepted():
-    assert cfg(meshtastic={"tx_min_interval_secs": 0}).meshtastic.tx_min_interval_secs == 0
-    assert cfg(meshtastic={"tx_min_interval_secs": 3600}).meshtastic.tx_min_interval_secs == 3600
-
-
-def test_tx_min_interval_out_of_range_rejected():
-    with pytest.raises(ValidationError):
-        cfg(meshtastic={"tx_min_interval_secs": -1})
-    with pytest.raises(ValidationError):
-        cfg(meshtastic={"tx_min_interval_secs": 3601})
+def test_removed_sections_ignored_on_load():
+    # Configs from a full Nucleus build still carry sections the drone build
+    # dropped. They must load (ignored), not fail validation.
+    c = NucleusConfig.model_validate({
+        **BASE,
+        "meshtastic": {"enabled": True},
+        "messaging": {"enabled": True},
+        "voice": {"enabled": True},
+        "reticulum": {"enabled": True},
+        "tak": {"variant": "none"},
+    })
+    dumped = c.model_dump()
+    for gone in ("meshtastic", "messaging", "voice", "reticulum", "tak"):
+        assert gone not in dumped

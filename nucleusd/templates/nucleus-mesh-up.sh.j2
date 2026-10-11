@@ -64,13 +64,13 @@ nft list chain ip nat POSTROUTING 2>/dev/null | grep -q 'oifname "eth0" masquera
 # config.yaml is the single source of truth: reset first so the live ruleset is
 # rebuilt from the current config on every run and never accumulates stale rules
 # from an earlier apply. `ufw --force reset` only clears UFW's own rules — the
-# nftables NAT masquerade, the multicast-TTL mangle rules (both set up above via
-# nft), and Tailscale's chains live in separate tables and are untouched. Reset
-# leaves timestamped backups of the rule files behind; drop them so /etc/ufw
-# does not fill up over time.
+# nftables NAT masquerade and the multicast-TTL mangle rules (both set up above
+# via nft) live in separate tables and are untouched. Reset leaves timestamped
+# backups of the rule files behind; drop them so /etc/ufw does not fill up over
+# time.
 ufw --force reset
 rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*
-# Trust internal interfaces (WPA3 mesh + local LAN + tailscale); default-deny
+# Trust internal interfaces (WPA3 mesh + local LAN); default-deny
 # everything arriving on eth0 EXCEPT ssh, so ethernet admin access survives.
 # The ssh-on-eth0 rule is added first, right after the reset, so admin access
 # over ethernet is never left dangling by a later bad rule.
@@ -80,45 +80,6 @@ ufw --force default deny routed
 ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
 ufw allow in on wlan1
 ufw allow in on br-lan
-ufw allow in on tailscale0
-{% if web_eth0_access %}
-# Web UI over ethernet (home LAN etc). nginx password-protects any request that
-# does not come from a trusted source net (mesh/br-lan/tailscale). Port 8080
-# (the raw app) stays closed on eth0 — only the nginx proxy (80/443) is exposed.
-ufw allow in on eth0 to any port 80 proto tcp comment 'web ui over ethernet'
-ufw allow in on eth0 to any port 443 proto tcp comment 'web ui (https) over ethernet'
-{% endif %}
-# Official TAK Server: open its ports on eth0 whenever the package is installed.
-# Checked at run time (dpkg), not from config, so it tracks what is actually on
-# the node — nodes without TAK open nothing extra. Exact string compare (no
-# pipeline) so `set -euo pipefail` can't abort on a missing package.
-# 8443/8089/8090 require a client cert; 8446 (enrollment) is user/password.
-if [ "$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)" = "install ok installed" ]; then
-    ufw allow in on eth0 to any port 8443 proto tcp comment 'tak web admin'
-    ufw allow in on eth0 to any port 8089 proto tcp comment 'tak client tls'
-    ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
-    ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
-fi
-# OpenTAKServer (either/or with the official server; installed manually, not a
-# .deb): open its TLS ports on eth0 whenever its unit is enabled. The plain-HTTP
-# 8082 (unauthenticated Marti API) is deliberately NOT opened on eth0.
-if systemctl is-enabled --quiet opentakserver.service 2>/dev/null; then
-    ufw allow in on eth0 to any port 8444 proto tcp comment 'ots web ui'
-    ufw allow in on eth0 to any port 8443 proto tcp comment 'ots marti api'
-    ufw allow in on eth0 to any port 8446 proto tcp comment 'ots cert enrollment'
-    ufw allow in on eth0 to any port 8089 proto tcp comment 'ots client tls'
-    ufw allow in on eth0 to any port 8883 proto tcp comment 'ots mqtt tls'
-    ufw allow in on eth0 to any port 8322 proto tcp comment 'ots rtsps'
-    ufw allow in on eth0 to any port 1936 proto tcp comment 'ots rtmps'
-fi
-# MediaMTX (installed by nucleus-tak-setup.sh, not a .deb): open RTSP + SRT on
-# eth0 whenever its unit is enabled. `if` keeps a non-zero exit from tripping -e.
-if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then
-    ufw allow in on eth0 to any port 8554 proto tcp comment 'mediamtx rtsp'
-    ufw allow in on eth0 to any port 8000 proto udp comment 'mediamtx rtp'
-    ufw allow in on eth0 to any port 8001 proto udp comment 'mediamtx rtcp'
-    ufw allow in on eth0 to any port 8890 proto udp comment 'mediamtx srt'
-fi
 {% if eth0_mode == "wan" %}
 # WAN mode: let LAN/mesh clients route OUT to the internet via eth0. NAT
 # masquerade for these is set up in the WAN block above; inbound-from-internet

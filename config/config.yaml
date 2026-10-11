@@ -2,7 +2,6 @@
 # Nucleus V3 OS — node configuration (single source of truth)
 #
 # Edit this file, then apply with:   sudo nucleusctl apply
-# or via the web UI / REST API (PUT /api/v1/config).
 #
 # You set primitives; the system DERIVES everything else from node.id:
 #   mesh IP        = <mesh.subnet_prefix>.<node.id>
@@ -46,38 +45,6 @@ eth0:
   dhcp_pool_offset: 10
   dhcp_pool_size: 100
 
-meshtastic:
-  enabled: true            # run meshtasticd (native) + expose radio to the bridge
-  region: US               # LoRa region; radio won't TX until set
-  hat: rak6421-slot2       # LoRa HAT/slot: rak6421-slot1 | rak6421-slot2 | auto
-  gps: uart                # GPS wiring: off | uart | i2c  (hardware-verified: uart)
-  gps_serial_path: /dev/ttyS0   # UART GPS device (Pi GPIO header = ttyS0)
-  i2c_device: /dev/i2c-1        # only used when gps: i2c
-  cot_bridge: true         # run the ATAK CoT <-> LoRa bridge (cot-bridge.service)
-  tx_min_interval_secs: 30  # min secs between LoRa TX of the same CoT UID (0 = off); live
-
-messaging:
-  enabled: true            # run the text messaging service (nucleus-messaging.service)
-  wifi_group: 239.10.10.60 # UDP multicast group for the WiFi transport (wlan1 mesh)
-  wifi_port: 17020         # UDP port for the WiFi transport
-  lora: true               # also send/receive over Meshtastic LoRa (standard text)
-  dedupe_window_secs: 60   # window to match the LoRa + WiFi copies of one message
-  history_limit: 500       # max messages retained / returned to the UI
-  rns:                     # Reticulum/LXMF direct-message lane (per-node DMs via rnsd)
-    enabled: true          # on by default; loads RNS/LXMF (~27 MB)
-    announce_mode: manual  # manual = never auto-announce (share contact cards instead); auto = re-announce on a timer
-    announce_interval_secs: 1800  # auto mode only: re-announce lxmf.delivery every N s
-    propagation_node: false       # run an LXMF store-and-forward node (extra memory/disk)
-
-web:
-  # Web UI access control. The UI needs NO password from the mesh, the AP, the
-  # local br-lan, Tailscale, or localhost. A request arriving over the ethernet
-  # port (a home LAN, or a public network) must log in with user/password below.
-  # CHANGE THE DEFAULT PASSWORD (see the manual).
-  user: admin
-  password: "52235223"     # HTTP Basic password for web UI over ethernet (min 6)
-  eth0_access: true        # false = deny the web UI on eth0 entirely (ports 80/443)
-
 firewall:
   # Host firewall (UFW). The ruleset is rebuilt from this config on every mesh
   # bring-up (ufw --force reset, then the rules above), so config.yaml is the
@@ -85,64 +52,3 @@ firewall:
   # are managed — nftables NAT/masquerade and the multicast-TTL rules are not
   # touched. ssh over ethernet is always allowed while the firewall is on.
   enabled: true            # false = disable UFW entirely (no host firewall)
-
-reticulum:
-  enabled: true            # run the Reticulum daemon (rnsd.service)
-  transport: true          # act as a transport node (route/relay for peers)
-  loglevel: 4              # rnsd verbosity 0=critical .. 7=extreme
-  auto_interface: true     # AutoInterface peering on the wlan1 802.11s mesh
-  auto_device: wlan1
-  tcp_server: true         # TCPServerInterface on br-lan for wired/AP clients
-  tcp_server_port: 4242
-  entry_node: true         # uplink to a public-IP Reticulum entry node
-  entry_node_host: 173.230.150.24
-  entry_node_port: 4243
-  kiss_enabled: false      # optional KISS packet-radio TNC on a serial device
-  # kiss_port: /dev/rfcomm0
-  # kiss_speed: 115200
-  # RNode LoRa radio over USB (on by default; harmless with no radio plugged in).
-  # Only the RAK4631 is supported. The radio is bound to /dev/nucleus/rnode by a
-  # generated udev rule, so no port is set here. Radio params must match on every
-  # node that should talk over this link; pick a frequency clear of the
-  # Meshtastic channel.
-  rnode_enabled: true      # enable an RNodeInterface on a USB LoRa radio
-  # rnode_frequency: 914875000   # Hz (150M-960M, SX1262 range)
-  # rnode_bandwidth: 250000      # Hz — one step: 7800/10400/15600/20800/31250/41700/62500/125000/250000/500000
-  # rnode_txpower: 22            # dBm (RAK4631 max 22)
-  # rnode_spreadingfactor: 9     # 5-12
-  # rnode_codingrate: 5          # 5-8 → 4/5-4/8
-
-tak:
-  # TAK Server — OFF on most nodes. Either/or, never both:
-  #   official      : drop the tak.gov .deb in ~natak, then run:  sudo nucleus-tak-setup.sh
-  #   opentakserver : run the OpenTAKServer Pi installer manually (see docs/manual)
-  # This block is NOT consumed by 'nucleusctl apply'.
-  variant: none            # none | official | opentakserver
-  enrollment_validity_days: 365   # validity of certs issued via auto-enrollment
-  keystore_pass: atakatak  # signing keystore password (TAK default)
-  cert:                    # X.509 metadata baked into the PKI
-    country: US
-    state: FL
-    city: Tampa
-    organization: NATAK
-    organizational_unit: TAK
-
-voice:
-  enabled: true            # run the mesh PTT voice daemon (nucleus-voice.service)
-  channel: 1               # startup voice channel (multicast group 239.10.10.N)
-  channels: "1:Command"    # named channel list "N:Label,N:Label"
-  jitter_ms: 80            # per-source RX jitter buffer before playback (ms)
-  tx_gain: 4.0             # software mic gain for the OpenVLM (hardware) path
-  # --- LoRa voice-text (Vosk STT -> Meshtastic text -> Piper TTS); needs models ---
-  lora_enabled: false      # enable LoRa voice-text
-  lora_max_secs: 30.0      # max speech captured per utterance (s)
-  lora_portnum: 260        # Meshtastic app portnum for LoRa voice-text
-  lora_hop_limit: 0        # 0 = direct RF neighbors only (no rebroadcast)
-  stt_engine: vosk         # vosk (fielded default) | sherpa (opt-in)
-  # stt_model:             # optional model override (dir name or abs path)
-  # stt_grammar:           # optional phrase-list file (vosk only)
-  stt_cleanup: true        # HPF + WebRTC noise-suppression on the STT mic tap
-  tx_cleanup: true         # HPF + WebRTC noise-suppression on live TX (IP + Codec2 stream)
-  # --- live Codec2 voice stream over LoRa (advanced) ---
-  stream_enabled: true
-  stream_portnum: 256

@@ -1,98 +1,71 @@
-# Config page (RADIO CONFIGURATION)
+# Configuration (`config.yaml`)
 
-Schema-driven form for the whole node config (`/etc/nucleus/config.yaml`).
-Operators set primitives; each section header shows the **derived** values the
-schema computes from them. Editing mutates a working copy that is saved as one
-read-modify-write `PUT /api/v1/config`.
+The whole node config lives in `/etc/nucleus/config.yaml`. Operators set
+primitives and the schema derives the rest from `node.id`. Apply with
+`sudo nucleusctl apply`.
 
-## Node
+## `node`
 
-Header: derived hostname and mesh IP.
+Derived: hostname (`<id:04d>-nucleus`) and mesh IP.
 
-| Field | Notes |
+| Key | Notes |
 |-------|-------|
-| Node id (blank=hostname) | 1–254; blank derives from hostname. |
-| Name (hostname override) | Optional hostname override. |
+| `id` | 1–254. Leave unset to derive it from the hostname. |
+| `name` | Optional hostname override. |
 
-## Wifi Mesh
+## `mesh`
 
-Header: derived mesh subnet.
+Derived: mesh subnet.
 
-| Field | Notes |
+| Key | Notes |
 |-------|-------|
-| SSID | Mesh SSID. |
-| Channel (2.4GHz) | 1–13. |
-| Password (min 8) | Mesh password. |
-| Subnet prefix | Optional. |
-| Country | Regulatory country (default US). |
-| mcast TTL | 0–64. |
-| 802.11s TTL | 0–31. |
-| RTS threshold (0=off) | 0–2347. |
+| `ssid` | Mesh SSID. |
+| `channel` | 2.4 GHz, 1–13. |
+| `password` | Mesh password (min 8). |
+| `subnet_prefix` | Optional. |
+| `country` | Regulatory country (default US). |
+| `mcast_ttl` | 0–64. |
+| `mesh_802_ttl` | 0–31. |
+| `rts_threshold` | 0 = off. |
 
-## Access Point
+## `ap`
 
-Header: derived AP SSID.
+Derived: AP SSID (`<id:04d>-nucleus-ap`).
 
-| Field | Notes |
+| Key | Notes |
 |-------|-------|
-| Channel (5GHz) | 1–165. |
-| Password (min 8) | AP password. |
-| SSID override | Optional. |
+| `channel` | 5 GHz. |
+| `password` | AP password (min 8). |
+| `name` | Optional SSID override. |
 
-## br-lan
+## `br_lan`
 
-Header: derived br-lan IP.
+Derived: br-lan IP (`10.20.<id>.1`).
 
-| Field | Notes |
+| Key | Notes |
 |-------|-------|
-| Subnet prefix (blank=auto) | Optional. |
-| DHCP pool offset | 0–254. |
-| DHCP pool size | 1–254. |
-| DNS | Upstream DNS (default 8.8.8.8). |
+| `subnet_prefix` | Optional, default `10.20.<id>`. |
+| `dhcp_pool_offset` | 0–254. |
+| `dhcp_pool_size` | 1–254. |
+| `dns` | Upstream DNS (default 8.8.8.8). |
 
-## eth0
+## `eth0`
 
-| Field | Notes |
+| Key | Notes |
 |-------|-------|
-| Mode | `wan` or `lan`. |
-| DHCP pool offset | 0–254 (lan mode). |
-| DHCP pool size | 1–254 (lan mode). |
+| `mode` | `wan` or `lan`. |
+| `dhcp_pool_offset` | 0–254 (lan mode). |
+| `dhcp_pool_size` | 1–254 (lan mode). |
 
-## Meshtastic Radio
+## `firewall`
 
-| Field | Notes |
+| Key | Notes |
 |-------|-------|
-| Enabled | `on` / `off`. |
-| Region | Regulatory region. |
-| HAT / slot | `rak6421-slot1` / `rak6421-slot2` / `auto`. |
-| GPS | `off` / `uart` / `i2c`. |
-| GPS serial path | Default `/dev/ttyS0`. |
-| I2C device | Default `/dev/i2c-1`. |
-| CoT bridge | `on` / `off`. |
-| TX rate limit (s) | 0–3600; min secs between LoRa TX of the same CoT UID (`0` = off). Read live by the bridge. See [Meshtastic](meshtastic.md#tx-rate-limit). |
-
-## Web UI
-
-Controls access to this web interface. Clients on the mesh, the access point,
-the local wired LAN (br-lan), Tailscale, or the node itself reach the UI with
-**no password**. A client connecting over the **ethernet port** (e.g. the node
-plugged into a home or office network) must log in.
-
-| Field | Notes |
-|-------|-------|
-| Web password (min 6) | HTTP Basic password for access over ethernet. Username is `admin`. |
-| Allow web UI over ethernet | `on` / `off`. Off closes ports 80/443 on eth0 entirely. See [Firewall](firewall.md). |
-
-**Default login: `admin` / `52235223` — change it.** The password is sent over
-plain HTTP; on an untrusted network use Tailscale to reach the UI instead. The
-raw app port (8080) is never exposed on ethernet — only the nginx proxy.
+| `enabled` | `false` disables UFW entirely. See [Firewall](firewall.md). |
 
 ## Applying changes
 
-- **Save (not applied)** — validates and writes config; nothing on the system
-  changes yet.
-- **Dry-run apply** — reports which files *would* change and which units would
-  restart, without doing it.
-- **Apply** — writes the changed files and restarts affected units. Reports
-  `no changes — system in sync` when already applied.
-- **Reload** — discards the working copy and re-reads the saved config.
+- `sudo nucleusctl validate` checks the file. Nothing on the system changes.
+- `sudo nucleusctl apply --dry-run` reports which files *would* change and which
+  units would restart, without doing it.
+- `sudo nucleusctl apply` writes the changed files and restarts affected units.

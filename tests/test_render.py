@@ -16,105 +16,8 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 15
+    assert len(r) == 10
     assert all(v.strip() for v in r.values())
-
-
-def test_reticulum_config_defaults():
-    r = rendered()["/home/natak/.reticulum/config"]
-    assert "enable_transport = Yes" in r
-    assert "loglevel = 4" in r
-    # AutoInterface on the wlan1 mesh.
-    assert "type = AutoInterface" in r
-    assert "devices = wlan1" in r
-    # TCPServer on br-lan.
-    assert "type = TCPServerInterface" in r
-    assert "device = br-lan" in r
-    assert "listen_port = 4242" in r
-    # Entry-node uplink.
-    assert "type = TCPClientInterface" in r
-    # Interface modes: entry node is boundary, local interfaces internal,
-    # so public-network announces are not flooded into the mesh/LAN.
-    assert "mode = boundary" in r
-    assert r.count("mode = internal") == 2
-    assert "target_host = 173.230.150.24" in r
-    assert "target_port = 4243" in r
-    # KISS off by default.
-    assert "KISSInterface" not in r
-    # RNode on by default, bound to the stable udev symlink.
-    assert "type = RNodeInterface" in r
-    assert "port = /dev/nucleus/rnode" in r
-    assert "frequency = 914875000" in r
-
-
-def test_reticulum_config_minimal():
-    cfg = NucleusConfig.model_validate({
-        "node": {"id": 9},
-        "mesh": {"password": "52235223"},
-        "ap": {"password": "52235223"},
-        "reticulum": {
-            "transport": False,
-            "tcp_server": False,
-            "entry_node": False,
-            "kiss_enabled": True,
-            "kiss_port": "/dev/ttyUSB0",
-        },
-    })
-    r = render_all(cfg)["/home/natak/.reticulum/config"]
-    assert "enable_transport = No" in r
-    assert "TCPServerInterface" not in r
-    assert "TCPClientInterface" not in r
-    assert "type = AutoInterface" in r          # still on by default
-    assert "type = KISSInterface" in r
-    assert "port = /dev/ttyUSB0" in r
-
-
-def test_reticulum_rnode_enabled():
-    cfg = NucleusConfig.model_validate({
-        "node": {"id": 9},
-        "mesh": {"password": "52235223"},
-        "ap": {"password": "52235223"},
-        "reticulum": {
-            "rnode_enabled": True,
-            "rnode_frequency": 868000000,
-            "rnode_bandwidth": 125000,
-            "rnode_txpower": 17,
-            "rnode_spreadingfactor": 8,
-            "rnode_codingrate": 6,
-        },
-    })
-    r = render_all(cfg)["/home/natak/.reticulum/config"]
-    assert "type = RNodeInterface" in r
-    # Bound to the stable udev symlink, never a raw /dev/ttyACM*.
-    assert "port = /dev/nucleus/rnode" in r
-    assert "frequency = 868000000" in r
-    assert "bandwidth = 125000" in r
-    assert "txpower = 17" in r
-    assert "spreadingfactor = 8" in r
-    assert "codingrate = 6" in r
-
-
-def test_usb_udev_rule():
-    r = rendered()["/etc/udev/rules.d/60-nucleus-usb.rules"]
-    # RAK4631 → /dev/nucleus/rnode, with ModemManager/mtp-probe left off.
-    assert 'ATTRS{idVendor}=="239a"' in r
-    assert 'ATTRS{idProduct}=="8029"' in r
-    assert 'SYMLINK+="nucleus/rnode"' in r
-    assert 'ENV{ID_MM_DEVICE_IGNORE}="1"' in r
-    assert 'ENV{MTP_NO_PROBE}="1"' in r
-
-
-def test_meshtasticd_config():
-    m = rendered()["/etc/meshtasticd/config.yaml"]
-    # RAK6421 slot2 LoRa pin block inlined (defaults).
-    assert "Module: sx1262" in m
-    assert "IRQ: 18" in m
-    assert "Reset: 24" in m
-    assert "Busy: 19" in m
-    assert "spidev: spidev0.1" in m
-    # UART GPS on the Pi GPIO header.
-    assert "SerialPath: /dev/ttyS0" in m
-    assert "APIPort: 4403" in m
 
 
 def test_babeld_has_subnets():
@@ -154,7 +57,6 @@ def test_meshup_firewall_rules():
     # Internal interfaces trusted.
     assert "ufw allow in on wlan1" in m
     assert "ufw allow in on br-lan" in m
-    assert "ufw allow in on tailscale0" in m
     # WAN mode (default eth0 mode) routes clients out to the internet.
     assert "ufw route allow in on br-lan out on eth0" in m
     assert "ufw --force enable" in m
@@ -174,6 +76,14 @@ def test_meshup_firewall_reset_before_allow():
     assert "rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*" in m
 
 
+def test_meshup_no_removed_subsystems():
+    # Drone build: no Tailscale trust, no TAK/OTS/MediaMTX eth0 ports.
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    assert "tailscale" not in m
+    for word in ("takserver", "opentakserver", "mediamtx", "dpkg-query"):
+        assert word not in m
+
+
 def test_meshup_firewall_disabled():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
@@ -190,87 +100,6 @@ def test_meshup_firewall_disabled():
     assert "ufw --force reset" not in m
 
 
-TAK_ETH0_RULES = (
-    "ufw allow in on eth0 to any port 8443 proto tcp",
-    "ufw allow in on eth0 to any port 8089 proto tcp",
-    "ufw allow in on eth0 to any port 8446 proto tcp",
-    "ufw allow in on eth0 to any port 8090 proto udp",
-)
-
-
-def test_meshup_tak_ports_gated_on_installed_package():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    # Runtime dpkg check (not config) decides whether TAK ports open on eth0.
-    check = ("if [ \"$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)\""
-             " = \"install ok installed\" ]; then")
-    assert check in m
-    for rule in TAK_ETH0_RULES:
-        assert rule in m
-        # Inside the dpkg guard, after the reset, before ufw is enabled.
-        assert m.index(check) < m.index(rule) < m.index("ufw --force enable")
-        assert m.index("ufw --force reset") < m.index(rule)
-
-
-MEDIAMTX_ETH0_RULES = (
-    "ufw allow in on eth0 to any port 8554 proto tcp",
-    "ufw allow in on eth0 to any port 8000 proto udp",
-    "ufw allow in on eth0 to any port 8001 proto udp",
-    "ufw allow in on eth0 to any port 8890 proto udp",
-)
-
-
-def test_meshup_mediamtx_ports_gated_on_enabled_unit():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    # Runtime systemd check decides whether MediaMTX ports open on eth0.
-    check = "if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then"
-    assert check in m
-    for rule in MEDIAMTX_ETH0_RULES:
-        assert rule in m
-        # Inside the systemd guard, after the reset, before ufw is enabled.
-        assert m.index(check) < m.index(rule) < m.index("ufw --force enable")
-        assert m.index("ufw --force reset") < m.index(rule)
-
-
-OTS_ETH0_RULES = (
-    "ufw allow in on eth0 to any port 8444 proto tcp comment 'ots web ui'",
-    "ufw allow in on eth0 to any port 8443 proto tcp comment 'ots marti api'",
-    "ufw allow in on eth0 to any port 8446 proto tcp comment 'ots cert enrollment'",
-    "ufw allow in on eth0 to any port 8089 proto tcp comment 'ots client tls'",
-    "ufw allow in on eth0 to any port 8883 proto tcp comment 'ots mqtt tls'",
-    "ufw allow in on eth0 to any port 8322 proto tcp comment 'ots rtsps'",
-    "ufw allow in on eth0 to any port 1936 proto tcp comment 'ots rtmps'",
-)
-
-
-def test_meshup_ots_ports_gated_on_enabled_unit():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    # Runtime systemd check decides whether OpenTAKServer ports open on eth0.
-    check = "if systemctl is-enabled --quiet opentakserver.service 2>/dev/null; then"
-    assert check in m
-    for rule in OTS_ETH0_RULES:
-        assert rule in m
-        # Inside the systemd guard, after the reset, before ufw is enabled.
-        assert m.index(check) < m.index(rule) < m.index("ufw --force enable")
-        assert m.index("ufw --force reset") < m.index(rule)
-    # Unauthenticated plain-HTTP port is never opened on eth0.
-    assert "port 8082" not in m
-
-
-def test_meshup_tak_ports_absent_when_firewall_disabled():
-    cfg = NucleusConfig.model_validate({
-        "node": {"id": 9},
-        "mesh": {"password": "52235223"},
-        "ap": {"password": "52235223"},
-        "firewall": {"enabled": False},
-    })
-    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    assert "dpkg-query" not in m
-    assert "mediamtx" not in m
-    assert "opentakserver" not in m
-    for rule in TAK_ETH0_RULES + MEDIAMTX_ETH0_RULES + OTS_ETH0_RULES:
-        assert rule not in m
-
-
 def test_meshup_no_wan_route_in_lan_mode():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
@@ -284,54 +113,6 @@ def test_meshup_no_wan_route_in_lan_mode():
     assert "ufw route allow in on br-lan out on eth0" not in m
     assert "ufw allow in on eth0 to any port 22 proto tcp" in m
     assert "ufw route allow in on br-lan out on wlan1" in m
-
-
-def test_web_auth_in_nginx():
-    n = rendered()["/etc/nginx/sites-available/nucleus"]
-    # Basic auth enabled, trusted source nets skip it (satisfy any).
-    assert "satisfy any;" in n
-    assert "auth_basic_user_file /etc/nginx/nucleus.htpasswd;" in n
-    assert "allow 127.0.0.1;" in n
-    assert "allow 10.20.1.0/24;" in n     # mesh subnet
-    assert "allow 10.20.9.0/24;" in n     # br-lan (node id 9)
-    assert "allow 100.64.0.0/10;" in n    # tailscale
-    assert "deny all;" in n
-    assert "limit_req_zone" in n
-
-
-def test_htpasswd_rendered():
-    h = rendered()["/etc/nginx/nucleus.htpasswd"]
-    # Deterministic {SHA} scheme, user admin, from default password.
-    assert h.startswith("admin:{SHA}") or "\nadmin:{SHA}" in h
-
-
-def test_htpasswd_deterministic():
-    # Same password -> identical file (apply idempotence).
-    assert render_all(CFG)["/etc/nginx/nucleus.htpasswd"] == \
-        render_all(CFG)["/etc/nginx/nucleus.htpasswd"]
-
-
-def test_meshup_web_over_eth0():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    assert "ufw allow in on eth0 to any port 80 proto tcp" in m
-    assert "ufw allow in on eth0 to any port 443 proto tcp" in m
-
-
-def test_meshup_web_over_eth0_disabled():
-    cfg = NucleusConfig.model_validate({
-        "node": {"id": 9},
-        "mesh": {"password": "52235223"},
-        "ap": {"password": "52235223"},
-        "web": {"eth0_access": False},
-    })
-    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    assert "ufw allow in on eth0 to any port 80 proto tcp" not in m
-    assert "ufw allow in on eth0 to any port 443 proto tcp" not in m
-    # The reset rebuilds the ruleset, so any 80/443 rule left from an earlier
-    # apply is removed rather than lingering.
-    assert "ufw --force reset" in m
-    # ssh still allowed regardless.
-    assert "ufw allow in on eth0 to any port 22 proto tcp" in m
 
 
 def test_hostapd_no_bridge_directive():

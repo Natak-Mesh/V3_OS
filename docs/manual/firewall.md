@@ -1,7 +1,6 @@
 # Host firewall (UFW)
 
-Every node runs a host firewall (UFW). It is not a web UI page — it is driven
-entirely from `config.yaml` and rebuilt on each mesh bring-up. This page
+Every node runs a host firewall (UFW). It is driven entirely from `config.yaml` and rebuilt on each mesh bring-up. This page
 documents what the ruleset is, how it is applied, and the `firewall.enabled`
 switch.
 
@@ -11,21 +10,17 @@ The firewall rules are rendered into `nucleus-mesh-up.sh` and applied by
 `nucleus-mesh.service` every time the mesh comes up (boot, or after
 `nucleusctl apply` changes the script). The script runs `ufw --force reset`
 **first**, then re-adds exactly the rules the current config asks for. Because of
-the reset, a rule that is no longer in the config (for example, the web-over-eth0
-rules after you set `eth0_access: off`) is removed rather than left behind. The
-live ruleset therefore always reflects the current `config.yaml`, with one
-exception: the optional TAK Server / MediaMTX add-on (provisioned by
-`nucleus-tak-setup.sh`, outside the config pipeline) opens its eth0 ports based
-on what is installed on the node, checked at run time. See the table below.
+the reset, a rule that is no longer in the config (for example, the WAN egress
+routes after switching eth0 to `lan`) is removed rather than left behind. The
+live ruleset therefore always reflects the current `config.yaml`.
 
 The reset only clears UFW's own rules. It does **not** touch:
 
 - the nftables NAT/masquerade rule (WAN mode internet sharing),
-- the multicast-TTL mangle rules (`nucleus_mcast_ttl`),
-- Tailscale's own firewall chains.
+- the multicast-TTL mangle rules (`nucleus_mcast_ttl`).
 
-Those live in separate nftables tables set up elsewhere in the same script (or by
-Tailscale) and are unaffected.
+Those live in separate nftables tables set up elsewhere in the same script and
+are unaffected.
 
 ## The ruleset
 
@@ -39,17 +34,10 @@ With the firewall enabled, the following rules are applied, in this order:
 | allow in on eth0 port 22/tcp | **ssh over ethernet — always allowed.** Added first, right after the reset, so ethernet admin access is never left dangling by a later bad rule. |
 | allow in on wlan1 | Trust the 802.11s mesh (WPA3-encrypted). |
 | allow in on br-lan | Trust the local wired LAN / AP bridge. |
-| allow in on tailscale0 | Trust Tailscale. |
-| allow in on eth0 port 80/443 tcp | Web UI over ethernet. Only present when `web.eth0_access: true`. nginx password-protects these. |
-| allow in on eth0 port 8443/8089/8446 tcp, 8090 udp | Official TAK Server over ethernet. Only present when the `takserver` package is installed — checked at run time with `dpkg-query`, not from config. Open to any source; see [TAK Server](takserver.md#ports). |
-| allow in on eth0 port 8444/8443/8446/8089/8883/8322/1936 tcp | OpenTAKServer over ethernet. Only present when `opentakserver.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. 8082 (plain HTTP, unauthenticated) is never opened on eth0. Open to any source; see [OpenTAKServer](opentakserver.md#ports). |
-| allow in on eth0 port 8554 tcp, 8000/8001/8890 udp | MediaMTX RTSP + SRT video over ethernet. Only present when `mediamtx.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. Open to any source; see [TAK Server](takserver.md#mediamtx). |
 | route allow br-lan/wlan1 → eth0 | Internet egress for clients. Only in eth0 WAN mode. |
 | route allow br-lan ↔ wlan1 | Mesh ↔ LAN forwarding, always. |
 
-The raw app port (8080) is never opened on eth0 — only the nginx proxy (80/443)
-is exposed there, and only when `eth0_access` is on. See [Config](config.md) for
-the web access toggle and [System](system.md) for eth0 WAN/LAN mode.
+See [Config](config.md) for eth0 WAN/LAN mode.
 
 ## Turning the firewall off
 
@@ -60,7 +48,7 @@ firewall:
 
 With `enabled: false`, the script runs `ufw --force disable` and renders no
 rules at all. Only do this if another firewall protects the node — with UFW off,
-eth0 is wide open apart from whatever the nftables/Tailscale rules cover.
+eth0 is wide open apart from whatever the nftables rules cover.
 
 ## Applying and verifying
 
@@ -75,4 +63,4 @@ sudo ufw status            # active / inactive
 There is a brief moment during `reset` + rebuild where the firewall is open.
 This only happens at mesh-up, while services are starting anyway. A bad rule
 after the reset could cut off ssh on eth0 or partition the mesh, so keep a second
-way in (mesh or Tailscale) when changing firewall config on a remote node.
+way in (mesh or AP) when changing firewall config on a remote node.

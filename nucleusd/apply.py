@@ -5,31 +5,15 @@ renders every Jinja2 template against the validated config, writes only the
 files whose content actually changed, and restarts only the systemd units whose
 inputs changed. Idempotent: re-running with no config change touches nothing.
 
-Importable as a plain module (used by both the CLI and the REST API), so the
-apply logic exists in exactly one place.
+Importable as a plain module (used by the CLI), so the apply logic exists in
+exactly one place.
 """
 
 from __future__ import annotations
 
-import pwd
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-
-# Reticulum daemon (rnsd) runs as this user; its config lives in ~/.reticulum.
-RETI_USER = "natak"
-RETI_CONFIG = Path(f"/home/{RETI_USER}/.reticulum/config")
-
-# nginx reverse-proxy paths (port-less .local + by-IP access to the :8080 UI).
-NGINX_VHOST = Path("/etc/nginx/sites-available/nucleus")
-NGINX_ENABLED = Path("/etc/nginx/sites-enabled/nucleus")
-NGINX_DEFAULT = Path("/etc/nginx/sites-enabled/default")
-NGINX_HTPASSWD = Path("/etc/nginx/nucleus.htpasswd")
-# Generated udev rule binding recognised USB devices to /dev/nucleus/<role>.
-USB_UDEV_RULE = Path("/etc/udev/rules.d/60-nucleus-usb.rules")
-CERT_DIR = Path("/etc/nucleus/certs")
-CERT_CRT = CERT_DIR / "nucleus-web.crt"
-CERT_KEY = CERT_DIR / "nucleus-web.key"
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -63,17 +47,6 @@ TARGETS: list[Target] = [
     Target("babeld.conf.j2", Path("/etc/babeld.conf"), ("babeld",)),
     Target("smcroute.conf.j2", Path("/etc/smcroute.conf"), ("smcroute",)),
     Target("hostapd.conf.j2", Path("/etc/hostapd/hostapd.conf"), ("hostapd", "brlan-setup")),
-    Target("meshtasticd-config.yaml.j2", Path("/etc/meshtasticd/config.yaml"), ("meshtasticd",)),
-    # rnsd is enable/disable-driven like meshtasticd (handled in apply()), and
-    # the file must land owned by RETI_USER — see _write_reticulum below.
-    Target("reticulum-config.j2", RETI_CONFIG, ("rnsd",)),
-    # USB device → /dev/nucleus/<role> udev rule. udev is not a systemd unit, so
-    # a change triggers a udevadm reload/trigger specially in apply() (no units).
-    Target("60-nucleus-usb.rules.j2", USB_UDEV_RULE, ()),
-    # nginx reverse proxy — reload (not restart) handled specially in apply().
-    Target("nginx-nucleus.conf.j2", NGINX_VHOST, ()),
-    # HTTP Basic credentials for web UI over eth0 — reload nginx on change.
-    Target("nucleus.htpasswd.j2", NGINX_HTPASSWD, ()),
 ]
 
 
@@ -125,146 +98,6 @@ def _restart(units: list[str]) -> None:
             subprocess.run(["systemctl", "restart", f"{unit}.service"], check=False)
 
 
-def _set_service(unit: str, want_on: bool) -> None:
-    """Enable+start or stop+disable a unit to match desired state. Idempotent."""
-    if want_on:
-        subprocess.run(["systemctl", "enable", "--now", f"{unit}.service"], check=False)
-    else:
-        subprocess.run(["systemctl", "disable", "--now", f"{unit}.service"], check=False)
-
-
-def _reconcile_meshtastic(cfg: NucleusConfig) -> list[str]:
-    """Enable/disable meshtasticd + cot-bridge to match the config flags.
-
-    Runs after templates are written so the units start against fresh config.
-    The cot-bridge only runs when meshtasticd is enabled AND cot_bridge is on.
-    Returns the list of units whose enabled-state was reconciled.
-    """
-    m = cfg.meshtastic
-    touched: list[str] = []
-    _set_service("meshtasticd", m.enabled)
-    touched.append("meshtasticd")
-    _set_service("nucleus-meshtastic-init", m.enabled)
-    touched.append("nucleus-meshtastic-init")
-    _set_service("cot-bridge", m.enabled and m.cot_bridge)
-    touched.append("cot-bridge")
-    return touched
-
-
-def _chown_reticulum() -> None:
-    """Give the rnsd config (and its dir) back to RETI_USER.
-
-    apply() runs as root, but rnsd runs as RETI_USER and must own its config
-    directory (0700) and file, or it refuses to read them. Idempotent.
-    """
-    try:
-        ent = pwd.getpwnam(RETI_USER)
-    except KeyError:
-        return  # user absent (e.g. off-box test host); nothing to own
-    import os
-    d = RETI_CONFIG.parent
-    d.mkdir(parents=True, exist_ok=True)
-    os.chown(d, ent.pw_uid, ent.pw_gid)
-    d.chmod(0o700)
-    if RETI_CONFIG.exists():
-        os.chown(RETI_CONFIG, ent.pw_uid, ent.pw_gid)
-
-
-def _reconcile_reticulum(cfg: NucleusConfig) -> list[str]:
-    """Enable/disable rnsd to match reticulum.enabled. Returns units touched."""
-    _set_service("rnsd", cfg.reticulum.enabled)
-    return ["rnsd"]
-
-
-def _global_ipv4s() -> list[str]:
-    """Every global-scope IPv4 on the box, read live (not from config).
-
-    Phones frequently reach a node by IP rather than the .local name, so the
-    cert must carry IP SANs too or HTTPS-by-IP fails validation.
-    """
-    out = subprocess.run(
-        ["ip", "-4", "-o", "addr", "show", "scope", "global"],
-        capture_output=True, text=True, check=False,
-    ).stdout
-    ips: list[str] = []
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) >= 4 and parts[2] == "inet":
-            ip = parts[3].split("/")[0]
-            if ip not in ips:
-                ips.append(ip)
-    return ips
-
-
-def _wanted_sans(hostname: str) -> list[str]:
-    """SAN set for the web cert: the .local name plus every global IPv4."""
-    sans = [f"DNS:{hostname}.local"]
-    sans += [f"IP:{ip}" for ip in _global_ipv4s()]
-    return sans
-
-
-def _cert_sans(path: Path) -> list[str]:
-    """Read the SAN list from an existing cert, or [] if unreadable/missing."""
-    if not path.exists():
-        return []
-    out = subprocess.run(
-        ["openssl", "x509", "-in", str(path), "-noout", "-text"],
-        capture_output=True, text=True, check=False,
-    ).stdout
-    sans: list[str] = []
-    grab = False
-    for line in out.splitlines():
-        s = line.strip()
-        if grab:
-            for tok in s.split(","):
-                tok = tok.strip()
-                if tok.startswith(("DNS:", "IP Address:", "IP:")):
-                    sans.append(tok.replace("IP Address:", "IP:"))
-            break
-        if "Subject Alternative Name" in s:
-            grab = True
-    return sans
-
-
-def _ensure_web_cert(hostname: str) -> bool:
-    """Generate the self-signed web cert when missing or when SANs changed.
-
-    Idempotent: leaves an up-to-date cert untouched. Returns True if it
-    (re)generated the cert (so nginx should reload).
-    """
-    wanted = _wanted_sans(hostname)
-    if CERT_CRT.exists() and CERT_KEY.exists():
-        if sorted(_cert_sans(CERT_CRT)) == sorted(wanted):
-            return False
-    CERT_DIR.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
-            "-days", "3650",
-            "-keyout", str(CERT_KEY),
-            "-out", str(CERT_CRT),
-            "-subj", f"/CN={hostname}.local",
-            "-addext", "subjectAltName=" + ",".join(wanted),
-        ],
-        check=False,
-    )
-    CERT_KEY.chmod(0o600)
-    return True
-
-
-def _reload_nginx() -> None:
-    """Validate + reload nginx so the vhost/cert changes take effect."""
-    if subprocess.run(["nginx", "-t"], capture_output=True).returncode == 0:
-        subprocess.run(["systemctl", "reload", "nginx"], check=False)
-
-
-def _reload_udev() -> None:
-    """Reload udev rules and re-apply them so a changed rule file takes effect
-    on already-attached devices (udev is not a systemd unit)."""
-    subprocess.run(["udevadm", "control", "--reload"], check=False)
-    subprocess.run(["udevadm", "trigger", "--subsystem-match=tty"], check=False)
-
-
 def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     """Render, write changed files, restart affected units. Idempotent."""
     env = _env()
@@ -283,14 +116,6 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
             result.changed.append(str(t.dest))
             units_to_restart.update(t.units)
 
-    # meshtasticd is enable/disable-driven (not just restart): reconcile its
-    # unit state via _reconcile_meshtastic below, so drop it from the plain
-    # restart set to avoid starting a unit we're about to disable.
-    units_to_restart.discard("meshtasticd")
-    # rnsd is enable/disable-driven too; reconcile below after chowning its
-    # config so we never start it against a root-owned file it can't read.
-    units_to_restart.discard("rnsd")
-
     if dry_run:
         return result
 
@@ -301,44 +126,5 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
         ordered = [u for u in order if u in units_to_restart]
         _restart(ordered)
         result.units_restarted = ordered
-
-    # Reconcile meshtasticd + cot-bridge enabled-state every apply (cheap and
-    # idempotent), then restart meshtasticd if its rendered config changed.
-    result.units_restarted += _reconcile_meshtastic(cfg)
-    if str(Path("/etc/meshtasticd/config.yaml")) in result.changed and cfg.meshtastic.enabled:
-        _restart(["meshtasticd"])
-
-    # Reticulum: ensure rnsd owns its config, reconcile enabled-state, and
-    # restart it if its rendered config changed (and it's enabled).
-    _chown_reticulum()
-    result.units_restarted += _reconcile_reticulum(cfg)
-    if str(RETI_CONFIG) in result.changed and cfg.reticulum.enabled:
-        _restart(["rnsd"])
-
-    # USB udev rule: if the generated rule changed, reload udev and re-trigger so
-    # /dev/nucleus/<role> links are (re)created for already-attached devices.
-    if str(USB_UDEV_RULE) in result.changed:
-        _reload_udev()
-        result.units_restarted.append("udev")
-
-    # nginx reverse proxy: ensure the self-signed cert matches current SANs,
-    # enable our vhost, drop the stock default site, and reload if anything
-    # changed. All idempotent.
-    cert_changed = _ensure_web_cert(cfg.node.hostname)
-    NGINX_ENABLED.parent.mkdir(parents=True, exist_ok=True)
-    symlink_changed = False
-    if not NGINX_ENABLED.is_symlink() or NGINX_ENABLED.resolve() != NGINX_VHOST:
-        if NGINX_ENABLED.exists() or NGINX_ENABLED.is_symlink():
-            NGINX_ENABLED.unlink()
-        NGINX_ENABLED.symlink_to(NGINX_VHOST)
-        symlink_changed = True
-    default_removed = False
-    if NGINX_DEFAULT.is_symlink() or NGINX_DEFAULT.exists():
-        NGINX_DEFAULT.unlink()
-        default_removed = True
-    if (str(NGINX_VHOST) in result.changed or str(NGINX_HTPASSWD) in result.changed
-            or cert_changed or symlink_changed or default_removed):
-        _reload_nginx()
-        result.units_restarted.append("nginx")
 
     return result

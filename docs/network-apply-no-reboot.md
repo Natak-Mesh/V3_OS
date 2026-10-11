@@ -3,6 +3,11 @@
 Status: PLANNED — not implemented. Do this work on a feature branch (e.g.
 `feature/network-apply`), NOT `main`. Bench-test on a spare node before merging.
 
+> **`drone` branch:** cot-bridge, nucleus-messaging, nucleus-voice, rnsd and the
+> takserver drop-in referenced below do not exist on this branch. Only the
+> network/mesh units (networkd, nucleus-mesh, hostapd, brlan-setup, babeld,
+> smcroute) apply here.
+
 ## Problem
 
 `nucleusctl apply` is meant to make config changes live without a reboot. In
@@ -10,7 +15,7 @@ practice the network is often left half-broken until the node is rebooted:
 
 - AP (wlan0) is visible but clients cannot join. hostapd logs nothing, and
   br-lan reports `Offered DHCP leases: none`.
-- The mesh (wlan1) shows a peer in the web UI and unicast works (ping, Babel
+- The mesh (wlan1) shows an ESTAB peer and unicast works (ping, Babel
   routes), but ATAK multicast (239.2.3.1:6969) from local EUDs never crosses the
   mesh.
 - A reboot fixes it.
@@ -86,7 +91,7 @@ In `nucleusd/apply.py`:
 - `_restart()`: use `networkctl reconfigure <links>` instead of
   `networkctl reload`, or run reload then reconfigure.
 - Do NOT touch the network group if no network file changed. Unrelated changes
-  (voice, messaging, nginx) must stay non-disruptive.
+  (voice, messaging) must stay non-disruptive.
 
 ### D. Remove the wlan0/br-lan race
 - `system/systemd/brlan-setup.service`: replace `sleep 2` with a bounded wait
