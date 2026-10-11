@@ -1,0 +1,17 @@
+[Unit]
+Description=MAVLink router (flight controller UART <-> UDP 14550 on the mesh)
+After=nucleus-mesh.service
+Wants=nucleus-mesh.service
+
+[Service]
+Type=simple
+# Root required: /dev/ttyS0 (serial0) is root-only.
+User=root
+ExecStart=/usr/local/bin/mavlink-routerd -c /etc/mavlink-router/main.conf
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

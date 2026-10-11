@@ -26,7 +26,8 @@ apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip git \
     babeld smcroute hostapd wpasupplicant iw \
     nftables network-manager ufw \
-    avahi-daemon avahi-utils
+    avahi-daemon avahi-utils \
+    ca-certificates wget
 
 echo "==> free the GPIO UART for the flight controller"
 # The flight controller is wired to the Pi GPIO UART (/dev/serial0 -> ttyS0).
@@ -74,6 +75,28 @@ install -m 644 "$REPO/system/networkmanager/unmanaged-devices.conf" \
 echo "==> node update tooling"
 # Update script, run over ssh: pull + reinstall + apply.
 install -m 755 "$REPO/system/bin/nucleus-update.sh" "$OPT/bin/nucleus-update.sh"
+
+echo "==> mavlink-router (flight controller UART <-> UDP 14550)"
+# Official prebuilt aarch64 binary; not in the Debian repos. Downloaded only when
+# the pinned version changes (marker file), so re-runs don't hit the network.
+MAVLINK_ROUTER_VERSION=v4
+MAVLINK_ROUTER_URL="https://github.com/mavlink-router/mavlink-router/releases/download/$MAVLINK_ROUTER_VERSION/mavlink-routerd-glibc-aarch64"
+MAVLINK_ROUTER_MARKER="$OPT/mavlink-routerd.version"
+if [ ! -x /usr/local/bin/mavlink-routerd ] || \
+   [ "$(cat "$MAVLINK_ROUTER_MARKER" 2>/dev/null)" != "$MAVLINK_ROUTER_VERSION" ]; then
+    wget -q -O /usr/local/bin/mavlink-routerd.tmp "$MAVLINK_ROUTER_URL"
+    chmod 755 /usr/local/bin/mavlink-routerd.tmp
+    mv /usr/local/bin/mavlink-routerd.tmp /usr/local/bin/mavlink-routerd
+    echo "$MAVLINK_ROUTER_VERSION" > "$MAVLINK_ROUTER_MARKER"
+    echo "    installed mavlink-routerd $MAVLINK_ROUTER_VERSION"
+else
+    echo "    mavlink-routerd $MAVLINK_ROUTER_VERSION already installed"
+fi
+mkdir -p /etc/mavlink-router
+install -m 644 "$REPO/system/mavlink-router/main.conf" /etc/mavlink-router/main.conf
+install -m 644 "$REPO/system/systemd/mavlink-router.service" /etc/systemd/system/
+# USB GPS -> FC bridge (GPS_INPUT into mavlink-router's local 14560 endpoint).
+install -m 644 "$REPO/system/systemd/nucleus-gps.service" /etc/systemd/system/
 
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
@@ -126,6 +149,12 @@ fi
 # avahi advertises <serial>-nucleus.local over mDNS (ssh by name).
 systemctl enable avahi-daemon
 systemctl enable systemd-networkd nucleus-mesh.service babeld smcroute hostapd brlan-setup.service
+# mavlink-router is static (not rendered by apply); restart so a re-install
+# picks up a new binary or main.conf.
+systemctl enable mavlink-router.service
+systemctl restart mavlink-router.service
+systemctl enable nucleus-gps.service
+systemctl restart nucleus-gps.service
 
 echo
 echo "Install complete. Next:"

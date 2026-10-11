@@ -15,7 +15,9 @@ self-update from `drone`, not `main`.
 
 **Subsystems:** Wi-Fi 802.11s mesh on `wlan1` (babeld L3 routing, smcroute
 multicast, HWMP off), `wlan0` AP + `br-lan` for local access, UFW host firewall. The GPIO UART is kept free for the flight controller
-(see §4).
+(see §4). **mavlink-router** (prebuilt aarch64 binary) bridges the FC on
+`/dev/serial0` @ 921600 to UDP 14550; the GCS connects to
+`<mesh IP>:14550` (config: `system/mavlink-router/main.conf`).
 
 ---
 

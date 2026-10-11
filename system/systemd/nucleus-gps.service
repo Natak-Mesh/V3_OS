@@ -1,0 +1,18 @@
+[Unit]
+Description=USB GPS -> flight controller bridge (MAVLink GPS_INPUT via mavlink-router)
+After=mavlink-router.service
+Wants=mavlink-router.service
+
+[Service]
+Type=simple
+# USB GPS (/dev/ttyACM*) is group dialout; no root needed.
+DynamicUser=yes
+SupplementaryGroups=dialout
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.gpsbridge
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
