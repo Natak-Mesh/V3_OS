@@ -96,6 +96,22 @@ def test_reticulum_rnode_bounds():
         cfg(reticulum={"rnode_codingrate": 9})
 
 
+def test_reticulum_rnode_frequency_bounds():
+    # Outside the SX1262 range is rejected; an in-range value is accepted.
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"rnode_frequency": 100_000_000})
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"rnode_frequency": 1_000_000_000})
+    assert cfg(reticulum={"rnode_frequency": 868_000_000}).reticulum.rnode_frequency == 868_000_000
+
+
+def test_reticulum_rnode_bandwidth_must_be_a_known_step():
+    # Bandwidth is a Literal of the chip's steps; an arbitrary value is rejected.
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"rnode_bandwidth": 200_000})
+    assert cfg(reticulum={"rnode_bandwidth": 125000}).reticulum.rnode_bandwidth == 125000
+
+
 def test_usb_devices_registry_unique_ids():
     """No USB id may be claimed by two roles (ambiguous /dev/nucleus link)."""
     from nucleusd.schema import USB_DEVICES

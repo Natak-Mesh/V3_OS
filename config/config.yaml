@@ -106,8 +106,8 @@ reticulum:
   # node that should talk over this link; pick a frequency clear of the
   # Meshtastic channel.
   rnode_enabled: true      # enable an RNodeInterface on a USB LoRa radio
-  # rnode_frequency: 914875000   # Hz
-  # rnode_bandwidth: 250000      # Hz
+  # rnode_frequency: 914875000   # Hz (150M-960M, SX1262 range)
+  # rnode_bandwidth: 250000      # Hz — one step: 7800/10400/15600/20800/31250/41700/62500/125000/250000/500000
   # rnode_txpower: 22            # dBm (RAK4631 max 22)
   # rnode_spreadingfactor: 9     # 5-12
   # rnode_codingrate: 5          # 5-8 → 4/5-4/8

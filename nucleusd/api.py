@@ -122,6 +122,17 @@ def get_config() -> dict:
     return data
 
 
+@app.get("/api/v1/config/schema")
+def get_config_schema() -> dict:
+    """Return the config's JSON schema (field types, bounds, enums, descriptions).
+
+    The single contract (schema.py) made machine-readable: clients like the web
+    UI read field limits/options from here instead of hardcoding a second copy
+    that could drift from the schema. Static — no config I/O.
+    """
+    return NucleusConfig.model_json_schema()
+
+
 @app.put("/api/v1/config")
 def put_config(new: dict) -> dict:
     """Validate and persist a full replacement config. Does NOT apply.

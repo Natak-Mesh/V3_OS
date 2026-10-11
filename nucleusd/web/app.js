@@ -115,6 +115,13 @@ let TXR = null;
 let PEERS = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
+// Working copy of the RNode LoRa radio settings (reticulum.rnode_*), edited on
+// the RETICULUM > INTERFACES > CONFIGURE RNODE page.
+let RN = null;
+// JSON schema of ReticulumConfig (field bounds/enums/descriptions), fetched from
+// /api/v1/config/schema so the RNode page reads its limits from the one contract
+// (schema.py) instead of hardcoding a second copy.
+let RN_SCHEMA = null;
 let MSG_DRAFT = "";
 // Live chat state: messages cache + WebSocket, populated by the messaging page.
 let MSG_CACHE = [];        // ordered oldest→newest, keyed by id
@@ -561,6 +568,72 @@ const PAGES = {
       }
       h += `</div>`;
       items.push({ type: "content", html: h });
+      items.push({ type: "nav", label: "» CONFIGURE RNODE (LoRa radio)", to: "rns_rnode" });
+      return { items };
+    },
+  },
+
+  // Reticulum RNode LoRa radio settings (reticulum.rnode_*). Field types, bounds
+  // and the bandwidth options come from /api/v1/config/schema (the schema.py
+  // contract) — nothing here is hardcoded. Values come from /api/v1/config. Save
+  // is a read-modify-write PUT of only the rnode_* keys; Apply rewrites the rnsd
+  // config and restarts only rnsd.
+  rns_rnode: {
+    title: "RNode LoRa",
+    async build() {
+      if (!RN_SCHEMA) {
+        const { ok, d } = await jget("/api/v1/config/schema");
+        if (!ok) return { items: [{ type: "content", html:
+          `<div class="content"><div class="off">could not load config schema</div></div>` }] };
+        RN_SCHEMA = ((d.$defs || {}).ReticulumConfig || {}).properties || {};
+      }
+      if (!RN) {
+        const { d: cfg } = await jget("/api/v1/config");
+        const r = cfg.reticulum || {};
+        RN = {
+          enabled: r.rnode_enabled !== false,
+          frequency: r.rnode_frequency,
+          bandwidth: r.rnode_bandwidth,
+          txpower: r.rnode_txpower,
+          spreadingfactor: r.rnode_spreadingfactor,
+          codingrate: r.rnode_codingrate,
+        };
+      }
+      const P = RN_SCHEMA;
+      // Build an editable row from a schema property: enum -> fselect, bounded
+      // integer -> fnum, wide-range integer -> ftext. Label + hint from the
+      // schema's title/description so the UI carries no copy of the contract.
+      const numRow = (key, prop) => ({
+        type: "fnum", label: prop.title || key, value: RN[key],
+        min: prop.minimum, max: prop.maximum, step: 1,
+        onChange: (v) => RN[key] = v,
+      });
+      const items = [
+        { type: "content", html: `<div class="content"><div class="hint" ` +
+          `style="padding-left:0">USB LoRa radio for Reticulum. All nodes on this ` +
+          `link must use identical radio settings. Save, then Apply to restart ` +
+          `rnsd.</div></div>` },
+        { type: "fselect", label: "RNode", options: ["on", "off"],
+          value: RN.enabled ? "on" : "off", onChange: (v) => RN.enabled = (v === "on") },
+      ];
+      // Frequency: integer Hz with a wide range -> free text (stepping Hz by 1 is
+      // useless). Shown/edited in MHz for legibility; stored as Hz on save.
+      items.push({ type: "ftext", label: "Frequency (MHz)",
+        value: RN.frequency != null ? (RN.frequency / 1e6) : "",
+        onChange: (v) => { const f = Math.round(parseFloat(v) * 1e6);
+          RN.frequency = Number.isNaN(f) ? RN.frequency : f; } });
+      // Bandwidth: schema enum -> dropdown, rendered in kHz.
+      const bw = P.rnode_bandwidth || {};
+      items.push({ type: "fselect", label: "Bandwidth (kHz)",
+        options: (bw.enum || []).map((n) => String(n / 1000)),
+        value: RN.bandwidth != null ? String(RN.bandwidth / 1000) : "",
+        onChange: (v) => RN.bandwidth = Math.round(parseFloat(v) * 1000) });
+      items.push(numRow("spreadingfactor", P.rnode_spreadingfactor || {}));
+      items.push(numRow("codingrate", P.rnode_codingrate || {}));
+      items.push(numRow("txpower", P.rnode_txpower || {}));
+      items.push({ type: "button", label: "» Save (not applied)", onEnter: saveRnode });
+      items.push({ type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) });
+      items.push({ type: "button", label: "» Reload", onEnter: (S) => { RN = null; return S.reload(); } });
       return { items };
     },
   },
@@ -1369,6 +1442,23 @@ async function saveTxRateLimit(S) {
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("TX rate limit saved — active within one bridge cycle (~10s)");
   else S.msg("save failed: " + JSON.stringify(d.detail), false);
+}
+
+async function saveRnode(S) {
+  if (!RN) return S.msg("nothing to save", false);
+  // Read-modify-write the full node config so only the rnode_* keys change.
+  const { d: cfg } = await jget("/api/v1/config");
+  delete cfg._derived;
+  cfg.reticulum = cfg.reticulum || {};
+  cfg.reticulum.rnode_enabled = RN.enabled;
+  cfg.reticulum.rnode_frequency = parseInt(RN.frequency, 10);
+  cfg.reticulum.rnode_bandwidth = parseInt(RN.bandwidth, 10);
+  cfg.reticulum.rnode_txpower = parseInt(RN.txpower, 10);
+  cfg.reticulum.rnode_spreadingfactor = parseInt(RN.spreadingfactor, 10);
+  cfg.reticulum.rnode_codingrate = parseInt(RN.codingrate, 10);
+  const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
+  if (ok) S.msg("RNode saved — not yet applied; press Apply to restart rnsd");
+  else S.msg("validation failed: " + JSON.stringify(d.detail), false);
 }
 
 async function sendMessage(S, text) {

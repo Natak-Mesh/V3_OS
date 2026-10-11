@@ -45,6 +45,19 @@ USB_DEVICES: dict[str, list[tuple[str, str]]] = {
 # Stable path a supported RNode is bound to by the generated udev rule.
 RNODE_DEVICE_PATH = "/dev/nucleus/rnode"
 
+# RNode radio limits — single source of truth for ReticulumConfig's rnode_*
+# fields, so the API/UI/tests read bounds from the schema instead of copying
+# them. The RAK4631's SX1262 covers roughly 150 MHz-960 MHz; the LoRa bandwidth
+# is one of the chip's discrete steps (Hz).
+RNODE_FREQ_MIN_HZ = 150_000_000
+RNODE_FREQ_MAX_HZ = 960_000_000
+RNODE_BANDWIDTHS: tuple[int, ...] = (
+    7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000,
+)
+RNodeBandwidth = Literal[
+    7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000
+]
+
 
 def _ll_from_seed(seed: str) -> str:
     """Deterministically derive a unique IPv6 link-local address from a seed.
@@ -371,9 +384,14 @@ class ReticulumConfig(BaseModel):
     # every node that should talk over this link.
     rnode_enabled: bool = Field(True, description="Enable an RNodeInterface on a USB LoRa radio.")
     rnode_frequency: int = Field(
-        914875000, ge=1, description="RNode centre frequency in Hz (avoid the Meshtastic channel)."
+        914875000,
+        ge=RNODE_FREQ_MIN_HZ,
+        le=RNODE_FREQ_MAX_HZ,
+        description="RNode centre frequency in Hz (avoid the Meshtastic channel).",
     )
-    rnode_bandwidth: int = Field(250000, ge=1, description="RNode LoRa bandwidth in Hz.")
+    rnode_bandwidth: RNodeBandwidth = Field(
+        250000, description="RNode LoRa bandwidth in Hz (one of the SX1262 steps)."
+    )
     rnode_txpower: int = Field(22, ge=0, le=22, description="RNode TX power in dBm (RAK4631 max 22).")
     rnode_spreadingfactor: int = Field(9, ge=5, le=12, description="RNode LoRa spreading factor (5-12).")
     rnode_codingrate: int = Field(5, ge=5, le=8, description="RNode LoRa coding rate denominator (5-8 → 4/5-4/8).")

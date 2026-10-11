@@ -74,6 +74,15 @@ curl -s -X PUT http://localhost:8080/api/v1/config \
 # {"ok":true,"hostname":"0042-nucleus"}
 ```
 
+### `GET /api/v1/config/schema`
+The config's JSON schema — every field's type, bounds, enum options and
+description, straight from `schema.py`. Clients (e.g. the web UI's RNode page)
+read field limits/options from here instead of hardcoding a second copy that
+could drift from the schema. Read-only; no config I/O.
+```bash
+curl -s http://localhost:8080/api/v1/config/schema
+```
+
 ### `POST /api/v1/apply`
 Render templates and (re)start affected services from the saved config.
 Query param `dry_run=true` reports what *would* change without touching

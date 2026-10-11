@@ -45,7 +45,15 @@ reticulum:
   # rnode_codingrate: 5          # 5-8 → 4/5-4/8
 ```
 
-Then `sudo nucleusctl apply`. The radio is bound to the stable path
+Then `sudo nucleusctl apply`. The same settings are editable from the web UI at
+**RETICULUM → INTERFACES → CONFIGURE RNODE** (enable/disable, frequency,
+bandwidth, spreading factor, coding rate, TX power); **Save** writes them to
+`config.yaml` and **Apply** restarts `rnsd`. The page reads its field limits and
+the valid bandwidth list from the config schema, so they always match
+`schema.py`. Deeper interface configuration beyond the RNode radio is done by
+editing `config.yaml`, not from the web UI.
+
+The radio is bound to the stable path
 `/dev/nucleus/rnode` by a generated udev rule (see
 [usb-devices.md](usb-devices.md)), so the config never depends on which
 `/dev/ttyACM*` the board enumerates as, and an unsupported device plugged into
@@ -86,7 +94,8 @@ the single hub for the subsystem:
   announce mode, with an **Announce now** button.
 - **Interfaces:** each configured interface with its mode (internal/boundary/…),
   up/down state, RX/TX totals and attached-client count. The internal shared-
-  instance interface is hidden (it is not a real transport).
+  instance interface is hidden (it is not a real transport). A **CONFIGURE
+  RNODE** sub-page edits the RNode LoRa radio settings (see above).
 - **Links:** `DIRECT MESSAGES` (the saved contacts / conversations) and
   `ADD CONTACTS` (my card / mesh / link).
 
