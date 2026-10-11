@@ -100,6 +100,17 @@ reticulum:
   kiss_enabled: false      # optional KISS packet-radio TNC on a serial device
   # kiss_port: /dev/rfcomm0
   # kiss_speed: 115200
+  # RNode LoRa radio over USB (on by default; harmless with no radio plugged in).
+  # Only the RAK4631 is supported. The radio is bound to /dev/nucleus/rnode by a
+  # generated udev rule, so no port is set here. Radio params must match on every
+  # node that should talk over this link; pick a frequency clear of the
+  # Meshtastic channel.
+  rnode_enabled: true      # enable an RNodeInterface on a USB LoRa radio
+  # rnode_frequency: 914875000   # Hz
+  # rnode_bandwidth: 250000      # Hz
+  # rnode_txpower: 22            # dBm (RAK4631 max 22)
+  # rnode_spreadingfactor: 9     # 5-12
+  # rnode_codingrate: 5          # 5-8 → 4/5-4/8
 
 tak:
   # TAK Server — OFF on most nodes. Either/or, never both:

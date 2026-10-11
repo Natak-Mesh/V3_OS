@@ -90,7 +90,8 @@ Optional per-node subsystems (not web UI pages): [TAK Server](takserver.md),
 [OpenTAKServer](opentakserver.md) (either/or).
 
 Node-wide reference (not web UI pages): [Firewall](firewall.md) — the host
-firewall (UFW), driven from `config.yaml`.
+firewall (UFW), driven from `config.yaml`; [USB devices](usb-devices.md) —
+recognised USB hardware and the stable `/dev/nucleus/<role>` links.
 
 For subsystem internals see [messaging-internals.md](messaging-internals.md), [voice-internals.md](voice-internals.md)
 and [API.md](../API.md). Reticulum transport and client-device setup:

@@ -27,6 +27,25 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+# --- USB device registry -----------------------------------------------------
+# Single source of truth for the pluggable USB devices Nucleus recognises and
+# the stable /dev/nucleus/<role> symlink each one is bound to. Keyed by role;
+# each value lists the supported (idVendor, idProduct) pairs as lowercase hex
+# (exactly how udev's ATTRS{idVendor}/{idProduct} match them). A device whose
+# USB id is not listed here gets no symlink, so no Nucleus service ever opens it.
+#
+#   rnode — Reticulum RNode LoRa radios attached over USB. Only the RAK4631
+#           (nRF52840 + SX1262) is supported for now.
+USB_DEVICES: dict[str, list[tuple[str, str]]] = {
+    "rnode": [
+        ("239a", "8029"),  # RAKwireless WisBlock RAK4631
+    ],
+}
+
+# Stable path a supported RNode is bound to by the generated udev rule.
+RNODE_DEVICE_PATH = "/dev/nucleus/rnode"
+
+
 def _ll_from_seed(seed: str) -> str:
     """Deterministically derive a unique IPv6 link-local address from a seed.
 
@@ -316,6 +335,8 @@ class ReticulumConfig(BaseModel):
       * TCPClient entry node — an optional uplink to a public-IP Reticulum node
         so the local mesh joins the wider network.
       * KISS — optional packet-radio TNC on a serial device (off by default).
+      * RNode — LoRa RNode radio attached over USB (on by default; harmless if
+        no radio is plugged in — rnsd just retries the port).
     """
 
     enabled: bool = Field(True, description="Run the Reticulum daemon (rnsd.service).")
@@ -342,6 +363,20 @@ class ReticulumConfig(BaseModel):
     kiss_enabled: bool = Field(False, description="Enable a KISSInterface on a serial TNC.")
     kiss_port: str = Field("/dev/rfcomm0", description="Serial device for the KISS TNC.")
     kiss_speed: int = Field(115200, ge=1, description="KISS serial baud rate.")
+
+    # RNode LoRa radio attached over USB (on by default). Bound to the
+    # stable RNODE_DEVICE_PATH symlink by the generated udev rule, so the config
+    # never depends on which /dev/ttyACM* a given board enumerates as. Only the
+    # RAK4631 is supported (see USB_DEVICES). Radio parameters must match on
+    # every node that should talk over this link.
+    rnode_enabled: bool = Field(True, description="Enable an RNodeInterface on a USB LoRa radio.")
+    rnode_frequency: int = Field(
+        914875000, ge=1, description="RNode centre frequency in Hz (avoid the Meshtastic channel)."
+    )
+    rnode_bandwidth: int = Field(250000, ge=1, description="RNode LoRa bandwidth in Hz.")
+    rnode_txpower: int = Field(22, ge=0, le=22, description="RNode TX power in dBm (RAK4631 max 22).")
+    rnode_spreadingfactor: int = Field(9, ge=5, le=12, description="RNode LoRa spreading factor (5-12).")
+    rnode_codingrate: int = Field(5, ge=5, le=8, description="RNode LoRa coding rate denominator (5-8 → 4/5-4/8).")
 
 
 class TakCertConfig(BaseModel):
@@ -595,6 +630,15 @@ class NucleusConfig(BaseModel):
             "reti_kiss_enabled": self.reticulum.kiss_enabled,
             "reti_kiss_port": self.reticulum.kiss_port,
             "reti_kiss_speed": self.reticulum.kiss_speed,
+            "reti_rnode_enabled": self.reticulum.rnode_enabled,
+            "reti_rnode_port": RNODE_DEVICE_PATH,
+            "reti_rnode_frequency": self.reticulum.rnode_frequency,
+            "reti_rnode_bandwidth": self.reticulum.rnode_bandwidth,
+            "reti_rnode_txpower": self.reticulum.rnode_txpower,
+            "reti_rnode_spreadingfactor": self.reticulum.rnode_spreadingfactor,
+            "reti_rnode_codingrate": self.reticulum.rnode_codingrate,
+            # --- USB device registry (generated udev rule) ---
+            "usb_devices": USB_DEVICES,
             # --- Web UI auth (nginx) ---
             "web_htpasswd": self.web_htpasswd,
             "web_trusted_cidrs": self.web_trusted_cidrs,

@@ -12,6 +12,7 @@ The config is rendered by `nucleusctl apply` from `/etc/nucleus/config.yaml`
 | LAN TCP Server | TCPServerInterface on `br-lan:4242` | internal | Attach point for client apps (Sideband, MeshChat, nomadnet) on the node's AP/LAN. |
 | Entry Node | TCPClientInterface | boundary | Optional uplink to a public-IP Reticulum node joining the wider network. |
 | KISS TNC | KISSInterface (serial) | — | Optional packet radio TNC, off by default. |
+| RNode LoRa | RNodeInterface on `/dev/nucleus/rnode` | — | USB LoRa RNode radio, on by default (harmless with no radio plugged in). Only the RAK4631 is supported. |
 
 ### Announce propagation (boundary/internal modes)
 
@@ -23,6 +24,41 @@ from outside. Local clients can still reach outside destinations on demand —
 internal-mode interfaces resolve paths across the boundary via recursive path
 requests. This must be consistent on all nodes (it is: the modes ship in the
 rendered template), otherwise public announces leak in via any node missing it.
+
+## RNode LoRa radio (USB)
+
+A USB LoRa [RNode](https://unsigned.io/rnode/) gives Reticulum a long-range radio
+link independent of the WiFi mesh and the Meshtastic radio. **On by default** —
+harmless with no radio plugged in (`rnsd` just retries the port). **Only the
+RAK4631** (nRF52840 + SX1262) is supported for now; flash it with RNode firmware
+on another machine before plugging it in (`rnodeconf --autoinstall`).
+
+Tune it (or disable it) in the `reticulum:` block:
+
+```yaml
+reticulum:
+  rnode_enabled: true            # false to disable
+  # rnode_frequency: 914875000   # Hz — keep clear of the Meshtastic channel
+  # rnode_bandwidth: 250000      # Hz
+  # rnode_txpower: 22            # dBm (RAK4631 max 22)
+  # rnode_spreadingfactor: 9     # 5-12
+  # rnode_codingrate: 5          # 5-8 → 4/5-4/8
+```
+
+Then `sudo nucleusctl apply`. The radio is bound to the stable path
+`/dev/nucleus/rnode` by a generated udev rule (see
+[usb-devices.md](usb-devices.md)), so the config never depends on which
+`/dev/ttyACM*` the board enumerates as, and an unsupported device plugged into
+the same port is never touched by `rnsd`.
+
+**All nodes that should talk over the RNode link must use identical radio
+parameters** (frequency, bandwidth, spreading factor, coding rate). The defaults
+are a MediumFast-equivalent profile (250 kHz / SF9 / CR4:5, ≈3.5 kbps on air).
+Pick a frequency clear of the node's Meshtastic channel.
+
+Verify: `rnstatus` shows `RNodeInterface[RNode LoRa]` as `Up` with an on-air
+rate; fire an announce (Reticulum page → **Announce now**) and watch TX/RX
+counters grow on both nodes.
 
 ## Connecting a client device (Sideband etc.)
 

@@ -16,7 +16,7 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 14
+    assert len(r) == 15
     assert all(v.strip() for v in r.values())
 
 
@@ -41,6 +41,10 @@ def test_reticulum_config_defaults():
     assert "target_port = 4243" in r
     # KISS off by default.
     assert "KISSInterface" not in r
+    # RNode on by default, bound to the stable udev symlink.
+    assert "type = RNodeInterface" in r
+    assert "port = /dev/nucleus/rnode" in r
+    assert "frequency = 914875000" in r
 
 
 def test_reticulum_config_minimal():
@@ -63,6 +67,41 @@ def test_reticulum_config_minimal():
     assert "type = AutoInterface" in r          # still on by default
     assert "type = KISSInterface" in r
     assert "port = /dev/ttyUSB0" in r
+
+
+def test_reticulum_rnode_enabled():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {
+            "rnode_enabled": True,
+            "rnode_frequency": 868000000,
+            "rnode_bandwidth": 125000,
+            "rnode_txpower": 17,
+            "rnode_spreadingfactor": 8,
+            "rnode_codingrate": 6,
+        },
+    })
+    r = render_all(cfg)["/home/natak/.reticulum/config"]
+    assert "type = RNodeInterface" in r
+    # Bound to the stable udev symlink, never a raw /dev/ttyACM*.
+    assert "port = /dev/nucleus/rnode" in r
+    assert "frequency = 868000000" in r
+    assert "bandwidth = 125000" in r
+    assert "txpower = 17" in r
+    assert "spreadingfactor = 8" in r
+    assert "codingrate = 6" in r
+
+
+def test_usb_udev_rule():
+    r = rendered()["/etc/udev/rules.d/60-nucleus-usb.rules"]
+    # RAK4631 → /dev/nucleus/rnode, with ModemManager/mtp-probe left off.
+    assert 'ATTRS{idVendor}=="239a"' in r
+    assert 'ATTRS{idProduct}=="8029"' in r
+    assert 'SYMLINK+="nucleus/rnode"' in r
+    assert 'ENV{ID_MM_DEVICE_IGNORE}="1"' in r
+    assert 'ENV{MTP_NO_PROBE}="1"' in r
 
 
 def test_meshtasticd_config():

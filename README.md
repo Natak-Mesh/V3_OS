@@ -31,11 +31,11 @@ Everything flows one direction, from one file:
         v   (write-if-changed)
    networkd/*.network, wpa_supplicant-mesh.conf, nucleus-mesh-up.sh,
    babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
-   ~natak/.reticulum/config, nginx vhost + htpasswd
+   ~natak/.reticulum/config, 60-nucleus-usb.rules (udev), nginx vhost + htpasswd
         |
         v   (restart / enable / reload only what changed)
    networkd, nucleus-mesh, babeld, smcroute, hostapd, brlan-setup,
-   meshtasticd, cot-bridge, rnsd, nginx
+   meshtasticd, cot-bridge, rnsd, udev, nginx
 ```
 
 **Rules**
@@ -66,7 +66,7 @@ Everything flows one direction, from one file:
 
 | Module | Responsibility |
 |--------|----------------|
-| `schema.py` | Config contract + derived values. Pure — no filesystem/hardware. |
+| `schema.py` | Config contract + derived values, incl. the `USB_DEVICES` registry (recognised USB hardware → `/dev/nucleus/<role>`). Pure — no filesystem/hardware. |
 | `config.py` | Load / atomically save / normalize `config.yaml`. The only module that should do config YAML I/O. |
 | `apply.py` | Render → diff → restart. `TARGETS` maps each template to its dest + affected units. Shared by API and CLI. |
 | `status.py` | Read-only runtime status: interfaces, unit states, Babel neighbours/routes (local-port 33123), mesh-node last-seen (5 s poll, lost nodes kept 15 min, in memory). |
@@ -164,9 +164,10 @@ node:
 - apt packages, incl. meshtasticd (Meshtastic OBS repo) and Tailscale (its repo)
 - Python package → `/opt/nucleus/venv`; `nucleusctl` + Reticulum CLIs →
   `/usr/local/bin`
-- `system/` → systemd units, udev rule, NetworkManager conf, sudoers,
+- `system/` → systemd units, NetworkManager conf, sudoers,
   `nucleus-update.sh`, `nucleus-tak-setup.sh`, `nucleus-ots-fixup.sh` (inert
-  unless used)
+  unless used). The USB udev rule (`60-nucleus-usb.rules`) is **generated** by
+  `apply`, not a static file.
 - GPS UART prep (boot config/cmdline)
 - `config/config.yaml` → `/etc/nucleus/config.yaml` **only if absent**
 - enables services, restarts the app daemons to pick up new code
@@ -229,7 +230,7 @@ V3_OS/
 │   │                    # nucleus-voice, rnsd, takserver.service.d/
 │   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh,
 │   │                    # nucleus-ots-fixup.sh
-│   └── networkmanager/  sudoers.d/  udev/
+│   └── networkmanager/  sudoers.d/
 ├── config/config.yaml   # default config, seeded to /etc on install
 ├── docs/                # API.md + operator manual
 ├── tests/               # off-box tests

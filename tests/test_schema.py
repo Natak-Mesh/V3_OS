@@ -73,11 +73,40 @@ def test_reticulum_defaults():
     assert r.entry_node_host == "173.230.150.24"
     assert r.entry_node_port == 4243
     assert r.kiss_enabled is False
+    # RNode on by default, with sane radio defaults.
+    assert r.rnode_enabled is True
+    assert r.rnode_frequency == 914875000
+    assert r.rnode_bandwidth == 250000
+    assert r.rnode_txpower == 22
+    assert r.rnode_spreadingfactor == 9
+    assert r.rnode_codingrate == 5
 
 
 def test_reticulum_loglevel_bounds():
     with pytest.raises(ValidationError):
         cfg(reticulum={"loglevel": 8})
+
+
+def test_reticulum_rnode_bounds():
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"rnode_txpower": 23})
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"rnode_spreadingfactor": 13})
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"rnode_codingrate": 9})
+
+
+def test_usb_devices_registry_unique_ids():
+    """No USB id may be claimed by two roles (ambiguous /dev/nucleus link)."""
+    from nucleusd.schema import USB_DEVICES
+
+    seen: dict[tuple[str, str], str] = {}
+    for role, ids in USB_DEVICES.items():
+        for usb_id in ids:
+            assert usb_id not in seen, f"{usb_id} claimed by {seen.get(usb_id)} and {role}"
+            seen[usb_id] = role
+    # RAK4631 is the only supported RNode for now.
+    assert USB_DEVICES["rnode"] == [("239a", "8029")]
 
 
 def test_web_defaults():

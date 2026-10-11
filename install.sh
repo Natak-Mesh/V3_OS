@@ -102,7 +102,10 @@ install -m 644 "$REPO/system/systemd/nucleus-meshtastic-init.service" /etc/syste
 install -m 644 "$REPO/system/systemd/nucleus-messaging.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-voice.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/rnsd.service" /etc/systemd/system/
-install -m 644 "$REPO/system/udev/60-meshtastic.rules" /etc/udev/rules.d/
+# The USB udev rule (/etc/udev/rules.d/60-nucleus-usb.rules) is a generated
+# artifact of `nucleusctl apply`, not a static file. Remove the obsolete
+# Meshtastic rule it supersedes if an older install left it behind.
+rm -f /etc/udev/rules.d/60-meshtastic.rules
 mkdir -p /etc/NetworkManager/conf.d
 install -m 644 "$REPO/system/networkmanager/unmanaged-devices.conf" \
     /etc/NetworkManager/conf.d/unmanaged-devices.conf

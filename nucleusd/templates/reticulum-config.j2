@@ -56,3 +56,15 @@
     flow_control = false
 
 {% endif %}
+{% if reti_rnode_enabled %}
+  [[RNode LoRa]]
+    type = RNodeInterface
+    enabled = Yes
+    port = {{ reti_rnode_port }}
+    frequency = {{ reti_rnode_frequency }}
+    bandwidth = {{ reti_rnode_bandwidth }}
+    txpower = {{ reti_rnode_txpower }}
+    spreadingfactor = {{ reti_rnode_spreadingfactor }}
+    codingrate = {{ reti_rnode_codingrate }}
+
+{% endif %}

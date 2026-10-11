@@ -25,6 +25,8 @@ NGINX_VHOST = Path("/etc/nginx/sites-available/nucleus")
 NGINX_ENABLED = Path("/etc/nginx/sites-enabled/nucleus")
 NGINX_DEFAULT = Path("/etc/nginx/sites-enabled/default")
 NGINX_HTPASSWD = Path("/etc/nginx/nucleus.htpasswd")
+# Generated udev rule binding recognised USB devices to /dev/nucleus/<role>.
+USB_UDEV_RULE = Path("/etc/udev/rules.d/60-nucleus-usb.rules")
 CERT_DIR = Path("/etc/nucleus/certs")
 CERT_CRT = CERT_DIR / "nucleus-web.crt"
 CERT_KEY = CERT_DIR / "nucleus-web.key"
@@ -65,6 +67,9 @@ TARGETS: list[Target] = [
     # rnsd is enable/disable-driven like meshtasticd (handled in apply()), and
     # the file must land owned by RETI_USER — see _write_reticulum below.
     Target("reticulum-config.j2", RETI_CONFIG, ("rnsd",)),
+    # USB device → /dev/nucleus/<role> udev rule. udev is not a systemd unit, so
+    # a change triggers a udevadm reload/trigger specially in apply() (no units).
+    Target("60-nucleus-usb.rules.j2", USB_UDEV_RULE, ()),
     # nginx reverse proxy — reload (not restart) handled specially in apply().
     Target("nginx-nucleus.conf.j2", NGINX_VHOST, ()),
     # HTTP Basic credentials for web UI over eth0 — reload nginx on change.
@@ -253,6 +258,13 @@ def _reload_nginx() -> None:
         subprocess.run(["systemctl", "reload", "nginx"], check=False)
 
 
+def _reload_udev() -> None:
+    """Reload udev rules and re-apply them so a changed rule file takes effect
+    on already-attached devices (udev is not a systemd unit)."""
+    subprocess.run(["udevadm", "control", "--reload"], check=False)
+    subprocess.run(["udevadm", "trigger", "--subsystem-match=tty"], check=False)
+
+
 def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     """Render, write changed files, restart affected units. Idempotent."""
     env = _env()
@@ -302,6 +314,12 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     result.units_restarted += _reconcile_reticulum(cfg)
     if str(RETI_CONFIG) in result.changed and cfg.reticulum.enabled:
         _restart(["rnsd"])
+
+    # USB udev rule: if the generated rule changed, reload udev and re-trigger so
+    # /dev/nucleus/<role> links are (re)created for already-attached devices.
+    if str(USB_UDEV_RULE) in result.changed:
+        _reload_udev()
+        result.units_restarted.append("udev")
 
     # nginx reverse proxy: ensure the self-signed cert matches current SANs,
     # enable our vhost, drop the stock default site, and reload if anything

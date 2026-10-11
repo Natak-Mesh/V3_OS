@@ -1,0 +1,15 @@
+# Rendered by nucleusd — DO NOT EDIT. Source: nucleusd/schema.py (USB_DEVICES).
+# Regenerate with `nucleusctl apply`.
+#
+# Binds each recognised USB device to a stable /dev/nucleus/<role> symlink so
+# Nucleus services open a fixed path, never a plug-order /dev/ttyACM* name. The
+# rule also tells ModemManager and mtp-probe to leave the device alone: on
+# hotplug/boot mtp-probe sends MTP handshake bytes to USB CDC-ACM devices, which
+# can crash nRF52840 firmware (e.g. the RAK4631) until a hardware reset.
+#
+# The 60- prefix orders this before 69-libmtp.rules (which triggers mtp-probe).
+{% for role, ids in usb_devices.items() %}
+{% for vid, pid in ids %}
+SUBSYSTEM=="tty", ATTRS{idVendor}=="{{ vid }}", ATTRS{idProduct}=="{{ pid }}", SYMLINK+="nucleus/{{ role }}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{MTP_NO_PROBE}="1", MODE="0666"
+{% endfor %}
+{% endfor %}
