@@ -349,6 +349,17 @@ def test_brlan_setup_restarts_with_networkd_and_hostapd():
             assert "brlan-setup" in t.units, t.template
 
 
+def test_mesh_up_is_rerunnable():
+    # Fix B: the mesh-up script must kill any stale wpa_supplicant on wlan1 and
+    # drop its control socket BEFORE the fresh join, so a re-run (apply without
+    # reboot) does not abort under `set -euo pipefail`.
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    kill = m.index("pkill -f 'wpa_supplicant .*-i wlan1'")
+    assert "rm -f /var/run/wpa_supplicant/wlan1" in m
+    # The cleanup must come before the actual join.
+    assert kill < m.index("wpa_supplicant -B -i wlan1")
+
+
 def test_eth0_lan_mode():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},

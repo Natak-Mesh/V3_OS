@@ -114,13 +114,24 @@ def _write_if_changed(dest: Path, content: str, mode: int) -> bool:
     return True
 
 
+# Links reconfigured (not just reloaded) when the network group is rebuilt.
+# `networkctl reload` only re-reads files; existing links need `reconfigure` to
+# actually re-apply their config.
+NETWORKD_LINKS = ("br-lan", "wlan1", "eth0", "wlan0")
+
+# The network group: if ANY of these targets change we restart the whole group
+# in a fixed order, because bouncing one (wlan1/br-lan/hostapd) leaves the others
+# running against stale interfaces and multicast memberships.
+NET_GROUP_ORDER = ["systemd-networkd", "nucleus-mesh", "hostapd", "brlan-setup", "babeld", "smcroute"]
+
+
 def _restart(units: list[str]) -> None:
     if not units:
         return
-    # networkd is reconfigured, everything else restarted.
+    # networkd is reconfigured per-link, everything else restarted.
     for unit in units:
         if unit == "systemd-networkd":
-            subprocess.run(["networkctl", "reload"], check=False)
+            subprocess.run(["networkctl", "reconfigure", *NETWORKD_LINKS], check=False)
         else:
             subprocess.run(["systemctl", "restart", f"{unit}.service"], check=False)
 
@@ -295,10 +306,15 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
         return result
 
     if units_to_restart:
-        # Deterministic, dependency-friendly restart order. brlan-setup must
-        # run last: it re-enslaves wlan0 into br-lan after hostapd is up.
-        order = ["systemd-networkd", "nucleus-mesh", "babeld", "smcroute", "hostapd", "brlan-setup"]
-        ordered = [u for u in order if u in units_to_restart]
+        # If any member of the network group changed, bounce the WHOLE group in a
+        # fixed order — restarting only the changed unit leaves the others (babeld,
+        # smcroute, hostapd, brlan-setup) bound to stale interfaces and multicast
+        # memberships, the half-broken-until-reboot symptom. brlan-setup runs after
+        # hostapd: it re-enslaves wlan0 into br-lan once the AP is up.
+        if units_to_restart & set(NET_GROUP_ORDER):
+            ordered = list(NET_GROUP_ORDER)
+        else:
+            ordered = [u for u in NET_GROUP_ORDER if u in units_to_restart]
         _restart(ordered)
         result.units_restarted = ordered
 

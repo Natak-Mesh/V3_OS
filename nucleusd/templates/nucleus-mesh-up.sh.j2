@@ -17,6 +17,18 @@ for dev in eth0 wlan0 wlan1 br-lan; do
     nmcli device set "$dev" managed no 2>/dev/null || true
 done
 
+# --- Make this script safe to re-run (apply without reboot) -----------------
+# A stale wpa_supplicant still bound to wlan1 makes the join below fail, which
+# under `set -euo pipefail` aborts the script before the UFW and multicast-TTL
+# sections. Kill any existing instance, wait for it to release the interface,
+# and drop its control socket so the fresh -B launch starts clean.
+pkill -f 'wpa_supplicant .*-i wlan1' || true
+for _ in $(seq 1 10); do
+    pgrep -f 'wpa_supplicant .*-i wlan1' >/dev/null || break
+    sleep 0.5
+done
+rm -f /var/run/wpa_supplicant/wlan1
+
 # --- Put wlan1 into encrypted 802.11s mesh mode -----------------------------
 ip link set wlan1 down
 iw reg set "{{ mesh_country }}"
