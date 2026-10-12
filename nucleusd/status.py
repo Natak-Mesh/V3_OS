@@ -272,6 +272,57 @@ def start_mesh_tracker() -> None:
     threading.Thread(target=_mesh_loop, name="mesh-tracker", daemon=True).start()
 
 
+def radios() -> dict:
+    """Per-radio on/off state for the Radios UI page (Phase 4/5).
+
+    Combines the config source-of-truth with live hardware/unit state:
+      * mesh (wlan1) — config mesh.enabled + live phy1 rfkill soft-block.
+      * meshtastic   — config tx_enabled (receive-only when false) + meshtasticd unit.
+      * ap (wlan0)   — live only (outside the pipeline): phy0 rfkill + hostapd unit.
+
+    Each radio reports `on` as the operator-facing state. `rf_blocked` is the live
+    rfkill view (None = unknown, e.g. off-box or phy absent). All best-effort:
+    config-load or rfkill failures degrade to None rather than raising.
+    """
+    from . import rf
+    try:
+        from . import config as cfgio
+        cfg = cfgio.load()
+    except Exception:  # noqa: BLE001 — status must never raise
+        cfg = None
+
+    def _blocked(iface: str):
+        phy = rf.phy_for_iface(iface)
+        return rf.is_blocked(phy) if phy else None
+
+    units = unit_states(("meshtasticd", "hostapd"))
+    mesh_enabled = cfg.mesh.enabled if cfg else None
+    tx_enabled = cfg.meshtastic.tx_enabled if cfg else None
+    ap_blocked = _blocked(rf.AP_IFACE)
+
+    return {
+        "mesh": {
+            "on": mesh_enabled,
+            "rf_blocked": _blocked(rf.MESH_IFACE),
+            "persistent": True,
+        },
+        "meshtastic": {
+            # "on" here means TX allowed; off = receive-only (radio still RX's).
+            "on": tx_enabled,
+            "receive_only": (tx_enabled is False),
+            "daemon": units.get("meshtasticd"),
+            "persistent": True,
+        },
+        "ap": {
+            # Live only: on when hostapd is active AND phy0 isn't soft-blocked.
+            "on": (units.get("hostapd") == "active" and ap_blocked is False),
+            "rf_blocked": ap_blocked,
+            "hostapd": units.get("hostapd"),
+            "persistent": False,  # resets ON at boot (README §4)
+        },
+    }
+
+
 def collect() -> dict:
     routes = babel_routes()
     _mesh_update(routes, time.time())
@@ -283,4 +334,5 @@ def collect() -> dict:
         "mesh_nodes": mesh_nodes(),
         "meshtastic": {"services": unit_states(
             ("meshtasticd", "cot-bridge", "nucleus-meshtastic-init"))},
+        "radios": radios(),
     }

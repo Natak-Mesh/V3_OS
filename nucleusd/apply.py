@@ -33,7 +33,17 @@ CERT_KEY = CERT_DIR / "nucleus-web.key"
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from . import rf
 from .schema import NucleusConfig
+
+# Meshtastic daemon exposes its API on localhost; the CLI drives it the same way
+# radio_init does. Module-level so tests can monkeypatch subprocess.run.
+import sys as _sys
+MESHTASTIC_CLI = [_sys.executable, "-m", "meshtastic", "--host", "localhost"]
+
+# Mesh units whose lifecycle is owned by mesh.enabled (RF reconcile), not by a
+# plain restart. nucleus-mesh brings wlan1 up; babeld/smcroute route over it.
+MESH_UNITS = ["nucleus-mesh", "babeld", "smcroute"]
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -114,13 +124,24 @@ def _write_if_changed(dest: Path, content: str, mode: int) -> bool:
     return True
 
 
+# Links reconfigured (not just reloaded) when the network group is rebuilt.
+# `networkctl reload` only re-reads files; existing links need `reconfigure` to
+# actually re-apply their config.
+NETWORKD_LINKS = ("br-lan", "wlan1", "eth0", "wlan0")
+
+# The network group: if ANY of these targets change we restart the whole group
+# in a fixed order, because bouncing one (wlan1/br-lan/hostapd) leaves the others
+# running against stale interfaces and multicast memberships.
+NET_GROUP_ORDER = ["systemd-networkd", "nucleus-mesh", "hostapd", "brlan-setup", "babeld", "smcroute"]
+
+
 def _restart(units: list[str]) -> None:
     if not units:
         return
-    # networkd is reconfigured, everything else restarted.
+    # networkd is reconfigured per-link, everything else restarted.
     for unit in units:
         if unit == "systemd-networkd":
-            subprocess.run(["networkctl", "reload"], check=False)
+            subprocess.run(["networkctl", "reconfigure", *NETWORKD_LINKS], check=False)
         else:
             subprocess.run(["systemctl", "restart", f"{unit}.service"], check=False)
 
@@ -149,6 +170,91 @@ def _reconcile_meshtastic(cfg: NucleusConfig) -> list[str]:
     _set_service("cot-bridge", m.enabled and m.cot_bridge)
     touched.append("cot-bridge")
     return touched
+
+
+def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
+    """Reconcile the wlan1 mesh RF + units to match mesh.enabled. Idempotent.
+
+    Two coupled actions, matching nucleus-rf.service's boot behaviour:
+      * rfkill phy1 (via rf.py) to block/unblock the mesh radio, and
+      * enable/disable the mesh units (nucleus-mesh, babeld, smcroute).
+
+    Turning the mesh back ON is NOT just an unblock. rfkill-down drops wlan1's
+    IPv6 link-local and leaves wpa_supplicant disconnected, so the radio comes
+    back but the mesh does not: babeld ignores a link-local-less interface and no
+    peer can see this node. `enable --now` is a no-op when the units are already
+    running, so coming out of a block we must RESTART the mesh units to redo the
+    SAE join (nucleus-mesh) and rebind babeld/smcroute. We only do that on the
+    actual blocked->unblocked transition, keeping a steady-state apply idempotent.
+
+    Only the wlan1 mesh is config-driven; the AP (wlan0) is outside the pipeline
+    (README §4) and is not touched here. Returns the units whose state was set.
+    """
+    enabled = cfg.mesh.enabled
+    was_blocked = rf.is_blocked(rf.phy_for_iface(rf.MESH_IFACE) or "")
+
+    if enabled:
+        # Unblock the radio first, then (re)start the mesh units. On a real
+        # off->on transition restart them so the join + link-local come back;
+        # otherwise just ensure they are enabled and running (idempotent).
+        rf.set_iface_blocked(rf.MESH_IFACE, blocked=False)
+        for unit in MESH_UNITS:
+            _set_service(unit, True)
+        if was_blocked:
+            _restart([u for u in NET_GROUP_ORDER if u in MESH_UNITS])
+    else:
+        # Stop routing before the radio goes away, then block the phy.
+        for unit in MESH_UNITS:
+            _set_service(unit, False)
+        rf.set_iface_blocked(rf.MESH_IFACE, blocked=True)
+    return list(MESH_UNITS)
+
+
+def _meshtastic_cli(args: list[str], timeout: int = 120) -> tuple[int, str]:
+    """Run the meshtastic CLI against the local daemon; never raise."""
+    try:
+        r = subprocess.run(MESHTASTIC_CLI + args, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except Exception as e:  # noqa: BLE001 — best-effort radio control
+        return -1, str(e)
+
+
+def _meshtastic_get_bool(key: str) -> bool | None:
+    """Read a boolean firmware setting via `meshtastic --get <key>`.
+
+    Returns True/False, or None if the value can't be read/parsed (radio absent,
+    daemon down). Output line looks like 'lora.tx_enabled: True'.
+    """
+    rc, out = _meshtastic_cli(["--get", key], timeout=30)
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        if key in line:
+            val = line.split(":", 1)[-1].strip().lower()
+            if val in ("true", "1"):
+                return True
+            if val in ("false", "0"):
+                return False
+    return None
+
+
+def _reconcile_meshtastic_tx(cfg: NucleusConfig) -> bool:
+    """Push lora.tx_enabled to the radio only when it differs from config.
+
+    "Off" is receive-only: the radio stays powered and keeps RX, only TX stops.
+    Best-effort and only runs when meshtasticd is enabled (no daemon = nothing to
+    set). Returns True if a change was pushed (caller may need to wait for the
+    radio to reboot, like a region change). A `lora.*` change can reboot the
+    radio; callers handle that as the init path does.
+    """
+    if not cfg.meshtastic.enabled:
+        return False
+    want = cfg.meshtastic.tx_enabled
+    current = _meshtastic_get_bool("lora.tx_enabled")
+    if current is None or current == want:
+        return False  # unreadable (leave alone) or already correct
+    _meshtastic_cli(["--set", "lora.tx_enabled", "true" if want else "false"])
+    return True
 
 
 def _chown_reticulum() -> None:
@@ -291,22 +397,50 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # config so we never start it against a root-owned file it can't read.
     units_to_restart.discard("rnsd")
 
+    # When the mesh is disabled its units are stopped by _reconcile_rf below and
+    # must NOT be (re)started by the network-group bounce, or a disabled mesh
+    # would come straight back up. Drop them from the restart set, mirroring the
+    # meshtasticd/rnsd enable-driven handling above.
+    if not cfg.mesh.enabled:
+        units_to_restart -= set(MESH_UNITS)
+
     if dry_run:
         return result
 
+    # Mesh radio must be live before nucleus-mesh starts, so unblock phy1 before
+    # the group restart. (Blocking on disable is done by _reconcile_rf, after the
+    # units are stopped.) Idempotent — safe to also run inside _reconcile_rf.
+    if cfg.mesh.enabled:
+        rf.set_iface_blocked(rf.MESH_IFACE, blocked=False)
+
     if units_to_restart:
-        # Deterministic, dependency-friendly restart order. brlan-setup must
-        # run last: it re-enslaves wlan0 into br-lan after hostapd is up.
-        order = ["systemd-networkd", "nucleus-mesh", "babeld", "smcroute", "hostapd", "brlan-setup"]
-        ordered = [u for u in order if u in units_to_restart]
+        # If any member of the network group changed, bounce the WHOLE group in a
+        # fixed order — restarting only the changed unit leaves the others (babeld,
+        # smcroute, hostapd, brlan-setup) bound to stale interfaces and multicast
+        # memberships, the half-broken-until-reboot symptom. brlan-setup runs after
+        # hostapd: it re-enslaves wlan0 into br-lan once the AP is up.
+        if units_to_restart & set(NET_GROUP_ORDER):
+            ordered = list(NET_GROUP_ORDER)
+        else:
+            ordered = [u for u in NET_GROUP_ORDER if u in units_to_restart]
+        # Never start mesh units while the mesh is disabled (see the discard above).
+        if not cfg.mesh.enabled:
+            ordered = [u for u in ordered if u not in MESH_UNITS]
         _restart(ordered)
         result.units_restarted = ordered
+
+    # Reconcile the wlan1 mesh RF + units to match mesh.enabled every apply
+    # (idempotent): rfkill phy1 and enable/disable nucleus-mesh/babeld/smcroute.
+    result.units_restarted += _reconcile_rf(cfg)
 
     # Reconcile meshtasticd + cot-bridge enabled-state every apply (cheap and
     # idempotent), then restart meshtasticd if its rendered config changed.
     result.units_restarted += _reconcile_meshtastic(cfg)
     if str(Path("/etc/meshtasticd/config.yaml")) in result.changed and cfg.meshtastic.enabled:
         _restart(["meshtasticd"])
+    # Push lora.tx_enabled to the radio when it differs from config ("off" =
+    # receive-only). Best-effort; only acts on a delta so it stays idempotent.
+    _reconcile_meshtastic_tx(cfg)
 
     # Reticulum: ensure rnsd owns its config, reconcile enabled-state, and
     # restart it if its rendered config changed (and it's enabled).

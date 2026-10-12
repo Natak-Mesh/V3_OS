@@ -6,7 +6,9 @@ Requires=systemd-networkd.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/sleep 2
+# Wait (bounded) until hostapd has wlan0 in AP mode before enslaving it, instead
+# of a fixed sleep that races hostapd/networkd. Fail loudly if it never comes up.
+ExecStart=/bin/sh -c 'for i in $(seq 1 30); do iw dev wlan0 info 2>/dev/null | grep -q "type AP" && exit 0; sleep 0.5; done; echo "brlan-setup: wlan0 never reached AP mode" >&2; exit 1'
 ExecStart=/usr/bin/ip link set wlan0 master br-lan
 ExecStart=/usr/bin/networkctl reconfigure br-lan
 RemainAfterExit=yes

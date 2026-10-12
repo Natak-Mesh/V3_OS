@@ -146,6 +146,14 @@ def test_meshup_sets_params():
     assert "masquerade" in m  # eth0 wan NAT
 
 
+def test_meshup_preserves_link_local_across_bounce():
+    # rfkill toggling the mesh bounces wlan1; the bring-up must keep the fe80
+    # link-local (Babel needs it) and re-assert networkd after the join.
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    assert "net.ipv6.conf.wlan1.keep_addr_on_down=1" in m
+    assert "networkctl reconfigure wlan1" in m
+
+
 def test_meshup_firewall_rules():
     m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
     # Default-deny inbound, but ssh over ethernet must survive.
@@ -347,6 +355,17 @@ def test_brlan_setup_restarts_with_networkd_and_hostapd():
     for t in TARGETS:
         if "systemd-networkd" in t.units or "hostapd" in t.units:
             assert "brlan-setup" in t.units, t.template
+
+
+def test_mesh_up_is_rerunnable():
+    # Fix B: the mesh-up script must kill any stale wpa_supplicant on wlan1 and
+    # drop its control socket BEFORE the fresh join, so a re-run (apply without
+    # reboot) does not abort under `set -euo pipefail`.
+    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    kill = m.index("pkill -f 'wpa_supplicant .*-i wlan1'")
+    assert "rm -f /var/run/wpa_supplicant/wlan1" in m
+    # The cleanup must come before the actual join.
+    assert kill < m.index("wpa_supplicant -B -i wlan1")
 
 
 def test_eth0_lan_mode():

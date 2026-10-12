@@ -226,6 +226,7 @@ const PAGES = {
         { type: "nav", label: "VOICE (PTT)", to: "voice" },
         { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
         { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
+        { type: "nav", label: "RADIOS (RF ON/OFF)", to: "radios" },
         { type: "nav", label: "RETICULUM", to: "reticulum" },
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
@@ -405,6 +406,49 @@ const PAGES = {
       }
 
       return { items };
+    },
+  },
+
+  // Radios: per-radio RF on/off — one line each with an inline ON/OFF switch.
+  // Each radio is its own switch (no kill-all). Two persistence models:
+  //   * Wi-Fi mesh + Meshtastic are CONFIG-BACKED (persist) -> PUT /config then
+  //     POST /apply, same stage-then-apply flow as the config pages.
+  //   * Access point is a LIVE toggle (resets ON at boot) -> POST /api/v1/rf/ap
+  //     directly, like the Tailscale page drives the CLI outside the pipeline.
+  // Live state comes from /api/v1/status (.radios). Selecting a row (Enter/tap),
+  // or tapping its switch, toggles that radio.
+  radios: {
+    title: "Radios",
+    dynamic: 5000,
+    async build() {
+      const { ok, d: st } = await jget("/api/v1/status");
+      if (!ok || !st.radios) {
+        return { items: [{ type: "content", html: `<div class="content">` +
+          `<div class="off">radio status unavailable</div></div>` }] };
+      }
+      const r = st.radios;
+      // An inline ON/OFF switch button: class + label reflect the live state;
+      // on==null renders "—" (unknown).
+      const sw = (on, toggle) => ({
+        label: on == null ? "—" : (on ? "ON" : "OFF"),
+        cls: on == null ? "sw-unknown" : (on ? "sw-on" : "sw-off"),
+        onRun: (S) => toggle(S),
+      });
+      const mesh = r.mesh || {};
+      const mt = r.meshtastic || {};
+      const ap = r.ap || {};
+      const meshOn = mesh.on !== false;
+      return { items: [
+        { type: "button", label: "Wi-Fi mesh",
+          onEnter: (S) => rfSetMesh(S, !meshOn),
+          action: sw(mesh.on, (S) => rfSetMesh(S, !meshOn)) },
+        { type: "button", label: "Meshtastic",
+          onEnter: (S) => rfSetMeshtasticTx(S, mt.receive_only),
+          action: sw(mt.on, (S) => rfSetMeshtasticTx(S, mt.receive_only)) },
+        { type: "button", label: "Access point",
+          onEnter: (S) => rfSetAp(S, !ap.on),
+          action: sw(ap.on, (S) => rfSetAp(S, !ap.on)) },
+      ] };
     },
   },
 
@@ -1715,6 +1759,58 @@ async function powerOp(S, action) {
   } else {
     S.msg("failed: " + (d.detail || "error"), false);
   }
+}
+
+// ── Radios (RF on/off) actions ─────────────────────────────────
+// A config-backed toggle: read-modify-write one key via PUT /config, then apply.
+// Used for the persistent radios (wlan1 mesh, Meshtastic TX). `section`/`key` is
+// the config path to set; `val` the new value; `label` for status/apply output.
+async function rfSaveAndApply(S, section, key, val, label) {
+  S.msg(label + "… (saving)");
+  const { d: cfg } = await jget("/api/v1/config");
+  delete cfg._derived;
+  cfg[section] = cfg[section] || {};
+  cfg[section][key] = val;
+  const put = await jsend("PUT", "/api/v1/config", cfg);
+  if (!put.ok) return S.msg("validation failed: " + JSON.stringify(put.d.detail), false);
+  S.msg(label + "… (applying)");
+  const { ok, d } = await jsend("POST", "/api/v1/apply?dry_run=false");
+  if (!ok) return S.msg("apply failed", false);
+  S.msg(label + " done — units: " + (d.units_restarted.join(", ") || "none"));
+  return S.reload();
+}
+
+// wlan1 mesh on/off (persists). Turning it OFF can cut the operator's own link,
+// so confirm and name the wired fallbacks first.
+async function rfSetMesh(S, on) {
+  if (!on && !confirm(
+    "Turn the Wi-Fi MESH (wlan1) OFF? If you're connected over the mesh you " +
+    "will lose this session. Wired fallbacks: USB-C (RNDIS), eth0, or console. " +
+    "Persists across reboots — turn it back on here or edit config.yaml.")) return;
+  return rfSaveAndApply(S, "mesh", "enabled", on, on ? "mesh on" : "mesh off");
+}
+
+// Meshtastic TX on / receive-only (persists). rxOnly=true means currently
+// receive-only, so the action turns TX back on; otherwise set receive-only.
+async function rfSetMeshtasticTx(S, rxOnly) {
+  const on = rxOnly;  // enabling TX when currently receive-only
+  return rfSaveAndApply(S, "meshtastic", "tx_enabled", on,
+    on ? "Meshtastic TX on" : "Meshtastic receive-only");
+}
+
+// wlan0 AP on/off — LIVE toggle, outside the config pipeline (resets ON at boot).
+// Turning it OFF can cut an AP-connected operator, so confirm with fallbacks and
+// note the AP returns on reboot as the recovery path.
+async function rfSetAp(S, on) {
+  if (!on && !confirm(
+    "Turn the Wi-Fi AP (wlan0) OFF? If you're connected over the AP you will " +
+    "lose this session. Wired fallbacks: USB-C (RNDIS), eth0, or console. " +
+    "The AP always turns back ON at the next reboot (lockout recovery).")) return;
+  S.msg(on ? "AP on…" : "AP off…");
+  const { ok, d } = await jsend("POST", "/api/v1/rf/ap", { on });
+  if (!(ok && d.ok)) return S.msg("AP toggle failed: " + (d.detail || "error"), false);
+  S.msg(on ? "AP on" : "AP off");
+  return S.reload();
 }
 
 // Launch the node update, then poll progress. The update restarts nucleusd

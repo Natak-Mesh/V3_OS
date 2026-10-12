@@ -120,6 +120,12 @@ MESHTASTICD_PORT = 4403
 from nucleusd.schema import MeshtasticConfig  # noqa: E402
 TX_MIN_INTERVAL = MeshtasticConfig.model_fields["tx_min_interval_secs"].default
 
+# Receive-only gate. True = radio may TX; False = RX-only (never transmit). The
+# default lives in the schema so it can't drift. The live value is re-read from
+# config.yaml (meshtastic.tx_enabled) each main-loop pass — see
+# _apply_tx_enabled(). All LoRa send paths check tx_allowed() first.
+TX_ENABLED = MeshtasticConfig.model_fields["tx_enabled"].default
+
 # ── Globals (initialized in main) ───────────────────────────────
 
 compressor = None
@@ -218,6 +224,10 @@ def _read_mesh_conf():
             raw = yaml.safe_load(f) or {}
         m = raw.get("meshtastic", {}) or {}
         cfg["MESHTASTICD_ENABLED"] = "true" if m.get("enabled", True) else "false"
+        # Receive-only toggle: when tx_enabled is false the radio still RX's but
+        # the bridge must not queue any TX (CoT/text/voice/stream/heartbeat) the
+        # firmware would drop. Read live each main-loop pass (no restart needed).
+        cfg["TX_ENABLED"] = "true" if m.get("tx_enabled", True) else "false"
         # Voice-over-LoRa transports (top-level `voice:` section in V3 config;
         # validated by nucleusd.schema.VoiceConfig). Disabled unless configured.
         voice = raw.get("voice", {}) or {}
@@ -314,6 +324,8 @@ def _voice_relay_loop(sock):
             break
         if not data:
             continue
+        if not tx_allowed():
+            continue  # receive-only: drop voice clips without TX
         if len(data) > LORA_MTU:
             stats["voice_errors"] += 1
             logger.warning(f"Voice TX dropped ({len(data)}B > {LORA_MTU}B MTU)")
@@ -351,6 +363,8 @@ def _text_relay_loop(sock):
             break
         if not data:
             continue
+        if not tx_allowed():
+            continue  # receive-only: drop outbound text without TX
         # Truncate on UTF-8 boundary to one packet (never fragment).
         if len(data) > TEXT_MAX_BYTES:
             data = data[:TEXT_MAX_BYTES]
@@ -399,6 +413,8 @@ def _stream_build_term():
 
 def _stream_send(pkt, label):
     """Send one voice-stream packet over LoRa."""
+    if not tx_allowed():
+        return  # receive-only: no stream TX
     try:
         iface.sendData(pkt, portNum=stream_portnum, wantAck=False,
                        hopLimit=stream_hop_limit)
@@ -596,6 +612,26 @@ def _apply_tx_min_interval(cfg):
         TX_MIN_INTERVAL = new
 
 
+def _apply_tx_enabled(cfg):
+    """Update the global TX_ENABLED (receive-only gate) from a _read_mesh_conf() dict.
+
+    A missing key leaves the current state unchanged. Logs at INFO only when the
+    value actually flips, so the ~10s main-loop poll stays quiet.
+    """
+    global TX_ENABLED
+    if "TX_ENABLED" not in cfg:
+        return
+    new = cfg["TX_ENABLED"].lower() in ("true", "1", "yes")
+    if new != TX_ENABLED:
+        logger.info(f"LoRa TX {'enabled' if new else 'disabled (receive-only)'}")
+        TX_ENABLED = new
+
+
+def tx_allowed():
+    """True if the radio may transmit. False = receive-only (RX continues)."""
+    return TX_ENABLED
+
+
 def _tx_rate_ok(uid):
     """Check if we're allowed to TX this UID (rate limiting)."""
     now = time.time()
@@ -619,10 +655,15 @@ def _was_recently_rxd(uid):
 
 def _tx_process_packet(data):
     """Process a multicast TAK Protocol V1 packet for TX over LoRa."""
+    stats["tx_mcast_received"] += 1
+
+    # Receive-only: drop before any parse/compress work (and before importing the
+    # TAK libs) so we don't queue a packet the firmware would refuse to transmit.
+    if not tx_allowed():
+        return
+
     import takproto
     from nucleusd.meshtastic.takmessage_to_xml import takmessage_to_xml
-
-    stats["tx_mcast_received"] += 1
 
     try:
         # Step 1: Parse TAK Protocol V1 → TakMessage
@@ -1099,6 +1140,9 @@ def _send_heartbeat():
     """
     if iface is None:
         raise RuntimeError("radio interface not connected")
+    if not tx_allowed():
+        logger.debug("Heartbeat skipped (receive-only)")
+        return  # receive-only: the firmware would drop it anyway
     try:
         iface.sendData(_build_heartbeat_payload(),
                        portNum=HEARTBEAT_PORTNUM, wantAck=False)
@@ -1283,6 +1327,9 @@ def main():
                        "false").lower() in ("true", "1", "yes")
     # Pick up the configured TX rate limit before the startup banner prints it.
     _apply_tx_min_interval(cfg)
+    # Pick up the receive-only gate at startup too, so the bridge honours it
+    # immediately instead of only after the first main-loop pass.
+    _apply_tx_enabled(cfg)
 
     # ── Open radio interface (TCP or serial) ─────────────────
     if _use_tcp:
@@ -1493,6 +1540,8 @@ def main():
                 _hb = _read_mesh_conf()
                 # Live TX rate limit (reuses the same read; no restart needed).
                 _apply_tx_min_interval(_hb)
+                # Live receive-only gate (same read): flip TX on/off without a restart.
+                _apply_tx_enabled(_hb)
                 if _hb.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes"):
                     try:
                         _hb_iv = max(60, int(_hb.get("HEARTBEAT_INTERVAL", "300")))

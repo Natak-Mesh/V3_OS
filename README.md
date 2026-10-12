@@ -75,6 +75,7 @@ Everything flows one direction, from one file:
 | `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon. |
 | `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`), attaching to the shared `rnsd` as a client; off by default. Peers are explicit **contact cards** (imported over the mesh / link / QR), not flooded announces; the node announces only on operator request. |
 | `voice/` | PTT voice daemon (OpenVLM hardware + browser soft PTT) + router. |
+| `rf.py` | Per-radio RF control — the **only** module that touches rfkill/`/sys`. Resolves a phy from its interface, soft-blocks/unblocks it, and enforces persistent RF state at boot (`nucleus-rf.service`). Consumed by `apply.py`, `status.py` and the AP toggle. |
 | `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |
 | `reticulum.py`, `reticulum_router.py` | Read-only rnsd status via the shared-instance control socket. |
 | `update.py` | Self-update: version check + launches `nucleus-update.sh`. |
@@ -140,6 +141,12 @@ localhost) don't.
 - **Tailscale** — needs a login link that connects back to Tailscale's servers,
   and its state lives in tailscaled, not `config.yaml`. Controlled live via
   `tailscale.py` / `/api/v1/tailscale`.
+- **Wi-Fi AP on/off (wlan0)** — a deliberately non-persistent radio toggle that
+  **always resets to ON at boot** (a lockout-recovery path), so it has no
+  `config.yaml` key. Driven live via `rf.py` / `POST /api/v1/rf/ap`. The mesh
+  (wlan1) and Meshtastic TX radios, by contrast, *are* in the pipeline
+  (`mesh.enabled`, `meshtastic.tx_enabled`). See
+  [radios.md](docs/manual/radios.md).
 - **Official TAK Server (+ MediaMTX)** — **separate, uncommon install**; most
   nodes never run it, so it's kept out of `install.sh`/`apply`. Provisioned once
   with `sudo nucleus-tak-setup.sh` (needs the tak.gov `.deb`). It still reads

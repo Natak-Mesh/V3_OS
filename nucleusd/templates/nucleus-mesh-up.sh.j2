@@ -17,6 +17,25 @@ for dev in eth0 wlan0 wlan1 br-lan; do
     nmcli device set "$dev" managed no 2>/dev/null || true
 done
 
+# --- Make this script safe to re-run (apply without reboot) -----------------
+# A stale wpa_supplicant still bound to wlan1 makes the join below fail, which
+# under `set -euo pipefail` aborts the script before the UFW and multicast-TTL
+# sections. Kill any existing instance, wait for it to release the interface,
+# and drop its control socket so the fresh -B launch starts clean.
+pkill -f 'wpa_supplicant .*-i wlan1' || true
+for _ in $(seq 1 10); do
+    pgrep -f 'wpa_supplicant .*-i wlan1' >/dev/null || break
+    sleep 0.5
+done
+rm -f /var/run/wpa_supplicant/wlan1
+
+# Keep wlan1's IPv6 link-local across link-down events. Toggling the mesh radio
+# off/on (rfkill) bounces the link; by default the kernel DROPS the deterministic
+# fe80 address networkd set for Babel, and networkd does not re-add it on carrier
+# return. Babel then marks wlan1 down ("no link-local address") and this node
+# vanishes from the mesh. keep_addr_on_down=1 makes the address survive the bounce.
+sysctl -w net.ipv6.conf.wlan1.keep_addr_on_down=1
+
 # --- Put wlan1 into encrypted 802.11s mesh mode -----------------------------
 ip link set wlan1 down
 iw reg set "{{ mesh_country }}"
@@ -29,6 +48,10 @@ ip link set wlan1 up
 
 # SAE/WPA3 encryption for the mesh.
 wpa_supplicant -B -i wlan1 -c /etc/wpa_supplicant/wpa_supplicant-mesh.conf
+
+# Re-assert the networkd config (static IP + fe80 link-local) in case the link
+# bounced out from under it; without the fe80 address Babel won't use wlan1.
+networkctl reconfigure wlan1 || true
 
 # Wait for the mesh to establish before applying params.
 sleep 15

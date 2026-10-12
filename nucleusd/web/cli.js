@@ -84,7 +84,8 @@
       // runs the action. A keyboard → on the selected row triggers it too.
       let actHtml = "";
       if (it.action) {
-        actHtml = `<button class="row-act" data-act="${idx}">` +
+        const actCls = "row-act" + (it.action.cls ? " " + it.action.cls : "");
+        actHtml = `<button class="${actCls}" data-act="${idx}">` +
           `${escHtml(it.action.label || "GO")}</button>`;
       }
       html += `<div class="row-wrap" data-idx="${idx}"><div class="${cls}">` +
