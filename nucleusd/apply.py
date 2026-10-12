@@ -179,16 +179,34 @@ def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
       * rfkill phy1 (via rf.py) to block/unblock the mesh radio, and
       * enable/disable the mesh units (nucleus-mesh, babeld, smcroute).
 
+    Turning the mesh back ON is NOT just an unblock. rfkill-down drops wlan1's
+    IPv6 link-local and leaves wpa_supplicant disconnected, so the radio comes
+    back but the mesh does not: babeld ignores a link-local-less interface and no
+    peer can see this node. `enable --now` is a no-op when the units are already
+    running, so coming out of a block we must RESTART the mesh units to redo the
+    SAE join (nucleus-mesh) and rebind babeld/smcroute. We only do that on the
+    actual blocked->unblocked transition, keeping a steady-state apply idempotent.
+
     Only the wlan1 mesh is config-driven; the AP (wlan0) is outside the pipeline
     (README §4) and is not touched here. Returns the units whose state was set.
     """
     enabled = cfg.mesh.enabled
-    # Radio first on enable (bring the phy up before units start), units first on
-    # disable (stop routing before the radio goes away) — either order is safe
-    # since each step is idempotent, but this keeps logs intuitive.
-    rf.set_iface_blocked(rf.MESH_IFACE, blocked=not enabled)
-    for unit in MESH_UNITS:
-        _set_service(unit, enabled)
+    was_blocked = rf.is_blocked(rf.phy_for_iface(rf.MESH_IFACE) or "")
+
+    if enabled:
+        # Unblock the radio first, then (re)start the mesh units. On a real
+        # off->on transition restart them so the join + link-local come back;
+        # otherwise just ensure they are enabled and running (idempotent).
+        rf.set_iface_blocked(rf.MESH_IFACE, blocked=False)
+        for unit in MESH_UNITS:
+            _set_service(unit, True)
+        if was_blocked:
+            _restart([u for u in NET_GROUP_ORDER if u in MESH_UNITS])
+    else:
+        # Stop routing before the radio goes away, then block the phy.
+        for unit in MESH_UNITS:
+            _set_service(unit, False)
+        rf.set_iface_blocked(rf.MESH_IFACE, blocked=True)
     return list(MESH_UNITS)
 
 

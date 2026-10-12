@@ -30,33 +30,54 @@ def cfg(**over):
 
 # --- _reconcile_rf -----------------------------------------------------------
 
-def _capture_rf(monkeypatch):
-    """Record rfkill iface-block calls and systemctl enable/disable calls."""
+def _capture_rf(monkeypatch, was_blocked=False):
+    """Record rfkill block calls, enable/disable calls, and mesh-unit restarts.
+
+    `was_blocked` seeds the pre-state the phy reports via rf.is_blocked, so a test
+    can exercise the blocked->unblocked transition (which must restart the mesh).
+    """
     rfkill = []
     services = []
+    restarts = []
     monkeypatch.setattr(rf, "set_iface_blocked",
                         lambda iface, blocked, **kw: rfkill.append((iface, blocked)) or {"ok": True})
     # _reconcile_rf imports rf as a module attr, so patch there too.
     monkeypatch.setattr(apply.rf, "set_iface_blocked",
                         lambda iface, blocked, **kw: rfkill.append((iface, blocked)) or {"ok": True})
+    monkeypatch.setattr(apply.rf, "phy_for_iface", lambda iface, **kw: "phy1")
+    monkeypatch.setattr(apply.rf, "is_blocked", lambda phy, **kw: was_blocked)
     monkeypatch.setattr(apply, "_set_service",
                         lambda unit, on: services.append((unit, on)))
-    return rfkill, services
+    monkeypatch.setattr(apply, "_restart", lambda units: restarts.extend(units))
+    return rfkill, services, restarts
 
 
 def test_reconcile_rf_mesh_enabled_unblocks_and_starts_units(monkeypatch):
-    rfkill, services = _capture_rf(monkeypatch)
+    # Steady state: already unblocked -> ensure units on, but no restart.
+    rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
     touched = apply._reconcile_rf(cfg(mesh={"enabled": True}))
     assert (rf.MESH_IFACE, False) in rfkill  # phy1 unblocked
     assert services == [("nucleus-mesh", True), ("babeld", True), ("smcroute", True)]
+    assert restarts == []  # no transition -> no disruptive restart
     assert touched == apply.MESH_UNITS
 
 
+def test_reconcile_rf_mesh_enable_from_blocked_restarts_mesh(monkeypatch):
+    # The bug: turning the mesh back ON after an rfkill block must RESTART the
+    # mesh units (redo the SAE join + link-local), not just unblock the radio.
+    rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=True)
+    apply._reconcile_rf(cfg(mesh={"enabled": True}))
+    assert (rf.MESH_IFACE, False) in rfkill
+    # Restarted in network-group order so babeld/smcroute rebind after the join.
+    assert restarts == ["nucleus-mesh", "babeld", "smcroute"]
+
+
 def test_reconcile_rf_mesh_disabled_blocks_and_stops_units(monkeypatch):
-    rfkill, services = _capture_rf(monkeypatch)
+    rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
     apply._reconcile_rf(cfg(mesh={"enabled": False}))
     assert (rf.MESH_IFACE, True) in rfkill  # phy1 blocked
     assert services == [("nucleus-mesh", False), ("babeld", False), ("smcroute", False)]
+    assert restarts == []
 
 
 # --- _reconcile_meshtastic_tx ------------------------------------------------
