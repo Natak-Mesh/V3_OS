@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import __version__
 from . import config as cfgio
@@ -257,6 +258,22 @@ def post_power_reboot() -> dict:
 def post_power_poweroff() -> dict:
     """Power off the node (returns before the node goes down)."""
     return powermod.poweroff()
+
+
+class _ApBody(BaseModel):
+    on: bool
+
+
+@app.post("/api/v1/rf/ap")
+def post_rf_ap(body: _ApBody) -> dict:
+    """Turn the wlan0 AP on/off live (outside the config pipeline, README §4).
+
+    The AP resets to ON at boot, so this is a live-only toggle (rfkill phy0 +
+    hostapd stop/start + re-enslave wlan0). mesh and Meshtastic TX are config-
+    backed instead and go through PUT /config + POST /apply.
+    """
+    from . import rf as rfmod
+    return rfmod.set_ap(body.on)
 
 
 # --- Web UI (mounted last so it doesn't shadow /api routes) -----------------

@@ -1,0 +1,19 @@
+[Unit]
+Description=Nucleus per-radio RF boot state (wlan1 mesh persist, wlan0 AP reset-on)
+# systemd-rfkill restores saved soft-block state; run after it so we can override
+# that restore (always unblock the AP's phy0). Run before the radios come up so
+# the correct block state is in place first.
+After=systemd-rfkill.service sys-subsystem-net-devices-wlan1.device sys-subsystem-net-devices-wlan0.device
+Before=nucleus-mesh.service hostapd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Best-effort: enforces mesh.enabled on phy1 (persistent) and always unblocks
+# phy0 (AP resets to ON each boot). Never blocks boot.
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.rf
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

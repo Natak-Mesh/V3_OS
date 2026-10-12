@@ -119,6 +119,11 @@ class NodeConfig(BaseModel):
 class MeshConfig(BaseModel):
     """802.11s wireless mesh on wlan1 + Babel/multicast tuning."""
 
+    enabled: bool = Field(
+        True,
+        description="Run the wlan1 802.11s mesh (nucleus-mesh/babeld/smcroute + phy1 RF). "
+                    "Persists across reboots; enforced at boot by nucleus-rf.service.",
+    )
     ssid: str = "natak_mesh"
     channel: int = Field(3, ge=1, le=13, description="2.4 GHz channel.")
     password: str = Field(..., min_length=8, description="SAE/WPA3 mesh passphrase.")
@@ -201,6 +206,12 @@ class MeshtasticConfig(BaseModel):
     """
 
     enabled: bool = Field(True, description="Run meshtasticd + expose the radio to the CoT bridge.")
+    tx_enabled: bool = Field(
+        True,
+        description="Allow the LoRa radio to transmit (firmware lora.tx_enabled). "
+                    "False = receive-only: the radio stays powered and keeps RX, but never TX. "
+                    "Persists across reboots.",
+    )
     region: str = Field("US", description="LoRa region code (US, EU_868, ...). Radio won't TX until set.")
     hat: str = Field(
         "rak6421-slot2",

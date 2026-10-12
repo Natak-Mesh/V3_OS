@@ -77,6 +77,29 @@ def main() -> None:
     else:
         print(f"radio_init: region already {current}")
 
+    # lora.tx_enabled sync every boot: push it only if the radio differs from
+    # config, so "receive-only" (tx_enabled=false) survives reboot. Best-effort;
+    # a lora.* change can reboot the radio (like a region change), so wait for it
+    # to come back if we set it.
+    want_tx = cfg.meshtastic.tx_enabled
+    rc, out = _cli(["--get", "lora.tx_enabled"], timeout=30)
+    current_tx = None
+    if rc == 0:
+        for line in out.splitlines():
+            if "lora.tx_enabled" in line:
+                v = line.split(":", 1)[-1].strip().lower()
+                current_tx = v in ("true", "1")
+                break
+    if current_tx is None:
+        print("radio_init: could not read lora.tx_enabled — leaving radio alone", file=sys.stderr)
+    elif current_tx != want_tx:
+        print(f"radio_init: lora.tx_enabled {current_tx} -> {want_tx}")
+        _cli(["--set", "lora.tx_enabled", "true" if want_tx else "false"])
+        time.sleep(10)
+        _wait_for_api(attempts=15)
+    else:
+        print(f"radio_init: lora.tx_enabled already {current_tx}")
+
     # Read the radio config into the cache so peers can see our channel and
     # offer a one-click Join without an operator first pressing "Read" in the
     # UI. Same function the Read button runs. Best-effort: never block boot.

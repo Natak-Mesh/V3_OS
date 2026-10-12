@@ -59,6 +59,18 @@ def test_derived_addressing():
     assert c.ap_name == "0009-nucleus-ap"
 
 
+def test_mesh_enabled_defaults_on():
+    # RF-control Phase 1: wlan1 mesh is on by default and persists in config.
+    assert cfg().mesh.enabled is True
+    assert cfg(mesh={"enabled": False}).mesh.enabled is False
+
+
+def test_meshtastic_tx_enabled_defaults_on():
+    # RF-control Phase 1: LoRa TX is on by default; False = receive-only.
+    assert cfg().meshtastic.tx_enabled is True
+    assert cfg(meshtastic={"tx_enabled": False}).meshtastic.tx_enabled is False
+
+
 def test_br_lan_prefix_override():
     c = cfg(br_lan={"subnet_prefix": "10.20.200"})
     assert c.br_lan_ip == "10.20.200.1"
