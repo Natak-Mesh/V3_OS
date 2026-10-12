@@ -25,6 +25,7 @@ Header: derived mesh subnet.
 | Password (min 8) | Mesh password. |
 | Subnet prefix | Optional. |
 | Country | Regulatory country (default US). |
+| Enabled (`mesh.enabled`) | `on` / `off`. Off rfkill-blocks the mesh radio and stops the mesh units. Also toggled live from the [Radios](radios.md) page; persists across reboots. |
 | mcast TTL | 0–64. |
 | 802.11s TTL | 0–31. |
 | RTS threshold (0=off) | 0–2347. |
@@ -62,7 +63,8 @@ Header: derived br-lan IP.
 
 | Field | Notes |
 |-------|-------|
-| Enabled | `on` / `off`. |
+| Enabled | `on` / `off`. Runs/stops `meshtasticd` entirely (for nodes without the HAT). |
+| TX enabled (`tx_enabled`) | `on` / `off`. Off = **receive-only**: the radio still receives but never transmits. Toggled live from the [Radios](radios.md) page; persists across reboots. |
 | Region | Regulatory region. |
 | HAT / slot | `rak6421-slot1` / `rak6421-slot2` / `auto`. |
 | GPS | `off` / `uart` / `i2c`. |

@@ -1,16 +1,27 @@
 # RF control (per-radio on/off)
 
-Status: IN PROGRESS. Work is on branch `rfkill`, NOT `main`. Bench-test on a
-spare node before merging.
+Status: **IMPLEMENTED** and merged to `main`. This file is the design record;
+operator docs live in [manual/radios.md](manual/radios.md).
 
 **Progress**
-- ✅ Phase 0 — network-apply re-run fixes B/C/D (see below). Done, tested
-  (221 tests pass), and deployed to node 0042 (`install.sh` + `nucleusctl
-  apply`); verified live — brlan-setup ran clean, wlan0 enslaved in br-lan, UI
-  reachable.
-- ⬜ Phases 1–6 — the radio feature itself (schema flags, `rf.py`,
+- ✅ Phase 0 — network-apply re-run fixes B/C/D (see below). Done, tested,
+  deployed to node 0042, verified live.
+- ✅ Phases 1–6 — the radio feature itself (schema flags, `rf.py`,
   `nucleus-rf.service`, apply reconciles, `/api/v1/rf/ap`, the web UI "Radios"
-  page). NOT started — there are no radio controls in the UI yet.
+  page, docs). Done.
+
+**Post-merge fix (mesh "on" was a no-op).** The first cut of `_reconcile_rf()`
+only rfkill-unblocked phy1 and ran `systemctl enable --now` on the mesh units —
+a no-op when they were already running. But an rfkill bounce drops wlan1's IPv6
+link-local and disconnects the SAE join, and Babel ignores a link-local-less
+interface, so the radio came back but the node stayed off the mesh until a
+manual restart. Fixed by: (1) `_reconcile_rf()` detecting the blocked→unblocked
+transition and **restarting** `nucleus-mesh`/`babeld`/`smcroute` in
+network-group order (redoing the join); (2) `nucleus-mesh-up.sh` setting
+`net.ipv6.conf.wlan1.keep_addr_on_down=1` and running `networkctl reconfigure
+wlan1` after the join so the link-local survives the bounce. Regression tests in
+`test_apply_rf.py` (transition restarts the mesh) and `test_render.py`
+(bring-up script keeps the link-local).
 
 ## Problem / goal
 

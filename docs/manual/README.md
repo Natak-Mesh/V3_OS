@@ -80,6 +80,9 @@ Selectable item types: navigation links, action buttons, and editable fields
 | VOICE (PTT) | [Voice](voice.md) |
 | MESHTASTIC | [Meshtastic Radio](meshtastic.md) |
 | INTERFACES AND SERVICES | [System](system.md) |
+| RADIOS (RF ON/OFF) | [Radios](radios.md) |
+| RETICULUM | [Reticulum](reticulum.md) |
+| TAILSCALE (VPN) | *(no dedicated page)* — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
 | RADIO CONFIGURATION | [Config](config.md) |
 | TAK SERVER *(optional)* | [TAK Server](takserver.md) |
 | OPENTAKSERVER *(optional)* | [OpenTAKServer](opentakserver.md#web-ui-page) |

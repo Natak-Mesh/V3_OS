@@ -7,6 +7,11 @@ Configure the local Meshtastic LoRa radio and align its channel with peers.
 A status line shows: radio `detected` / `not detected`, CoT bridge
 `running` / `stopped`, and whether the bridge is `enabled` / `disabled` at boot.
 
+> **Transmit on/off:** the Meshtastic radio can be put in **receive-only** mode
+> (`meshtastic.tx_enabled: false`) from the [Radios](radios.md) page — it keeps
+> receiving but never transmits. This is separate from the channel/radio
+> configuration below.
+
 A colour legend applies to the config fields below:
 - **Blue (accent)** — channel identity; must match across nodes to communicate.
 - **Amber (warn)** — this node only; does not affect interoperability.

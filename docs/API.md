@@ -110,6 +110,19 @@ curl -s http://localhost:8080/api/v1/status
 #    "reachable":true,"last_seen":1790531600.2}], ...}
 ```
 
+`radios` gives per-radio on/off state for the [Radios](manual/radios.md) page —
+the config source-of-truth combined with live rfkill/unit state. `on` is the
+operator-facing state; `rf_blocked` is the live rfkill soft-block (`null` =
+unknown). `mesh` and `meshtastic` are `persistent` (config-backed); `ap` is live
+only and resets ON at boot. All best-effort — `radios` is `null` if it can't be
+read.
+```bash
+curl -s http://localhost:8080/api/v1/status | jq .radios
+# {"mesh":{"on":true,"rf_blocked":false,"persistent":true},
+#  "meshtastic":{"on":true,"receive_only":false,"daemon":"active","persistent":true},
+#  "ap":{"on":true,"rf_blocked":false,"hostapd":"active","persistent":false}}
+```
+
 ### `GET /api/v1/update/check`
 Compare installed version against the git remote.
 ```bash
@@ -144,6 +157,22 @@ access to bring the node back.
 curl -s -X POST http://localhost:8080/api/v1/power/poweroff
 # {"started":true}
 ```
+
+### `POST /api/v1/rf/ap`
+Live on/off for the Wi-Fi access point (wlan0) — rfkill phy0 + hostapd
+stop/start + re-enslave wlan0 into br-lan. The AP is **outside the config
+pipeline** and always resets to ON at boot, so this is a live-only toggle (there
+is no `config.yaml` key). Body: `{"on": <bool>}`.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/rf/ap \
+  -H 'Content-Type: application/json' -d '{"on":false}'
+# {"ok":true}
+```
+
+The **mesh** (wlan1) and **Meshtastic TX** radios are config-backed instead:
+toggle them with `PUT /api/v1/config` (`mesh.enabled` / `meshtastic.tx_enabled`)
++ `POST /api/v1/apply`. Live per-radio state is in `GET /api/v1/status` under
+`radios` (below). See the [Radios](manual/radios.md) manual page.
 
 
 ---
