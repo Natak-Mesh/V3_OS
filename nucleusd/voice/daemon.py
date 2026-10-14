@@ -337,6 +337,18 @@ def load_config():
         cfg["MESH_IP"] = "{}.{}".format(prefix, int(nid))
     cfg["MESH_802_TTL"] = str(mesh.get("mesh_802_ttl", 8))
 
+    # ── Mesh transport interfaces → (iface, ip) pairs for multi-radio TX/join ──
+    # wlan1 is always present; halow0 (10.30.1.<id>) is added when HaLow is enabled
+    # (mirrors schema NucleusConfig.mesh_ifaces). The daemon fans voice out over
+    # each and joins the group on each, so a HaLow-only peer is reachable too.
+    halow = raw.get("halow", {}) or {}
+    halow_enabled = halow.get("enabled", True)  # schema default is True
+    ifaces = [("wlan1", cfg.get("MESH_IP", "0.0.0.0"))]
+    if halow_enabled and nid is not None:
+        ifaces.append(("halow0", "10.30.1.{}".format(int(nid))))
+    # Flattened "iface:ip,iface:ip" (the daemon re-parses; keeps the flat-str cfg).
+    cfg["MESH_IFACES"] = ",".join("{}:{}".format(i, ip) for i, ip in ifaces)
+
     # ── voice section → VOICE_* keys ──
     v = raw.get("voice", {}) or {}
 
@@ -1108,6 +1120,16 @@ class VoiceDaemon:
             self.node_id = int(self.mesh_ip.split(".")[-1])
         except ValueError:
             self.node_id = 0
+        # Mesh transport interfaces as (iface, ip) pairs: wlan1 always, halow0 too
+        # when HaLow is enabled. TX fans out over each; RX joins the group on each.
+        # Falls back to the single mesh_ip if MESH_IFACES is absent (old config).
+        self.mesh_ifaces = self._parse_mesh_ifaces(cfg.get("MESH_IFACES"))
+        # Per-source playout sequence dedupe. A dual-radio sender emits the same
+        # frame on wlan1 AND halow0; the header carries (node_id, seq), so we drop
+        # a seq already played from that node. A large backward jump = sender
+        # restart (seq reset), so we accept it and resync. node_id -> last seq.
+        self._rx_last_seq: dict = {}
+        self._rx_seq_lock = threading.Lock()
         self.channel = self._parse_int(cfg.get("VOICE_CHANNEL"), 1)
         self.channels = parse_channels(cfg.get("VOICE_CHANNELS"), self.channel)
         # Ensure the startup channel is a member of the named list.
@@ -1214,6 +1236,47 @@ class VoiceDaemon:
             return float(val)
         except (TypeError, ValueError):
             return default
+
+    def _parse_mesh_ifaces(self, spec):
+        """Parse "wlan1:10.20.1.42,halow0:10.30.1.42" -> [(iface, ip), ...].
+
+        Falls back to the single (wlan1, self.mesh_ip) pair if the spec is empty
+        (old config.yaml with no MESH_IFACES), so existing nodes behave as before.
+        """
+        pairs = []
+        if spec:
+            for item in str(spec).split(","):
+                item = item.strip()
+                if not item or ":" not in item:
+                    continue
+                iface, _, ip = item.partition(":")
+                iface, ip = iface.strip(), ip.strip()
+                if iface and ip:
+                    pairs.append((iface, ip))
+        if not pairs:
+            pairs = [("wlan1", self.mesh_ip)]
+        return pairs
+
+    # A frame is a duplicate only if its seq is at or just below the per-node
+    # watermark, within this small window. The window absorbs the near-simultaneous
+    # second-radio copy (same seq, gap 0) and brief radio reordering, while a
+    # backward jump beyond it is a sender restart (tx_seq reset) we accept + resync.
+    SEQ_DEDUP_WINDOW = 256
+
+    def _seq_is_duplicate(self, node_id, seq):
+        """True if (node_id, seq) was already played — drop the second-radio copy.
+
+        A dual-radio sender emits each frame on wlan1 AND halow0; both copies carry
+        the same (node_id, seq), so the second to arrive is a duplicate. A forward
+        seq advances the watermark; a backward jump larger than SEQ_DEDUP_WINDOW is
+        a sender restart (seq reset), accepted as a resync.
+        """
+        with self._rx_seq_lock:
+            last = self._rx_last_seq.get(node_id)
+            if last is not None and 0 <= (last - seq) < self.SEQ_DEDUP_WINDOW:
+                return True  # already played (or a recent reorder) — drop
+            self._rx_last_seq[node_id] = seq
+            return False
 
     @staticmethod
     def _resolve_stt_model(override):
@@ -1385,35 +1448,54 @@ class VoiceDaemon:
         return MCAST_BASE + str(channel if channel is not None else self.channel)
 
     def open_sockets(self):
-        # RX: bind the voice port, join current channel's group on the mesh IP.
+        # RX: bind the voice port, join the current channel's group on EVERY mesh
+        # interface (wlan1 [+ halow0]) so a peer on either radio is heard.
         rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         rx.bind(("", VOICE_PORT))
-        self._join(rx, self.channel)
         self.rx_sock = rx
+        self._join(rx, self.channel)
 
-        # TX: egress via the mesh interface, TTL per mesh.conf, no loopback.
-        tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.ttl)
-        tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-        try:
-            tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
-                          socket.inet_aton(self.mesh_ip))
-        except OSError as e:
-            log("WARNING: IP_MULTICAST_IF({}) failed: {} "
-                "(is wlan1/mesh up?)".format(self.mesh_ip, e))
-        self.tx_sock = tx
+        # TX: one socket per mesh interface, each egress-pinned via IP_MULTICAST_IF
+        # to that iface's IP; TTL per mesh config, no loopback. A dual-radio sender
+        # thus emits each frame on both radios; receivers de-dupe by (node_id, seq).
+        self.tx_socks = {}
+        for iface, ip in self.mesh_ifaces:
+            tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.ttl)
+            tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+            try:
+                tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                              socket.inet_aton(ip))
+            except OSError as e:
+                log("WARNING: IP_MULTICAST_IF({} on {}) failed: {} "
+                    "(is that mesh up?)".format(ip, iface, e))
+            self.tx_socks[iface] = tx
+        # Back-compat: keep self.tx_sock pointing at the primary (wlan1) socket.
+        self.tx_sock = next(iter(self.tx_socks.values()), None)
 
-    def _mreq(self, channel):
-        return socket.inet_aton(self.group_ip(channel)) + socket.inet_aton(self.mesh_ip)
+    def _mreq_ip(self, channel, ip):
+        return socket.inet_aton(self.group_ip(channel)) + socket.inet_aton(ip)
 
     def _join(self, sock, channel):
-        try:
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                            self._mreq(channel))
-            log("joined {} on {}".format(self.group_ip(channel), self.mesh_ip))
-        except OSError as e:
-            log("WARNING: join {} failed: {}".format(self.group_ip(channel), e))
+        """Join the channel group on every mesh interface (best-effort each)."""
+        for iface, ip in self.mesh_ifaces:
+            try:
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                                self._mreq_ip(channel, ip))
+                log("joined {} on {} ({})".format(self.group_ip(channel), iface, ip))
+            except OSError as e:
+                log("WARNING: join {} on {} failed: {}".format(
+                    self.group_ip(channel), iface, e))
+
+    def _leave(self, sock, channel):
+        """Leave the channel group on every mesh interface (best-effort each)."""
+        for _iface, ip in self.mesh_ifaces:
+            try:
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP,
+                                self._mreq_ip(channel, ip))
+            except OSError:
+                pass
 
     def set_channel(self, new_channel):
         """Live channel switch: leave old multicast group, join new."""
@@ -1424,12 +1506,7 @@ class VoiceDaemon:
                 return True
             old = self.channel
             if self.rx_sock is not None:
-                try:
-                    self.rx_sock.setsockopt(socket.IPPROTO_IP,
-                                            socket.IP_DROP_MEMBERSHIP,
-                                            self._mreq(old))
-                except OSError:
-                    pass
+                self._leave(self.rx_sock, old)
             self.channel = new_channel
             if self.rx_sock is not None:
                 self._join(self.rx_sock, new_channel)
@@ -1466,7 +1543,7 @@ class VoiceDaemon:
                 frame = self.tx_cleanup.process(frame)
         if gain and abs(gain - 1.0) >= 0.01:
             frame = apply_gain(frame, gain)
-        if self.tx_sock is None:
+        if not getattr(self, "tx_socks", None):
             return
         with self.channel_lock:
             chan = self.channel
@@ -1476,10 +1553,13 @@ class VoiceDaemon:
             self.tx_seq += 1
         hdr = struct.pack(HDR_FORMAT, MAGIC, VERSION, CODEC_PCM16,
                           self.node_id, chan, 0, seq)
-        try:
-            self.tx_sock.sendto(hdr + frame, dest)
-        except OSError as e:
-            log("TX: send failed: {}".format(e))
+        pkt = hdr + frame
+        # Emit on every mesh radio with the SAME (node_id, seq); receivers de-dupe.
+        for iface, sock in self.tx_socks.items():
+            try:
+                sock.sendto(pkt, dest)
+            except OSError as e:
+                log("TX: send on {} failed: {}".format(iface, e))
 
     # -- LoRa voice-text transport (Vosk STT -> cot-bridge -> Piper TTS) -----
 
@@ -2004,13 +2084,17 @@ class VoiceDaemon:
                 continue
             if len(data) < HDR_SIZE + 2:
                 continue
-            magic, version, codec, node_id, channel, _flags, _seq = \
+            magic, version, codec, node_id, channel, _flags, seq = \
                 struct.unpack(HDR_FORMAT, data[:HDR_SIZE])
             if magic != MAGIC or version != VERSION or codec != CODEC_PCM16:
                 continue
             if node_id == self.node_id:       # our own packet
                 continue
             if channel != self.channel:       # stale group / race
+                continue
+            # Drop the duplicate copy a dual-radio sender emits on the other mesh
+            # (same node_id + seq arriving via both wlan1 and halow0).
+            if self._seq_is_duplicate(node_id, seq):
                 continue
             payload = data[HDR_SIZE:]
             if len(payload) != FRAME_BYTES:

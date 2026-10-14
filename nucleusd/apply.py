@@ -27,6 +27,10 @@ NGINX_DEFAULT = Path("/etc/nginx/sites-enabled/default")
 NGINX_HTPASSWD = Path("/etc/nginx/nucleus.htpasswd")
 # Generated udev rule binding recognised USB devices to /dev/nucleus/<role>.
 USB_UDEV_RULE = Path("/etc/udev/rules.d/60-nucleus-usb.rules")
+# HaLow (802.11ah) generated artifacts.
+HALOW_SUPPLICANT_CONF = Path("/etc/wpa_supplicant/wpa_supplicant-halow.conf")
+HALOW_UP_SCRIPT = Path("/opt/nucleus/bin/nucleus-halow-up.sh")
+HALOW_MODPROBE_CONF = Path("/etc/modprobe.d/nucleus-morse.conf")
 CERT_DIR = Path("/etc/nucleus/certs")
 CERT_CRT = CERT_DIR / "nucleus-web.crt"
 CERT_KEY = CERT_DIR / "nucleus-web.key"
@@ -44,6 +48,12 @@ MESHTASTIC_CLI = [_sys.executable, "-m", "meshtastic", "--host", "localhost"]
 # Mesh units whose lifecycle is owned by mesh.enabled (RF reconcile), not by a
 # plain restart. nucleus-mesh brings wlan1 up; babeld/smcroute route over it.
 MESH_UNITS = ["nucleus-mesh", "babeld", "smcroute"]
+
+# HaLow service, enable/disable-driven by halow.enabled (like meshtasticd/rnsd).
+# It's in NET_GROUP_ORDER so the group bounce restarts it when its inputs change,
+# but it must be dropped from that bounce when HaLow is disabled (same pattern as
+# MESH_UNITS) so a disabled HaLow never comes back up.
+HALOW_UNIT = "nucleus-halow"
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -68,8 +78,13 @@ TARGETS: list[Target] = [
     Target("networkd/30-wlan0.network.j2", Path("/etc/systemd/network/30-wlan0.network"), ("systemd-networkd", "brlan-setup")),
     Target("networkd/40-eth0.network.j2", Path("/etc/systemd/network/40-eth0.network"), ("systemd-networkd", "brlan-setup")),
     Target("networkd/10-wlan1.network.j2", Path("/etc/systemd/network/10-wlan1.network"), ("systemd-networkd", "brlan-setup")),
+    Target("networkd/12-halow0.network.j2", Path("/etc/systemd/network/12-halow0.network"), ("systemd-networkd", "brlan-setup", "nucleus-halow")),
     Target("wpa_supplicant-mesh.conf.j2", Path("/etc/wpa_supplicant/wpa_supplicant-mesh.conf"), ("nucleus-mesh",), 0o600),
+    Target("wpa_supplicant-halow.conf.j2", HALOW_SUPPLICANT_CONF, ("nucleus-halow",), 0o600),
     Target("nucleus-mesh-up.sh.j2", Path("/opt/nucleus/bin/nucleus-mesh-up.sh"), ("nucleus-mesh",), 0o755),
+    Target("nucleus-halow-up.sh.j2", HALOW_UP_SCRIPT, ("nucleus-halow",), 0o755),
+    # modprobe.d conf for the Morse driver country — no unit (modprobe, not systemd).
+    Target("nucleus-morse.conf.j2", HALOW_MODPROBE_CONF, ()),
     Target("babeld.conf.j2", Path("/etc/babeld.conf"), ("babeld",)),
     Target("smcroute.conf.j2", Path("/etc/smcroute.conf"), ("smcroute",)),
     Target("hostapd.conf.j2", Path("/etc/hostapd/hostapd.conf"), ("hostapd", "brlan-setup")),
@@ -127,12 +142,14 @@ def _write_if_changed(dest: Path, content: str, mode: int) -> bool:
 # Links reconfigured (not just reloaded) when the network group is rebuilt.
 # `networkctl reload` only re-reads files; existing links need `reconfigure` to
 # actually re-apply their config.
-NETWORKD_LINKS = ("br-lan", "wlan1", "eth0", "wlan0")
+NETWORKD_LINKS = ("br-lan", "wlan1", "halow0", "eth0", "wlan0")
 
 # The network group: if ANY of these targets change we restart the whole group
 # in a fixed order, because bouncing one (wlan1/br-lan/hostapd) leaves the others
-# running against stale interfaces and multicast memberships.
-NET_GROUP_ORDER = ["systemd-networkd", "nucleus-mesh", "hostapd", "brlan-setup", "babeld", "smcroute"]
+# running against stale interfaces and multicast memberships. nucleus-halow runs
+# after nucleus-mesh (the HaLow join is independent, but ordered after the primary
+# mesh) and before the routing daemons that bind to halow0.
+NET_GROUP_ORDER = ["systemd-networkd", "nucleus-mesh", "nucleus-halow", "hostapd", "brlan-setup", "babeld", "smcroute"]
 
 
 def _restart(units: list[str]) -> None:
@@ -208,6 +225,23 @@ def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
             _set_service(unit, False)
         rf.set_iface_blocked(rf.MESH_IFACE, blocked=True)
     return list(MESH_UNITS)
+
+
+def _reconcile_halow(cfg: NucleusConfig, changed: list[str]) -> list[str]:
+    """Enable/disable nucleus-halow to match halow.enabled; restart on conf change.
+
+    Mirrors _reconcile_meshtastic: the service is bound to the halow0 device and
+    only actually runs while the radio is present, so enabling it on a radio-less
+    node is inert. If the supplicant conf or the up-script changed AND HaLow is
+    enabled, restart nucleus-halow so a live channel/bandwidth edit rejoins the
+    mesh without a reboot or module reload. Returns the units touched.
+    """
+    _set_service(HALOW_UNIT, cfg.halow.enabled)
+    if cfg.halow.enabled and (
+        str(HALOW_SUPPLICANT_CONF) in changed or str(HALOW_UP_SCRIPT) in changed
+    ):
+        _restart([HALOW_UNIT])
+    return [HALOW_UNIT]
 
 
 def _meshtastic_cli(args: list[str], timeout: int = 120) -> tuple[int, str]:
@@ -396,6 +430,11 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # rnsd is enable/disable-driven too; reconcile below after chowning its
     # config so we never start it against a root-owned file it can't read.
     units_to_restart.discard("rnsd")
+    # nucleus-halow is enable/disable-driven and restart-on-conf-change via
+    # _reconcile_halow below (it's device-started by udev). Drop it from the plain
+    # restart set so a group bounce doesn't start it against a stale conf or when
+    # HaLow is disabled; _reconcile_halow owns its lifecycle.
+    units_to_restart.discard(HALOW_UNIT)
 
     # When the mesh is disabled its units are stopped by _reconcile_rf below and
     # must NOT be (re)started by the network-group bounce, or a disabled mesh
@@ -432,6 +471,10 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # Reconcile the wlan1 mesh RF + units to match mesh.enabled every apply
     # (idempotent): rfkill phy1 and enable/disable nucleus-mesh/babeld/smcroute.
     result.units_restarted += _reconcile_rf(cfg)
+
+    # Reconcile the HaLow service to match halow.enabled every apply (idempotent),
+    # and restart it if its supplicant conf / up-script changed (live re-join).
+    result.units_restarted += _reconcile_halow(cfg, result.changed)
 
     # Reconcile meshtasticd + cot-bridge enabled-state every apply (cheap and
     # idempotent), then restart meshtasticd if its rendered config changed.

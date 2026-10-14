@@ -25,7 +25,7 @@ def _loopback_name() -> str:
     raise RuntimeError("no loopback iface with IPv4 found")
 
 
-def _make_service(mcast_if: str):
+def _make_service(mcast_if: str, mesh_ifaces=None):
     cfg = {
         "sender": "0042-nucleus",
         "dedupe_window_secs": 60,
@@ -34,6 +34,7 @@ def _make_service(mcast_if: str):
         "wifi_port": 17020,
         "lora": False,
         "mesh_ttl": 8,
+        "mesh_ifaces": mesh_ifaces or [mcast_if],
     }
     import threading
     from nucleusd.messaging.store import MessageStore
@@ -44,7 +45,11 @@ def _make_service(mcast_if: str):
     svc.wifi_group = cfg["wifi_group"]
     svc.wifi_port = cfg["wifi_port"]
     svc.lora_enabled = False
+    svc.mesh_ifaces = list(cfg["mesh_ifaces"])
     svc._wifi_tx = None
+    svc._wifi_tx_socks = {}
+    svc._wifi_rx_sock = None
+    svc._wifi_joined = set()
     svc._lora_tx = None
     svc._subs = {}
     svc._subs_lock = threading.Lock()
@@ -79,6 +84,53 @@ def test_wifi_tx_pins_egress_iface(monkeypatch):
         assert ttl == 8
     finally:
         svc._wifi_tx.close()
+
+
+def test_wifi_tx_opens_a_socket_per_mesh_iface(monkeypatch):
+    """HaLow: one egress-pinned TX socket per iface in mesh_ifaces."""
+    lo = _loopback_name()
+    lo_ip = iface_ipv4(lo)
+    # Two "mesh ifaces" that both resolve to loopback (so both get a socket).
+    svc = _make_service(lo, mesh_ifaces=[lo, lo])
+    # De-dup: the same name twice must still yield exactly one socket.
+    svc._setup_wifi_tx()
+    try:
+        assert set(svc._wifi_tx_socks) == {lo}
+        opt = svc._wifi_tx_socks[lo].getsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_IF, 4)
+        assert socket.inet_ntoa(opt) == lo_ip
+    finally:
+        for s in svc._wifi_tx_socks.values():
+            s.close()
+
+
+def test_wifi_send_fans_out_over_every_tx_socket(monkeypatch):
+    """_send_wifi must sendto on each pinned TX socket (one per mesh radio)."""
+    lo = _loopback_name()
+    svc = _make_service(lo, mesh_ifaces=[lo])
+    sent = []
+
+    class _FakeSock:
+        def sendto(self, data, addr):
+            sent.append(addr)
+
+    svc._wifi_tx_socks = {"wlan1": _FakeSock(), "halow0": _FakeSock()}
+    svc._send_wifi("hello")
+    # One send per interface, all to the same group:port.
+    assert len(sent) == 2
+    assert all(a == (svc.wifi_group, svc.wifi_port) for a in sent)
+
+
+def test_wifi_tx_skips_iface_without_ipv4(monkeypatch):
+    """A mesh iface with no IPv4 (halow0 not up yet) is skipped, not fatal."""
+    lo = _loopback_name()
+    svc = _make_service(lo, mesh_ifaces=[lo, "nonexistent-xyz0"])
+    svc._setup_wifi_tx()
+    try:
+        assert set(svc._wifi_tx_socks) == {lo}  # only the one with an address
+    finally:
+        for s in svc._wifi_tx_socks.values():
+            s.close()
 
 
 def test_wifi_tx_no_bindtodevice_used(monkeypatch):

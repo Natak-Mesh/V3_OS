@@ -29,21 +29,71 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # --- USB device registry -----------------------------------------------------
 # Single source of truth for the pluggable USB devices Nucleus recognises and
-# the stable /dev/nucleus/<role> symlink each one is bound to. Keyed by role;
-# each value lists the supported (idVendor, idProduct) pairs as lowercase hex
-# (exactly how udev's ATTRS{idVendor}/{idProduct} match them). A device whose
-# USB id is not listed here gets no symlink, so no Nucleus service ever opens it.
+# the stable name each one is bound to by the generated udev rule. Keyed by
+# role; each value is a dict carrying:
+#   * "kind" — the udev match kind: "tty" (a serial device bound to a stable
+#     /dev/nucleus/<role> symlink) or "net" (a network interface renamed to a
+#     fixed ifname).
+#   * "ids"  — the supported (idVendor, idProduct) pairs as lowercase hex
+#     (exactly how udev's ATTRS{idVendor}/{idProduct} match them).
+#   * "ifname" — net kind only: the fixed interface name the device is renamed
+#     to (e.g. "halow0").
+# A device whose USB id is not listed here gets no symlink/rename, so no Nucleus
+# service ever opens it.
 #
 #   rnode — Reticulum RNode LoRa radios attached over USB. Only the RAK4631
-#           (nRF52840 + SX1262) is supported for now.
-USB_DEVICES: dict[str, list[tuple[str, str]]] = {
-    "rnode": [
-        ("239a", "8029"),  # RAKwireless WisBlock RAK4631
-    ],
+#           (nRF52840 + SX1262) is supported for now. (tty)
+#   halow — Morse Micro MM8108 Wi-Fi HaLow (802.11ah) transceiver, presented as
+#           a network interface renamed to halow0. (net)
+USB_DEVICES: dict[str, dict] = {
+    "rnode": {
+        "kind": "tty",
+        "ids": [("239a", "8029")],  # RAKwireless WisBlock RAK4631
+    },
+    "halow": {
+        "kind": "net",
+        "ids": [("325b", "8100")],  # Morse Micro MM8108 HaLow transceiver
+        "ifname": "halow0",
+    },
 }
 
 # Stable path a supported RNode is bound to by the generated udev rule.
 RNODE_DEVICE_PATH = "/dev/nucleus/rnode"
+
+# Fixed interface name the HaLow radio is renamed to by the generated udev rule
+# (parallels RNODE_DEVICE_PATH). The interface the driver enumerates as
+# (wlan2/wlan3) is not stable across reloads, so everything downstream — the
+# networkd file, supplicant, babeld, smcroute, messaging/voice — uses this name.
+HALOW_IFACE = "halow0"
+
+# US S1G channel table — single source of truth, transcribed from the Morse
+# driver's dot11ah/s1g_channels_rules.c (us_s1g_channels[]). Keyed by channel
+# bandwidth in MHz; each value is the tuple of valid S1G channel numbers at that
+# width. HaLow config/API/UI use these real S1G numbers, never the 5 GHz
+# stand-ins the driver reports to iw (see docs/halow.md §6).
+HALOW_CHANNELS: dict[int, tuple[int, ...]] = {
+    1: (1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35,
+        37, 39, 41, 43, 45, 47, 49, 51),
+    2: (2, 6, 10, 14, 18, 22, 26, 30, 34, 38, 42, 46, 50),
+    4: (8, 16, 24, 32, 40, 48),
+    8: (12, 28, 44),
+}
+
+# US operating class per channel bandwidth (MHz). Confirmed against the Morse
+# hostap fork defaults (DEFAULT_MORSE_IBSS_OP_CLASS 71 is the 8 MHz case).
+HALOW_OP_CLASS: dict[int, int] = {1: 68, 2: 69, 4: 70, 8: 71}
+
+HalowBandwidth = Literal[1, 2, 4, 8]
+
+# Deferred HaLow work (docs/halow.md §10.9) — do NOT build without a decision:
+#   * Cross-mesh multicast relay (wlan1<->halow0 via smcroute, one-cross TTL guard
+#     + per-node halow.mcast_relay flag). Deferred §10.0.3; revisit only if
+#     HaLow-only nodes must exchange *multicast* with WiFi-only nodes (unicast
+#     already crosses via Babel). No mcast_relay key is added until then.
+#   * rf.py on/off for HaLow (rfkill soft-block like wlan1/AP). halow.enabled +
+#     the service reconcile already give config-driven on/off.
+#   * Non-US regulatory tables. Add per-country HALOW_CHANNELS/op-class maps when
+#     needed; until then the country gate fails fast (see _halow_country_gate).
 
 # RNode radio limits — single source of truth for ReticulumConfig's rnode_*
 # fields, so the API/UI/tests read bounds from the schema instead of copying
@@ -501,6 +551,55 @@ class FirewallConfig(BaseModel):
     )
 
 
+class HalowConfig(BaseModel):
+    """Wi-Fi HaLow (802.11ah) sub-GHz mesh on a Morse MM8108 USB radio (halow0).
+
+    A second 802.11s mesh alongside wlan1, on the US 900 MHz band, for long-range
+    low-rate links. On by default and inert on a node without the radio: the
+    service is bound to the halow0 device and only runs while it exists, and the
+    babeld/UFW/smcroute/reticulum stanzas for a missing interface sit idle.
+
+    The operator sets the S1G channel + bandwidth in REAL HaLow units (US channel
+    numbers 1-51, bandwidth 1/2/4/8 MHz) — never the 5 GHz stand-ins the driver
+    reports to iw (docs/halow.md §6). SSID/password/country are shared with the
+    wlan1 mesh (mesh.*), so both meshes stay in lock-step without duplication.
+    """
+
+    enabled: bool = Field(
+        True,
+        description="Run the HaLow 802.11s mesh on halow0 (nucleus-halow + babeld/"
+                    "smcroute/UFW stanzas). Inert on a node with no HaLow radio.",
+    )
+    bandwidth_mhz: HalowBandwidth = Field(
+        1, description="HaLow channel bandwidth in MHz (1/2/4/8). Must match on every node."
+    )
+    channel: int = Field(
+        27, description="US S1G channel number (see HALOW_CHANNELS). Default 27 = 915.5 MHz, 1 MHz."
+    )
+    prim_1mhz_index: int = Field(
+        0, ge=0, le=7,
+        description="Primary 1 MHz channel index. Valid range depends on bandwidth "
+                    "(1 MHz->0; 2 MHz->0-1; 4 MHz->0-3; 8 MHz->0-7).",
+    )
+
+    @model_validator(mode="after")
+    def _valid_channel_and_prim(self) -> "HalowConfig":
+        valid = HALOW_CHANNELS.get(self.bandwidth_mhz, ())
+        if self.channel not in valid:
+            raise ValueError(
+                f"halow.channel {self.channel} invalid for bandwidth "
+                f"{self.bandwidth_mhz} MHz; valid channels: {', '.join(map(str, valid))}"
+            )
+        # Primary 1 MHz index must fit the number of 1 MHz sub-channels in the BW.
+        max_idx = self.bandwidth_mhz - 1
+        if not 0 <= self.prim_1mhz_index <= max_idx:
+            raise ValueError(
+                f"halow.prim_1mhz_index {self.prim_1mhz_index} invalid for bandwidth "
+                f"{self.bandwidth_mhz} MHz; valid range 0-{max_idx}"
+            )
+        return self
+
+
 class NucleusConfig(BaseModel):
     """Top-level node configuration = the whole contract."""
 
@@ -509,6 +608,7 @@ class NucleusConfig(BaseModel):
     br_lan: BrLanConfig = Field(default_factory=BrLanConfig)
     ap: ApConfig
     eth0: Eth0Config = Field(default_factory=Eth0Config)
+    halow: HalowConfig = Field(default_factory=HalowConfig)
     meshtastic: MeshtasticConfig = Field(default_factory=MeshtasticConfig)
     messaging: MessagingConfig = Field(default_factory=MessagingConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
@@ -591,6 +691,40 @@ class NucleusConfig(BaseModel):
             "100.64.0.0/10",                     # Tailscale (CGNAT range)
         ]
 
+    @property
+    def halow_ssid(self) -> str:
+        # Shares the wlan1 mesh SSID with a _halow suffix so the two meshes are
+        # paired but distinct 802.11s networks.
+        return f"{self.mesh.ssid}_halow"
+
+    @property
+    def halow_ip(self) -> str:
+        # 10.30.1.0/24 is free today (wlan1 10.20.1.x, br-lan 10.20.<id>.x,
+        # eth0 10.10.<id>.x). Per-node host = node.id, mirroring the mesh scheme.
+        return f"10.30.1.{self.node.id}"
+
+    @property
+    def halow_ipv6_ll(self) -> str:
+        return _ll_from_seed(f"{self.node.hostname}-halow")
+
+    @property
+    def halow_op_class(self) -> int:
+        return HALOW_OP_CLASS[self.halow.bandwidth_mhz]
+
+    @property
+    def halow_freq_mhz(self) -> float:
+        # Display-only real HaLow centre frequency (ch 27 -> 915.5 MHz).
+        return 902 + 0.5 * self.halow.channel
+
+    @property
+    def mesh_ifaces(self) -> list[str]:
+        """Mesh transport interfaces messaging/voice/status fan out over.
+
+        Always wlan1; halow0 is appended when HaLow is enabled. Consumed by the
+        messaging + voice daemons (send/join on each) and status.
+        """
+        return ["wlan1"] + ([HALOW_IFACE] if self.halow.enabled else [])
+
     @model_validator(mode="after")
     def _no_subnet_collision(self) -> "NucleusConfig":
         if self.mesh.subnet_prefix == self.br_lan_prefix:
@@ -598,6 +732,19 @@ class NucleusConfig(BaseModel):
                 f"mesh subnet ({self.mesh.subnet_prefix}) collides with br-lan "
                 f"({self.br_lan_prefix}); with the default scheme this happens when "
                 f"node.id == 1 — set a distinct node.id or br_lan.subnet_prefix"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _halow_country_gate(self) -> "NucleusConfig":
+        # Only the US S1G regulatory tables are defined (HALOW_CHANNELS /
+        # HALOW_OP_CLASS). Fail fast rather than bring up a mesh on the wrong
+        # band; add per-country tables when another regdomain is needed.
+        if self.halow.enabled and self.mesh.country != "US":
+            raise ValueError(
+                f"halow.enabled requires mesh.country == 'US' (got "
+                f"{self.mesh.country!r}); only US HaLow channels are defined. "
+                f"See docs/halow.md §10.2."
             )
         return self
 
@@ -622,6 +769,24 @@ class NucleusConfig(BaseModel):
             "mesh_mcast_ttl": self.mesh.mcast_ttl,
             "mesh_802_ttl": self.mesh.mesh_802_ttl,
             "mesh_rts_threshold": self.mesh.rts_threshold,
+            # --- Wi-Fi HaLow (802.11ah) second mesh on halow0 ---
+            "halow_enabled": self.halow.enabled,
+            "halow_iface": HALOW_IFACE,
+            "halow_ssid": self.halow_ssid,
+            "halow_password": self.mesh.password,
+            "halow_country": self.mesh.country,
+            "halow_channel": self.halow.channel,
+            "halow_bandwidth_mhz": self.halow.bandwidth_mhz,
+            "halow_op_class": self.halow_op_class,
+            "halow_prim_1mhz_index": self.halow.prim_1mhz_index,
+            "halow_ip": self.halow_ip,
+            "halow_ipv6_ll": self.halow_ipv6_ll,
+            "halow_802_ttl": self.mesh.mesh_802_ttl,
+            "halow_freq_mhz": self.halow_freq_mhz,
+            # Exposed under _derived so a future UI builds valid channel/bandwidth
+            # dropdowns from the schema, never a hard-coded list.
+            "halow_channels": HALOW_CHANNELS,
+            "halow_op_classes": HALOW_OP_CLASS,
             "br_lan_ip": self.br_lan_ip,
             "br_lan_subnet": self.br_lan_subnet,
             "br_lan_ipv6_ll": self.br_lan_ipv6_ll,
@@ -650,6 +815,13 @@ class NucleusConfig(BaseModel):
             "reti_loglevel": self.reticulum.loglevel,
             "reti_auto_interface": self.reticulum.auto_interface,
             "reti_auto_device": self.reticulum.auto_device,
+            # AutoInterface peers over every mesh radio: wlan1 always, halow0 too
+            # when HaLow is enabled. reti_auto_device stays the single wlan1 value
+            # (back-compat); the template uses this comma-joined list.
+            "reti_auto_devices": ", ".join(
+                [self.reticulum.auto_device]
+                + ([HALOW_IFACE] if self.halow.enabled else [])
+            ),
             "reti_tcp_server": self.reticulum.tcp_server,
             "reti_tcp_server_device": "br-lan",
             "reti_tcp_server_port": self.reticulum.tcp_server_port,

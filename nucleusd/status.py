@@ -177,7 +177,7 @@ def _parse_link(out: dict) -> None:
             out[name]["master"] = f[f.index("master") + 1]
 
 
-def iface_addrs(names: tuple[str, ...] = ("wlan1", "br-lan", "wlan0", "eth0")) -> dict:
+def iface_addrs(names: tuple[str, ...] = ("wlan1", "halow0", "br-lan", "wlan0", "eth0")) -> dict:
     """Return {iface: {state, oper_state, master?, addrs[]}}.
 
     Merges `ip -o link` (existence/state/bridge master) with `ip -o addr`
@@ -295,15 +295,32 @@ def radios() -> dict:
         phy = rf.phy_for_iface(iface)
         return rf.is_blocked(phy) if phy else None
 
-    units = unit_states(("meshtasticd", "hostapd"))
+    units = unit_states(("meshtasticd", "hostapd", "nucleus-halow"))
     mesh_enabled = cfg.mesh.enabled if cfg else None
     tx_enabled = cfg.meshtastic.tx_enabled if cfg else None
     ap_blocked = _blocked(rf.AP_IFACE)
+
+    # HaLow: operator-facing on = config halow.enabled AND the halow0 interface is
+    # live. Report the REAL S1G channel/bandwidth from config (the driver only ever
+    # shows the 5 GHz stand-ins to iw — see docs/halow.md §6), never a stand-in.
+    halow_enabled = cfg.halow.enabled if cfg else None
+    halow_present = iface_addrs(("halow0",))["halow0"].get("state") != "absent"
 
     return {
         "mesh": {
             "on": mesh_enabled,
             "rf_blocked": _blocked(rf.MESH_IFACE),
+            "persistent": True,
+        },
+        "halow": {
+            # on = enabled in config AND the radio's interface exists.
+            "on": (bool(halow_enabled) and halow_present) if cfg else None,
+            "enabled": halow_enabled,
+            "present": halow_present,
+            "channel": cfg.halow.channel if cfg else None,
+            "bandwidth_mhz": cfg.halow.bandwidth_mhz if cfg else None,
+            "freq_mhz": cfg.halow_freq_mhz if cfg else None,
+            "service": units.get("nucleus-halow"),
             "persistent": True,
         },
         "meshtastic": {

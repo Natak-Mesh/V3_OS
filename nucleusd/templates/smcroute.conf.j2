@@ -26,4 +26,15 @@ mgroup from wlan1 group {{ grp }}
 mgroup from br-lan group {{ grp }}
 mroute from wlan1 group {{ grp }} to br-lan
 mroute from br-lan group {{ grp }} to wlan1
+{% if halow_enabled %}
+mgroup from {{ halow_iface }} group {{ grp }}
+mroute from {{ halow_iface }} group {{ grp }} to br-lan
+mroute from br-lan group {{ grp }} to {{ halow_iface }}
+{% endif %}
 {% endfor %}
+{% if halow_enabled %}
+# NOTE: deliberately NO wlan1<->halow0 mroute. Bridging multicast between the two
+# meshes would risk a cross-mesh storm; HaLow<->WiFi multicast relay is deferred
+# (docs/halow.md §10.9). Unicast still crosses via Babel. Each halow0<->br-lan
+# route above is one-way (no-echo), same rule as wlan1<->br-lan.
+{% endif %}

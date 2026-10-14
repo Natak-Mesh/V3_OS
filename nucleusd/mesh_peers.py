@@ -25,27 +25,42 @@ WEB_PORT = 8080
 # node never stalls a discovery sweep.
 PEER_HTTP_TIMEOUT = 3
 
+# Mesh transport interfaces Babel routes peers over. wlan1 is always present;
+# halow0 carries HaLow-only peers. Both are swept so a peer reachable over either
+# radio is discovered (HaLow-only nodes would otherwise be invisible to status
+# and the Meshtastic/Reticulum peer sweeps).
+MESH_DEVS = ("wlan1", "halow0")
 
-def babel_peer_ips(dev: str = "wlan1") -> list[str]:
+
+def babel_peer_ips(dev: str | tuple[str, ...] | None = None) -> list[str]:
     """Return mesh node IPs discovered from Babel routes on ``dev``.
 
     ``ip route show proto babel`` lists next-hop IPs, each a reachable mesh node
-    running nucleusd. Never raises — returns [] on any error.
+    running nucleusd. ``dev`` may be a single interface name or a tuple of them;
+    when omitted, every interface in ``MESH_DEVS`` (wlan1 + halow0) is swept and
+    the results de-duplicated. Never raises — returns [] on any error.
     """
+    if dev is None:
+        devs: tuple[str, ...] = MESH_DEVS
+    elif isinstance(dev, str):
+        devs = (dev,)
+    else:
+        devs = tuple(dev)
     ips: list[str] = []
-    try:
-        result = subprocess.run(
-            ["ip", "route", "show", "proto", "babel", "dev", dev],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.strip().split("\n"):
-            if not line:
-                continue
-            m = re.search(r"via\s+(\S+)", line)
-            if m and m.group(1) not in ips:
-                ips.append(m.group(1))
-    except Exception:
-        pass
+    for d in devs:
+        try:
+            result = subprocess.run(
+                ["ip", "route", "show", "proto", "babel", "dev", d],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.strip().split("\n"):
+                if not line:
+                    continue
+                m = re.search(r"via\s+(\S+)", line)
+                if m and m.group(1) not in ips:
+                    ips.append(m.group(1))
+        except Exception:
+            pass
     return ips
 
 

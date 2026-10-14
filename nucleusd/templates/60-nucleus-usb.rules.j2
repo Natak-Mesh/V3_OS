@@ -8,8 +8,18 @@
 # can crash nRF52840 firmware (e.g. the RAK4631) until a hardware reset.
 #
 # The 60- prefix orders this before 69-libmtp.rules (which triggers mtp-probe).
-{% for role, ids in usb_devices.items() %}
-{% for vid, pid in ids %}
+#
+# Two kinds of device:
+#   tty — a serial device bound to a stable /dev/nucleus/<role> symlink.
+#   net — a network interface renamed to a fixed name (e.g. halow0) and tagged so
+#         its systemd service (nucleus-<role>) starts when the device appears and
+#         stops when it is unplugged.
+{% for role, dev in usb_devices.items() %}
+{% for vid, pid in dev.ids %}
+{% if dev.kind == "tty" %}
 SUBSYSTEM=="tty", ATTRS{idVendor}=="{{ vid }}", ATTRS{idProduct}=="{{ pid }}", SYMLINK+="nucleus/{{ role }}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{MTP_NO_PROBE}="1", MODE="0666"
+{% elif dev.kind == "net" %}
+SUBSYSTEM=="net", ACTION=="add", ATTRS{idVendor}=="{{ vid }}", ATTRS{idProduct}=="{{ pid }}", NAME="{{ dev.ifname }}", TAG+="systemd", ENV{SYSTEMD_WANTS}="nucleus-{{ role }}.service"
+{% endif %}
 {% endfor %}
 {% endfor %}

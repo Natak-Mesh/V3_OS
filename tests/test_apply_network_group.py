@@ -41,14 +41,17 @@ def test_restart_order_is_fixed(monkeypatch):
     calls = _record_restart(monkeypatch)
     _restart(NET_GROUP_ORDER)
     restarted = [c[2].removesuffix(".service") for c in calls if c[0] == "systemctl"]
-    assert restarted == ["nucleus-mesh", "hostapd", "brlan-setup", "babeld", "smcroute"]
+    assert restarted == ["nucleus-mesh", "nucleus-halow", "hostapd", "brlan-setup", "babeld", "smcroute"]
     assert restarted.index("hostapd") < restarted.index("brlan-setup")
+    # HaLow join is ordered after the primary mesh, before the routing daemons.
+    assert restarted.index("nucleus-mesh") < restarted.index("nucleus-halow")
+    assert restarted.index("nucleus-halow") < restarted.index("babeld")
 
 
 def test_group_order_has_no_duplicates_and_expected_members():
     assert NET_GROUP_ORDER == [
-        "systemd-networkd", "nucleus-mesh", "hostapd", "brlan-setup",
-        "babeld", "smcroute",
+        "systemd-networkd", "nucleus-mesh", "nucleus-halow", "hostapd",
+        "brlan-setup", "babeld", "smcroute",
     ]
 
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Nucleus Wi-Fi HaLow (802.11ah) 802.11s mesh bring-up (halow0)
+# Device-started: the generated udev rule (60-nucleus-usb.rules) renames the
+# Morse MM8108 netdev to halow0 and pulls this unit in via SYSTEMD_WANTS. BindsTo
+# stops it when the radio is unplugged; After orders it behind the interface and
+# networkd (which lays down the static IP + fe80 link-local).
+BindsTo=sys-subsystem-net-devices-halow0.device
+After=sys-subsystem-net-devices-halow0.device systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Rendered from /etc/nucleus/config.yaml by `nucleusctl apply`.
+ExecStart=/opt/nucleus/bin/nucleus-halow-up.sh
+
+[Install]
+# Normal start is via the udev SYSTEMD_WANTS; this covers an enable at install.
+WantedBy=multi-user.target

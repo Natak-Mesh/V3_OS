@@ -104,6 +104,12 @@ ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
 ufw allow in on wlan1
 ufw allow in on br-lan
 ufw allow in on tailscale0
+{% if halow_enabled %}
+# Wi-Fi HaLow mesh (halow0) — trusted like wlan1. These are persistent now,
+# replacing the ad-hoc `ufw allow in on wlan2` rules the manual bring-up left
+# (wiped by the next `ufw --force reset`).
+ufw allow in on {{ halow_iface }}
+{% endif %}
 {% if web_eth0_access %}
 # Web UI over ethernet (home LAN etc). nginx password-protects any request that
 # does not come from a trusted source net (mesh/br-lan/tailscale). Port 8080
@@ -149,10 +155,17 @@ fi
 # are still permitted by conntrack).
 ufw route allow in on br-lan out on eth0
 ufw route allow in on wlan1 out on eth0
+{% if halow_enabled %}
+ufw route allow in on {{ halow_iface }} out on eth0
+{% endif %}
 {% endif %}
 # Always allow mesh <-> LAN forwarding regardless of eth0 mode.
 ufw route allow in on br-lan out on wlan1
 ufw route allow in on wlan1 out on br-lan
+{% if halow_enabled %}
+ufw route allow in on br-lan out on {{ halow_iface }}
+ufw route allow in on {{ halow_iface }} out on br-lan
+{% endif %}
 ufw --force enable
 {% else %}
 # Firewall disabled in config (firewall.enabled: false) — turn UFW off entirely.
