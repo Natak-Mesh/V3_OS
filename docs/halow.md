@@ -1,10 +1,12 @@
 # Wi-Fi HaLow (802.11ah) USB radio — working notes
 
-Status: **EXPERIMENTAL, outside the config pipeline.** This is a design/record
-document for a manual bring-up, not a Nucleus subsystem yet. Nothing here is
-driven by `config.yaml`, `schema.py`, `apply`, or any systemd unit. It is **not
-linked from the README or the operator manual** and will not be until it is
-worked into the pipeline (see [Open items](#9-open-items)).
+Status: **EXPERIMENTAL on-box today; integration DECIDED, not yet built.**
+Sections 1–9 are the design/record of the current manual bring-up (nothing in
+them is driven by `config.yaml`, `schema.py`, `apply`, or a systemd unit — it
+all lives under `~natak/halow`). **[§10](#10-integration-plan-decided--implement-from-this-section)
+is the authoritative, agreed plan to fold HaLow into the pipeline** and is ready
+to implement in a fresh chat; the §9 open items are the problems it closes. Not
+linked from the README/operator manual until §10 lands.
 
 Proven so far: a two-node encrypted HaLow mesh between **0042** and **0052**,
 peer link `ESTAB`, bidirectional ping over `10.30.1.0/24`. Everything lives
@@ -240,14 +242,289 @@ Everything below is why this is not yet a Nucleus subsystem:
   `firmware_class/parameters/path` affects every driver's firmware lookup on the
   node; a real integration should stage files under `/lib/firmware/morse`.
 
-### Integration sketch (not yet decided)
+---
 
-HaLow would be a **third USB device class**, distinct from the two existing
-ones (RNode → `USB_DEVICES`/udev → `/dev/nucleus/rnode`; PTT → `PTT_DEVICES` in
-`voice/daemon.py`). It produces a *network interface*, not a `/dev` node. Likely
-pieces: a `halow:` schema block (enabled/channel/bandwidth), derived
-IP/opclass/mesh creds, a generated supplicant conf + bring-up script + networkd
-file + `nucleus-halow` unit, babeld + UFW inclusion of the HaLow interface, an
-`rf.py` on/off switch, and a build/deploy story for the out-of-tree driver.
-Address block proposed: `10.30.1.<id>/24` (confirm it's free).
+## 10. Integration plan (DECIDED — implement from this section)
+
+This section is the authoritative, agreed build plan for folding HaLow into the
+Nucleus config pipeline as a **third USB device class** (RNode → `USB_DEVICES`
+/udev → `/dev/nucleus/rnode`; PTT → `PTT_DEVICES` in `voice/daemon.py`; HaLow →
+a *network interface* `halow0`). Everything below is settled; a fresh chat can
+implement it end-to-end without re-litigating design choices.
+
+### 10.0 Decisions (do not re-open)
+
+1. **On by default.** `halow.enabled` defaults to **`true`**. On a node with no
+   radio this is inert: `nucleus-halow.service` is bound to the `halow0` device
+   and only runs while it exists; the babeld/UFW/smcroute/reticulum stanzas for
+   a missing interface sit idle.
+2. **Driver builds on the first `install.sh`.** The build runs unconditionally
+   whenever the artifacts are absent (first provisioning of a radio node). Once
+   built it is skipped via a stamp file; **DKMS** rebuilds the driver after a
+   kernel update. A later plain `install.sh` (incl. self-update) never rebuilds
+   unless a pinned tag changed or DKMS is missing the running kernel.
+3. **No multicast bridging between HaLow and WiFi.** smcroute forwards only
+   `br-lan↔wlan1` (existing) and `br-lan↔halow0` (new), each one-way (no-echo).
+   There is **no `wlan1↔halow0` smcroute route** — that avoids the cross-mesh
+   multicast storm entirely. Consequence: a HaLow-only node's *multicast*
+   (ATAK CoT, text, voice) does not reach WiFi-only nodes and vice-versa, even
+   through a dual-radio node. **Unicast still crosses** (Babel routes it over
+   whichever radio is up), so a node that loses WiFi stays reachable by unicast
+   over HaLow. Cross-mesh multicast relay is explicitly deferred (see §10.9).
+4. **Real HaLow numbers everywhere.** Config, API and UI use S1G channel numbers
+   (US 1–51) and bandwidth in MHz (1/2/4/8) — never the 5 GHz stand-ins from §6.
+   `iw`-sourced status values are converted back to S1G before display.
+5. **Messaging and voice run over BOTH radios** (send on each mesh iface, join
+   on each, dedupe the duplicate copy) — not via smcroute. This is what makes
+   HaLow actually carry app traffic, not just unicast IP.
+
+### 10.1 README rule compliance (checklist for the implementer)
+
+- `schema.py` is the **only** definition of HaLow config + derived values +
+  limits. API/CLI/renderer/daemons all read it. No second place for defaults.
+- Templates are **dumb**: they only substitute `render_context()` values. All
+  channel/op-class/validation logic lives in `schema.py`, unit-tested off-box.
+- **Idempotent apply**: every new file is write-if-changed; `nucleus-halow` is
+  restarted only when its inputs change; the service is enabled/disabled to
+  match `halow.enabled`.
+- **Generated artifacts are never git-tracked in place.** The udev rule,
+  networkd file, supplicant conf, up-script and modprobe conf are rendered by
+  `apply`. Only static units/scripts live under `system/`.
+- **New code loads config via `config.load()`.** `messaging/service.py` already
+  does; `voice/daemon.py` reads YAML directly today (known debt, README §1) —
+  the mesh-interface list it consumes must come from `config.load()`, chipping
+  away at that debt rather than adding a second bespoke reader.
+- `config.yaml` normalize must inject the new `halow:` block with defaults so
+  existing nodes gain it on `apply` (schema-default backfill, README §1).
+
+### 10.2 Schema (`nucleusd/schema.py`)
+
+- **USB registry gains a `kind`.** Change `USB_DEVICES` values so each role
+  carries its match kind: `tty` (serial → `/dev/nucleus/<role>`) or `net`
+  (network iface). Keep the RNode entry as `tty`. Add:
+  `halow` → kind `net`, id `("325b", "8100")`, fixed ifname `halow0`.
+  Update `test_render.py`/`usb-devices.md` and the one-role-per-id test.
+- **`HALOW_IFACE = "halow0"`** constant (parallels `RNODE_DEVICE_PATH`).
+- **US S1G channel table** (single source of truth; from
+  `morse_driver/dot11ah/s1g_channels_rules.c` `us_s1g_channels[]`):
+  - 1 MHz: odd channels **1,3,5,…,51**
+  - 2 MHz: **2,6,10,14,18,22,26,30,34,38,42,46,50**
+  - 4 MHz: **8,16,24,32,40,48**
+  - 8 MHz: **12,28,44**
+  Encode as `HALOW_CHANNELS: dict[int, tuple[int, ...]]` keyed by bandwidth MHz.
+- **Op-class per bandwidth (US):** `{1:68, 2:69, 4:70, 8:71}` →
+  `HALOW_OP_CLASS`. (Confirmed against the Morse hostap fork defaults —
+  `DEFAULT_MORSE_IBSS_OP_CLASS 71` is the 8 MHz case.)
+- **`HalowConfig(BaseModel)`** fields:
+  - `enabled: bool = True`
+  - `bandwidth_mhz: Literal[1,2,4,8] = 1`
+  - `channel: int = 27`
+  - `prim_1mhz_index: int = 0` (ge=0, le=7)
+  - `mcast_relay`: **omit for now** (deferred; see §10.9). Do not add a dead key.
+  - `@model_validator`: channel ∈ `HALOW_CHANNELS[bandwidth_mhz]`, else a clear
+    error listing valid channels; `prim_1mhz_index` range depends on bandwidth
+    (1 MHz→0 only; 2 MHz→0–1; 4 MHz→0–3; 8 MHz→0–7).
+- **Country gate:** only `US` is defined. In `NucleusConfig` validation, if
+  `halow.enabled` and `mesh.country != "US"`, raise (point at this doc).
+- **Derived values** (properties on `NucleusConfig`, like `mesh_ip`):
+  - `halow_ssid` = `f"{mesh.ssid}_halow"`
+  - `halow_ip` = `f"10.30.1.{node.id}"` (/24). **`10.30.1.0/24` is free** today
+    (only wlan1 `10.20.1.x`, br-lan `10.20.<id>.x`, eth0 `10.10.<id>.x` used).
+  - `halow_ipv6_ll` = `_ll_from_seed(f"{hostname}-halow")`
+  - `halow_op_class` = `HALOW_OP_CLASS[bandwidth_mhz]`
+  - `halow_freq_mhz` = `902 + 0.5 * channel` (display only; ch 27 = 915.5)
+  - `mesh_ifaces` = `["wlan1"] + (["halow0"] if halow.enabled else [])`
+    — consumed by messaging/voice and status.
+- **`render_context()` additions:** `halow_enabled`, `halow_iface`,
+  `halow_ssid`, `halow_password` (= `mesh.password`), `halow_country`
+  (= `mesh.country`), `halow_channel`, `halow_bandwidth_mhz`, `halow_op_class`,
+  `halow_prim_1mhz_index`, `halow_ip`, `halow_ipv6_ll`, `halow_802_ttl`
+  (reuse `mesh.mesh_802_ttl`). Also expose `HALOW_CHANNELS`/`HALOW_OP_CLASS`
+  under `_derived` so the future UI builds valid channel dropdowns from the
+  schema, never a hard-coded list.
+- **`config/config.yaml`:** add a commented `halow:` block (enabled/channel/
+  bandwidth_mhz/prim_1mhz_index) with the same defaults, documented in MHz +
+  S1G channel numbers.
+
+
+### 10.3 Generated files (new `TARGETS` in `apply.py` + templates)
+
+Named after their destination, per the repo convention:
+
+1. **`templates/60-nucleus-usb.rules.j2`** (EXISTING — extend): keep the `tty`
+   loop for serial roles; add a `net`-kind block. For the HaLow id emit a rule
+   that renames the Morse netdev to `halow0` and tags it so the service starts:
+   ```
+   SUBSYSTEM=="net", ACTION=="add", ATTRS{idVendor}=="325b", ATTRS{idProduct}=="8100", NAME="halow0", TAG+="systemd", ENV{SYSTEMD_WANTS}="nucleus-halow.service"
+   ```
+   (Driver matches via modalias `usb:v325Bp8100…`; after `depmod` the kernel
+   autoloads `morse` on plug, so no manual modprobe in the rule.) The existing
+   rules hardcode `SUBSYSTEM=="tty"` inside the loop — move that into the
+   per-role `kind` branch.
+2. **`templates/networkd/12-halow0.network.j2`** → `/etc/systemd/network/
+   12-halow0.network`: `[Match] Name=halow0`; `[Network] Address={{ halow_ip
+   }}/24` + `Address={{ halow_ipv6_ll }}/64`; `LinkLocalAddressing=no`,
+   `IPv6AcceptRA=no`, `ConfigureWithoutCarrier=yes` (mirror 10-wlan1).
+3. **`templates/wpa_supplicant-halow.conf.j2`** → `/etc/wpa_supplicant/
+   wpa_supplicant-halow.conf` (mode **0600**): ctrl_interface
+   `/run/wpa_supplicant_s1g`, `country`, `mesh_fwding=0`, one `network={…}`
+   with `ssid`, `mode=5`, `channel`, `op_class`, `country`,
+   `s1g_prim_1mhz_chan_index={{ halow_prim_1mhz_index }}`, `dtim_period=1`,
+   `beacon_int=100`, `key_mgmt=SAE`, `sae_password`, `ieee80211w=2`. (The proven
+   `mesh.conf` from §4, parameterised.)
+4. **`templates/nucleus-halow-up.sh.j2`** → `/opt/nucleus/bin/
+   nucleus-halow-up.sh` (mode 0755). Imperative bring-up, re-runnable (same
+   pattern/lessons as `nucleus-mesh-up.sh`):
+   - `nmcli dev set halow0 managed no` (and add `halow0` to
+     `system/networkmanager/unmanaged-devices.conf`).
+   - `sysctl -w net.ipv6.conf.halow0.keep_addr_on_down=1`.
+   - kill any stale `wpa_supplicant_s1g .*-i halow0`, wait, rm ctrl socket.
+   - `ip link set halow0 down; iw dev halow0 set type managed` (clears stale
+     mesh id, the `-114` lesson), then start
+     `/opt/nucleus/bin/wpa_supplicant_s1g -B -D nl80211 -i halow0 -c <conf>`.
+   - `networkctl reconfigure halow0`; sleep; `iw dev halow0 set mesh_param
+     mesh_fwding=0`; set `mesh_ttl`/`mesh_element_ttl` = `halow_802_ttl`.
+   - Firmware/modules are installed system-wide (§10.6), so **no** sysfs
+     firmware-path override and **no** `insmod` here.
+5. **`templates/nucleus-morse.conf.j2`** → `/etc/modprobe.d/
+   nucleus-morse.conf`: `options morse country="{{ halow_country }}"`.
+6. **`templates/babeld.conf.j2`** (EXTEND): when `halow_enabled`, add
+   `interface halow0 type wireless …` (copy the wlan1 line) and
+   `redistribute ip 10.30.1.0/24 allow`. babeld treats a missing iface as down,
+   so this is safe on radio-less nodes.
+7. **`templates/smcroute.conf.j2`** (EXTEND): when `halow_enabled`, for each
+   ATAK group add `mgroup from halow0 group G`, `mroute from halow0 group G to
+   br-lan`, `mroute from br-lan group G to halow0`. **Do not** add any
+   `wlan1↔halow0` mroute (decision §10.0.3).
+8. **`templates/nucleus-mesh-up.sh.j2`** (EXTEND, UFW block): when
+   `halow_enabled` add `ufw allow in on halow0`, `ufw route allow in on br-lan
+   out on halow0`, `ufw route allow in on halow0 out on br-lan`, and in WAN mode
+   `ufw route allow in on halow0 out on eth0`. These replace the ad-hoc,
+   non-persistent `ufw allow in on wlan2` rules currently live on 0042 (wiped by
+   the next `ufw --force reset`). nftables mcast-TTL mangle stays br-lan-only.
+9. **`templates/reticulum-config.j2`** (EXTEND): AutoInterface `devices`
+   includes `halow0` when `halow_enabled` (build the device list in
+   `render_context`; `reti_auto_device` stays wlan1).
+
+Add each to `apply.TARGETS` with the right unit tuple:
+`12-halow0.network` → (`systemd-networkd`,`nucleus-halow`); supplicant conf &
+up-script → (`nucleus-halow`,); `babeld.conf`/`smcroute.conf`/mesh-up already
+map to their units; `nucleus-morse.conf` → () (modprobe, no unit).
+
+### 10.4 Service + apply reconcile
+
+- **`system/systemd/nucleus-halow.service`** (static): `Type=oneshot`,
+  `RemainAfterExit=yes`, `BindsTo=sys-subsystem-net-devices-halow0.device`,
+  `After=sys-subsystem-net-devices-halow0.device systemd-networkd.service`,
+  `ExecStart=/opt/nucleus/bin/nucleus-halow-up.sh`, `WantedBy=multi-user.target`
+  (normal start is via the udev `SYSTEMD_WANTS`). `BindsTo` stops it when the
+  radio is unplugged.
+- **`apply._reconcile_halow(cfg)`** (new, called from `apply()` like
+  `_reconcile_meshtastic`): `_set_service("nucleus-halow", cfg.halow.enabled)`;
+  if the supplicant conf or up-script is in `result.changed` and enabled,
+  `_restart(["nucleus-halow"])` so a channel/bandwidth edit rejoins live (no
+  reboot, no module reload). Add `halow0` to `NETWORKD_LINKS` and append
+  `nucleus-halow` into the network-group restart ordering after `nucleus-mesh`.
+- **`install.sh` `systemctl enable` line:** add `nucleus-halow.service`.
+
+### 10.5 Messaging + voice over both radios
+
+- **`messaging/service.py`:** replace module-level `MCAST_IF = "wlan1"` with the
+  list from `config.load()` (schema `mesh_ifaces`). Open one TX socket per iface
+  (`IP_MULTICAST_IF` = that iface's IP) and join the group on each iface's IP; a
+  5 s re-check adds/drops `halow0` as it is hot-plugged. Existing `content_key`
+  dedupe (`store.py`) already collapses the duplicate copy — no wire change.
+- **`voice/daemon.py`:** same multi-iface TX/join (currently single
+  `self.mesh_ip` + `IP_MULTICAST_IF`). Pull the iface/IP list through
+  `config.load()` (reduces the direct-YAML debt). Add a **per-source sequence
+  check**: the header already carries `seq (I)` + `node_id`; track last-seen seq
+  per `node_id`, drop a seq already played, treat a large backward jump as a
+  sender restart. Suppresses the second (HaLow) copy a dual-radio sender emits.
+- Both daemons must tolerate `halow0` absent (radio-less nodes) — join failures
+  are already logged-and-continue.
+
+### 10.6 Driver build + deploy (`system/bin/nucleus-halow-build.sh`, `install.sh`)
+
+- **New `system/bin/nucleus-halow-build.sh`** — productionised `halow-setup.sh`:
+  - apt build deps (§2.4): `git build-essential pkg-config python3-yaml
+    libnl-3-dev libnl-genl-3-dev libnl-route-3-dev libssl-dev libusb-1.0-0-dev`
+    `+ linux-headers-$(uname -r)` if `/lib/modules/$(uname -r)/build` absent.
+  - Clone pinned tags into `/opt/nucleus/halow/src`: `morse_driver mm8108-2.1.0`,
+    `morse-firmware mm8108-2.0.0`, `hostap mm8108-2.1.0`, `morse_cli
+    mm8108-2.1.0`.
+  - **Driver via DKMS** so kernel updates auto-rebuild: write a `dkms.conf` with
+    `MAKE[0]` carrying the exact flags — `CONFIG_WLAN_VENDOR_MORSE=m
+    CONFIG_MORSE_USB=y CONFIG_MORSE_USER_ACCESS=y CONFIG_MORSE_VENDOR_COMMAND=y
+    CONFIG_MORSE_COUNTRY='"US"'` — and `BUILT_MODULE_NAME`/
+    `DEST_MODULE_LOCATION` for **both** `morse` and `dot11ah`; `dkms
+    add/build/install`; `depmod`. Lands modules in
+    `/lib/modules/<kver>/updates/dkms`, autoloads on plug (modalias).
+  - **Firmware → `/lib/firmware/morse/`** (`mm8108b2-*.bin` + `bcf_*.bin`),
+    killing the global sysfs path override (§9 open item).
+  - **Supplicant:** build `wpa_supplicant_s1g` (+`wpa_cli_s1g`) → `/opt/nucleus/
+    bin/`. `morse_cli` optional → `/opt/nucleus/bin/` if it builds.
+  - **Stamp:** `/opt/nucleus/halow/.built` with the four tags + `uname -r`.
+- **`install.sh` hook:** after the venv install, call the build script **when
+  artifacts are absent or the stamp/tags/kernel differ** — first `install.sh` on
+  a radio node builds (minutes, accepted); subsequent runs (incl.
+  `nucleus-update.sh`) are a fast stamp check, rebuilding only the changed
+  component. DKMS independently covers kernel bumps. No curl|sh; keep the build
+  tree under `/opt/nucleus/halow`.
+
+### 10.7 Status / UI data (`status.py`, `mesh_peers.py`, `web`)
+
+- `iface_addrs` default tuple gains `halow0`; `radios()` reports a `halow` entry
+  (enabled from config + live `halow0` presence). Convert any `iw` channel/width
+  to **S1G** via §6 / `HALOW_CHANNELS` before returning — never surface the
+  5 GHz stand-ins.
+- `mesh_peers.babel_peer_ips` / mesh-node tracking: include neighbours seen on
+  `halow0` so HaLow-only peers appear in status.
+- UI: no new page required now; the future channel/bandwidth control reads the
+  `_derived` channel map (§10.2). Web wiring itself is out of scope for the
+  first PR — schema + API already make it possible.
+
+### 10.8 Tests (`tests/`, real-format fixtures, one per behaviour)
+
+- `test_schema`: valid (ch27/1MHz, ch8/4MHz, ch12/8MHz …) and invalid
+  (ch27/2MHz, out-of-range `prim_1mhz_index`, non-US country) cases; derived
+  `halow_ip`/`halow_ssid`/`halow_op_class`/`halow_freq_mhz`.
+- `test_render`: rendered udev `net` rule (`NAME="halow0"`, `SYSTEMD_WANTS`),
+  `12-halow0.network`, `wpa_supplicant-halow.conf` (channel/op_class/prim idx),
+  babeld `interface halow0` + `10.30.1.0/24`, smcroute **has** br-lan↔halow0 and
+  **lacks** wlan1↔halow0, UFW lines, reticulum devices list, modprobe conf; and
+  that **all HaLow stanzas vanish** when `halow.enabled=false`.
+- `test_config_normalize`: a config without `halow:` gains it with defaults.
+- apply test: `_reconcile_halow` enables/disables + restart-on-conf-change
+  (monkeypatch subprocess, like `test_apply_rf`).
+- messaging: opens TX + joins on each iface in `mesh_ifaces`.
+- voice: duplicate `seq` from a `node_id` is dropped; backward jump = restart.
+- build script: stamp present + matching → no rebuild; tag/kernel change →
+  rebuild only the affected component (pure shell logic, mock git/dkms).
+
+### 10.9 Deferred (write as explicit TODO, do NOT build now)
+
+- **Cross-mesh multicast relay** (`wlan1↔halow0` via smcroute with a one-cross
+  TTL guard + per-node `halow.mcast_relay` flag). Deferred by decision §10.0.3;
+  revisit if HaLow-only nodes must exchange *multicast* (not just unicast) with
+  WiFi-only nodes.
+- **`rf.py` on/off for HaLow** (soft-block via rfkill like wlan1/AP).
+  `halow.enabled` + service reconcile already gives config-driven on/off.
+- **Non-US regulatory tables.** Add per-country `HALOW_CHANNELS`/op-class maps
+  when needed; until then the country gate (§10.2) fails fast.
+
+### 10.10 Cutover runbook (0042 then 0052)
+
+1. Stop the manual stack: `sudo ~natak/halow/halow-down.sh`; clear the global
+   override: `echo -n '' | sudo tee /sys/module/firmware_class/parameters/path`.
+2. From the repo: `sudo ./install.sh` (first run builds driver+fw+supplicant via
+   §10.6 — a few minutes), then `sudo nucleusctl apply`.
+3. Replug the radio (or `udevadm trigger`); confirm `halow0` exists, got
+   `10.30.1.<id>`, and `nucleus-halow.service` is active.
+4. Verify: `iw dev halow0 info` (ch 112/5560 == S1G 27), `iw dev halow0 station
+   dump` → `mesh plink: ESTAB`; `echo dump | nc ::1 33123` shows a neighbour on
+   `halow0`; `ufw status` lists `halow0` rules (persistent now).
+5. Repeat on 0052. Then regression-test failover: `sudo ip link set wlan1 down`
+   on one node and confirm unicast ping `10.30.1.<other>`, text messaging, and
+   PTT voice still work over HaLow between the two nodes.
+6. `nucleusctl validate` + `pytest` green off-box before merge.
 
