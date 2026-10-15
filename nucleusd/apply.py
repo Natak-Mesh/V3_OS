@@ -158,6 +158,9 @@ def _restart(units: list[str]) -> None:
     # networkd is reconfigured per-link, everything else restarted.
     for unit in units:
         if unit == "systemd-networkd":
+            # reload picks up new/removed .network files; reconfigure re-applies
+            # config to existing links (reconfigure alone won't load a new file).
+            subprocess.run(["networkctl", "reload"], check=False)
             subprocess.run(["networkctl", "reconfigure", *NETWORKD_LINKS], check=False)
         else:
             subprocess.run(["systemctl", "restart", f"{unit}.service"], check=False)

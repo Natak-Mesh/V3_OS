@@ -103,12 +103,17 @@ def test_usb_udev_rule():
     assert 'SYMLINK+="nucleus/rnode"' in r
     assert 'ENV{ID_MM_DEVICE_IGNORE}="1"' in r
     assert 'ENV{MTP_NO_PROBE}="1"' in r
-    # HaLow (net kind): Morse MM8108 renamed to halow0 + service wanted on add.
-    assert 'SUBSYSTEM=="net", ACTION=="add"' in r
+    # HaLow (net kind): Morse MM8108 renamed to halow0 + service wanted.
+    assert 'SUBSYSTEM=="net"' in r
     assert 'ATTRS{idVendor}=="325b"' in r
     assert 'ATTRS{idProduct}=="8100"' in r
     assert 'NAME="halow0"' in r
     assert 'ENV{SYSTEMD_WANTS}="nucleus-halow.service"' in r
+    # The net rule must NOT be gated on ACTION=="add": the interface rename
+    # emits a second "move" uevent and an add-only rule drops SYSTEMD_WANTS on
+    # it, so systemd never pulls in nucleus-halow on plug-in. Regression guard.
+    net_line = next(ln for ln in r.splitlines() if 'NAME="halow0"' in ln)
+    assert "ACTION==" not in net_line
 
 
 def test_meshtasticd_config():

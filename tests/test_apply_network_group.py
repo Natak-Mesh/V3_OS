@@ -27,12 +27,18 @@ class _Done:
     returncode = 0
 
 
-def test_networkd_links_are_reconfigured_not_reloaded(monkeypatch):
-    # Fix C: existing links need `networkctl reconfigure <links>`; `reload` only
-    # re-reads files and leaves live links on their old config.
+def test_networkd_links_are_reloaded_then_reconfigured(monkeypatch):
+    # Fix C: existing links need `networkctl reconfigure <links>`; reconfigure
+    # alone re-applies already-loaded files but will NOT pick up a new/removed
+    # .network file (e.g. 12-halow0.network added after boot), so halow0 stays
+    # unmanaged with no IP. `reload` must run first to load new files, then
+    # reconfigure to apply them to the live links. Regression guard.
     calls = _record_restart(monkeypatch)
     _restart(["systemd-networkd"])
-    assert calls == [["networkctl", "reconfigure", *NETWORKD_LINKS]]
+    assert calls == [
+        ["networkctl", "reload"],
+        ["networkctl", "reconfigure", *NETWORKD_LINKS],
+    ]
 
 
 def test_restart_order_is_fixed(monkeypatch):

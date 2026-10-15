@@ -19,7 +19,7 @@
 {% if dev.kind == "tty" %}
 SUBSYSTEM=="tty", ATTRS{idVendor}=="{{ vid }}", ATTRS{idProduct}=="{{ pid }}", SYMLINK+="nucleus/{{ role }}", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{MTP_NO_PROBE}="1", MODE="0666"
 {% elif dev.kind == "net" %}
-SUBSYSTEM=="net", ACTION=="add", ATTRS{idVendor}=="{{ vid }}", ATTRS{idProduct}=="{{ pid }}", NAME="{{ dev.ifname }}", TAG+="systemd", ENV{SYSTEMD_WANTS}="nucleus-{{ role }}.service"
+SUBSYSTEM=="net", ATTRS{idVendor}=="{{ vid }}", ATTRS{idProduct}=="{{ pid }}", NAME="{{ dev.ifname }}", TAG+="systemd", ENV{SYSTEMD_WANTS}="nucleus-{{ role }}.service"
 {% endif %}
 {% endfor %}
 {% endfor %}
