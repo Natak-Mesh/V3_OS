@@ -91,11 +91,10 @@ async function refreshHeader() {
       text = "DOWN";
       cls = "down";
     } else if (n > 0) {
-      // e.g. "1 node (wlan1+halow0)" or "3 nodes".
+      // Count distinct nodes only. Interfaces are intentionally NOT shown here:
+      // with several nodes each over different radios an interface list would be
+      // ambiguous. Per-node interfaces live in neighbour_nodes for the Monitor.
       text = n + (n === 1 ? " node" : " nodes");
-      if (n === 1 && nodes[0].ifaces && nodes[0].ifaces.length) {
-        text += " (" + nodes[0].ifaces.join("+") + ")";
-      }
       cls = "up";
     } else {
       text = "0 nodes";
