@@ -115,6 +115,8 @@ let TXR = null;
 let PEERS = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
+// Working copy of the HaLow settings (halow.*), edited on the HALOW page.
+let HL = null;
 // Working copy of the RNode LoRa radio settings (reticulum.rnode_*), edited on
 // the RETICULUM > INTERFACES > CONFIGURE RNODE page.
 let RN = null;
@@ -231,6 +233,12 @@ const PAGES = {
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
       ];
+      // HaLow is a plug-in USB radio: show its config entry only when the
+      // halow0 interface is present (radios.halow.present from live status).
+      const { ok: sok, d: st } = await jget("/api/v1/status");
+      if (sok && st.radios && st.radios.halow && st.radios.halow.present) {
+        items.push({ type: "nav", label: "HALOW MESH", to: "halow" });
+      }
       // TAK Server is optional; show the menu entry only when it's installed.
       const { ok, d: tak } = await jget("/api/v1/tak/status");
       if (ok && tak.installed) {
@@ -270,6 +278,33 @@ const PAGES = {
         h += `</table>`;
       }
       h += `</div>`;
+
+      // HaLow (802.11ah) peers — only when the halow0 radio is present. These
+      // are the radio-link neighbours (iw station dump), which Babel's route
+      // list can hide when the same node is cheaper over wlan1.
+      const halowRadio = (st.radios && st.radios.halow) || {};
+      if (halowRadio.present) {
+        const hp = st.halow_peers || [];
+        h += `<div class="content"><div class="page-title" style="padding-left:0">HaLow mesh nodes</div>`;
+        if (!hp.length) {
+          h += `<div class="off">no HaLow peers — this node sees no other node over halow0</div>`;
+        } else {
+          h += `<table><tr><th>Node</th><th>Link</th><th>Signal</th><th>State</th><th>Seen</th></tr>`;
+          hp.forEach((p) => {
+            const node = p.ipv4 || p.mac;
+            const link = p.link_pct != null ? p.link_pct + "%" : "—";
+            const sig = p.signal_avg_dbm != null ? p.signal_avg_dbm + " dBm" : "—";
+            const estab = p.plink === "ESTAB";
+            const seen = p.inactive_ms != null ? ago(Date.now() / 1000 - p.inactive_ms / 1000) : "—";
+            h += `<tr><td>${esc(node)}</td><td>${esc(link)}</td>` +
+              `<td>${esc(sig)}</td>` +
+              `<td class="${estab ? "ok" : "warn"}">${esc(p.plink || "—")}</td>` +
+              `<td class="${estab ? "ok" : "warn"}">${esc(seen)}</td></tr>`;
+          });
+          h += `</table>`;
+        }
+        h += `</div>`;
+      }
 
       // LoRa (Meshtastic) nodes heard over RF.
       const { d: md } = await jget(MB + "/nodes");
@@ -449,6 +484,93 @@ const PAGES = {
           onEnter: (S) => rfSetAp(S, !ap.on),
           action: sw(ap.on, (S) => rfSetAp(S, !ap.on)) },
       ] };
+    },
+  },
+
+  // HaLow (802.11ah) mesh: live status + config for the plug-in Morse USB radio.
+  // Only reachable when halow0 is present (the menu entry is hidden otherwise).
+  // Settings are CONFIG-BACKED: edits mutate HL (a copy of the halow block + a
+  // couple of shared mesh keys) and are saved as one read-modify-write PUT then
+  // applied, exactly like the Radios page. Valid channels/bandwidths come from
+  // _derived.halow_channels (the schema), never a list hardcoded here.
+  halow: {
+    title: "HaLow Mesh",
+    dynamic: 5000,
+    async build() {
+      const { d: st } = await jget("/api/v1/status");
+      const radio = (st.radios && st.radios.halow) || {};
+
+      // Load a working copy once (first open or after Reload). Keep the shared
+      // mesh SSID/password/country read-only here — they live on the Config page.
+      const { d: cfg } = await jget("/api/v1/config");
+      const der = cfg._derived || {};
+      const chans = der.halow_channels || {};
+      if (!HL) {
+        const hw = cfg.halow || {};
+        HL = {
+          enabled: hw.enabled !== false,
+          bandwidth_mhz: hw.bandwidth_mhz ?? 1,
+          channel: hw.channel ?? 27,
+          prim_1mhz_index: hw.prim_1mhz_index ?? 0,
+        };
+      }
+      // Bandwidth options are the keys of the schema channel map (1/2/4/8).
+      const bws = Object.keys(chans).map((k) => parseInt(k, 10)).sort((a, b) => a - b);
+      // Channel options for the currently-selected bandwidth.
+      const chOpts = (chans[HL.bandwidth_mhz] || []).slice();
+      // Primary 1 MHz index range is 0 .. bandwidth-1.
+      const maxPrim = Math.max(0, HL.bandwidth_mhz - 1);
+
+      const head = (title, sub) => ({ type: "content", html:
+        `<div class="content"><div class="page-title" style="padding-left:0">${esc(title)}</div>` +
+        (sub ? `<div class="hint" style="padding-left:0">${sub}</div>` : "") + `</div>` });
+
+      // Live status block.
+      const svc = radio.service || "unknown";
+      const statusHtml =
+        `<div class="content"><table>` +
+        `<tr><td>Interface</td><td class="${radio.present ? "ok" : "off"}">` +
+          `${radio.present ? "present (halow0)" : "absent"}</td></tr>` +
+        `<tr><td>IP</td><td>${esc(der.halow_ip || "—")}</td></tr>` +
+        `<tr><td>Channel</td><td>${radio.channel != null ? esc(radio.channel) : "—"}` +
+          `${radio.freq_mhz != null ? " (" + esc(radio.freq_mhz) + " MHz)" : ""}</td></tr>` +
+        `<tr><td>Bandwidth</td><td>${radio.bandwidth_mhz != null ? esc(radio.bandwidth_mhz) + " MHz" : "—"}</td></tr>` +
+        `<tr><td>Service</td><td class="${svc === "active" ? "ok" : "off"}">${esc(svc)}</td></tr>` +
+        `</table></div>`;
+
+      const items = [
+        head("Status"),
+        { type: "content", html: statusHtml },
+
+        head("Settings", "SSID, password and country are shared with the Wi-Fi " +
+          "mesh — change them on the Radio Configuration page."),
+        { type: "fselect", label: "Enabled", options: ["on", "off"],
+          value: HL.enabled ? "on" : "off",
+          onChange: (v) => HL.enabled = (v === "on") },
+        { type: "fselect", label: "Bandwidth (MHz)", options: bws,
+          value: HL.bandwidth_mhz,
+          onChange: (v) => {
+            HL.bandwidth_mhz = parseInt(v, 10);
+            // Keep channel/prim valid for the new bandwidth.
+            const opts = chans[HL.bandwidth_mhz] || [];
+            if (!opts.includes(HL.channel)) HL.channel = opts[0];
+            const mp = Math.max(0, HL.bandwidth_mhz - 1);
+            if (HL.prim_1mhz_index > mp) HL.prim_1mhz_index = mp;
+          } },
+        { type: "fselect", label: "Channel (S1G)", options: chOpts,
+          value: HL.channel, onChange: (v) => HL.channel = parseInt(v, 10) },
+        { type: "fnum", label: "Primary 1MHz index", value: HL.prim_1mhz_index,
+          min: 0, max: maxPrim, onChange: (v) => HL.prim_1mhz_index = v },
+
+        head("SSID (read-only)", `<b>${esc(der.halow_ssid || "—")}</b> · country ` +
+          `<b>${esc((cfg.mesh && cfg.mesh.country) || "—")}</b>`),
+
+        { type: "button", label: "» Save (not applied)", onEnter: saveHalow },
+        { type: "button", label: "» Dry-run apply", onEnter: (S) => applyCfg(S, true) },
+        { type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) },
+        { type: "button", label: "» Reload", onEnter: (S) => { HL = null; return S.reload(); } },
+      ];
+      return { items };
     },
   },
 
@@ -1662,6 +1784,23 @@ async function saveCfg(S) {
   prune(body.br_lan, ["subnet_prefix"]);
   prune(body.ap, ["name"]);
   const { ok, d } = await jsend("PUT", "/api/v1/config", body);
+  if (ok) S.msg("saved (" + d.hostname + ") — not yet applied");
+  else S.msg("validation failed: " + JSON.stringify(d.detail), false);
+}
+
+// Save the HaLow settings: read the full config, overlay the edited halow block,
+// PUT it back (validated by schema.py — bad channel/bandwidth/index is rejected
+// there, not here), then Apply reconciles nucleus-halow. Mirrors saveCfg.
+async function saveHalow(S) {
+  if (!HL) return S.msg("nothing to save", false);
+  const { d: cfg } = await jget("/api/v1/config");
+  delete cfg._derived;
+  cfg.halow = cfg.halow || {};
+  cfg.halow.enabled = HL.enabled;
+  cfg.halow.bandwidth_mhz = parseInt(HL.bandwidth_mhz, 10);
+  cfg.halow.channel = parseInt(HL.channel, 10);
+  cfg.halow.prim_1mhz_index = parseInt(HL.prim_1mhz_index, 10);
+  const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("saved (" + d.hostname + ") — not yet applied");
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);
 }

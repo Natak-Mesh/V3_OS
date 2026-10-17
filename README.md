@@ -11,7 +11,8 @@ memory is a first-class concern.
 **Subsystems:** Wi-Fi 802.11s mesh (babeld L3 routing, smcroute multicast, HWMP
 off), Meshtastic LoRa + ATAK CoT bridge, WiFi+LoRa text messaging, mesh PTT
 voice, Reticulum (rnsd), nginx-fronted web UI, UFW host firewall. Optional per
-node: Tailscale, official TAK Server **or** OpenTAKServer (either/or; see §4).
+node: Wi-Fi HaLow (802.11ah) second mesh on a Morse MM8108 USB radio (see §10),
+Tailscale, official TAK Server **or** OpenTAKServer (either/or; see §4).
 
 ---
 
@@ -69,7 +70,7 @@ Everything flows one direction, from one file:
 | `schema.py` | Config contract + derived values, incl. the `USB_DEVICES` registry (recognised USB hardware → `/dev/nucleus/<role>`). Pure — no filesystem/hardware. |
 | `config.py` | Load / atomically save / normalize `config.yaml`. The only module that should do config YAML I/O. |
 | `apply.py` | Render → diff → restart. `TARGETS` maps each template to its dest + affected units. Shared by API and CLI. |
-| `status.py` | Read-only runtime status: interfaces, unit states, Babel neighbours/routes (local-port 33123), mesh-node last-seen (5 s poll, lost nodes kept 15 min, in memory). |
+| `status.py` | Read-only runtime status: interfaces, unit states, Babel neighbours/routes (local-port 33123), HaLow radio-link peers (`halow0` via `iw`/`ip`, joined to Babel), mesh-node last-seen (5 s poll, lost nodes kept 15 min, in memory). |
 | `api.py` | FastAPI app (`nucleusd`, :8080): REST API + web UI, mounts the routers below. |
 | `cli.py` | `nucleusctl` — thin wrapper over the same modules. |
 | `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon. |
@@ -207,7 +208,9 @@ Derived from id `9`: mesh IP `10.20.1.9`, br-lan IP `10.20.9.1`, AP SSID
 `0009-nucleus-ap`, deterministic IPv6 link-locals.
 
 Other sections: `br_lan`, `eth0`, `meshtastic`, `messaging`, `voice`,
-`reticulum`, `web`, `firewall`, `tak`. Defaults and comments are in
+`reticulum`, `web`, `firewall`, `tak`, `halow` (optional 802.11ah USB radio;
+inert unless the radio is plugged in — see §10 / [docs/halow.md](docs/halow.md)).
+Defaults and comments are in
 [config/config.yaml](config/config.yaml); per-page detail in the
 [manual](docs/manual/README.md).
 

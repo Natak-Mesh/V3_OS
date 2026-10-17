@@ -81,6 +81,7 @@ Selectable item types: navigation links, action buttons, and editable fields
 | MESHTASTIC | [Meshtastic Radio](meshtastic.md) |
 | INTERFACES AND SERVICES | [System](system.md) |
 | RADIOS (RF ON/OFF) | [Radios](radios.md) |
+| HALOW MESH *(only when a HaLow USB radio is plugged in)* | [HaLow Mesh](halow.md) |
 | RETICULUM | [Reticulum](reticulum.md) |
 | TAILSCALE (VPN) | *(no dedicated page)* — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
 | RADIO CONFIGURATION | [Config](config.md) |

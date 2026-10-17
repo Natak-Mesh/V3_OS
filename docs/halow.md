@@ -479,9 +479,21 @@ map to their units; `nucleus-morse.conf` → () (modprobe, no unit).
   5 GHz stand-ins.
 - `mesh_peers.babel_peer_ips` / mesh-node tracking: include neighbours seen on
   `halow0` so HaLow-only peers appear in status.
-- UI: no new page required now; the future channel/bandwidth control reads the
-  `_derived` channel map (§10.2). Web wiring itself is out of scope for the
-  first PR — schema + API already make it possible.
+- UI: **DONE.** `status.collect()` returns `halow_peers` (the `halow0` 802.11s
+  radio link read directly via `iw dev halow0 station dump` + `ip -6 neigh`,
+  joined to the Babel neighbour on `halow0` for link % / cost / mesh IPv4). This
+  is reported separately from `babel_routes` because a node that is also on wlan1
+  gets its route installed over wlan1, so it would never show as a HaLow peer in
+  the route table even with the link up. `babel_routes` rows now also carry the
+  installing interface (`iface`).
+  - Web: a `HALOW MESH` menu entry + dedicated page appear only when
+    `radios.halow.present`. The Monitor page gains a **HaLow mesh nodes** table
+    (same gate). The page's channel/bandwidth controls read the `_derived`
+    channel map (§10.2) — the dropdowns are built from the schema, never a list
+    hardcoded in the UI — and save via the normal `PUT /config` + `POST /apply`
+    flow (schema validates channel/bandwidth/prim-index). SSID/password/country
+    stay read-only here (shared with the Wi-Fi mesh). See
+    [docs/manual/halow.md](manual/halow.md).
 
 ### 10.8 Tests (`tests/`, real-format fixtures, one per behaviour)
 

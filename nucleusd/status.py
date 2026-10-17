@@ -103,15 +103,126 @@ def babel_routes(port: int = 33123, timeout: float = 2.0) -> list[dict]:
             metric_int = int(metric)
         except ValueError:
             continue
+        try:
+            iface = parts[parts.index("if") + 1]
+        except (ValueError, IndexError):
+            iface = None
         direct = refmetric == "0"
         routes.append({
             "node": f"10.20.1.{octets[2]}",
             "via": None if direct else via_to_ipv4.get(via, via),
             "metric": metric_int,
             "direct": direct,
+            "iface": iface,
         })
     routes.sort(key=lambda r: r["node"])
     return routes
+
+
+def _halow_neigh_mac_to_ipv6() -> dict[str, str]:
+    """Map each halow0 neighbour's MAC -> its link-local IPv6 (fe80::…).
+
+    `ip -6 neigh show dev halow0` lists the IPv6 (incl. link-locals Babel peers
+    on) against the MAC the radio reports in `iw station dump`. We prefer the
+    link-local because that is the address Babel keys neighbours by, letting us
+    join the radio-link view to the routing view. Best-effort: {} on any error.
+    """
+    out: dict[str, str] = {}
+    try:
+        r = subprocess.run(["ip", "-6", "neigh", "show", "dev", "halow0"],
+                           capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return out
+    for line in r.stdout.splitlines():
+        f = line.split()
+        # e.g.: "fe80::b7dd:6ba5:30a1:8929 lladdr 0c:bf:74:00:29:07 router STALE"
+        if len(f) >= 3 and f[1] == "lladdr":
+            ipv6, mac = f[0], f[2].lower()
+            # Prefer a link-local (fe80::/10) over any global for the same MAC.
+            if mac not in out or ipv6.lower().startswith("fe80"):
+                out[mac] = ipv6
+    return out
+
+
+def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
+    """HaLow (halow0) 802.11s peers, one row per linked station.
+
+    Babel's route list cannot show HaLow-only neighbours when the same node is
+    cheaper over wlan1, so this reports the radio link directly. It joins three
+    read-only sources:
+      * `iw dev halow0 station dump` — MAC, mesh plink state, avg signal (dBm),
+        inactivity (ms since last frame) and connected time (s).
+      * `ip -6 neigh show dev halow0` — MAC -> link-local IPv6.
+      * Babel neighbours seen on halow0 — link % and cost, keyed by that IPv6,
+        plus the node's canonical mesh IPv4 (10.20.1.<id>) when resolvable.
+
+    Returns [] when halow0 is absent or iw is unavailable; never raises.
+    """
+    peers: list[dict] = []
+    try:
+        r = subprocess.run(["iw", "dev", "halow0", "station", "dump"],
+                           capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return peers
+    if r.returncode != 0:
+        return peers
+
+    mac_to_ipv6 = _halow_neigh_mac_to_ipv6()
+    # Babel neighbours on halow0, keyed by their link-local IPv6.
+    babel_by_ipv6: dict[str, dict] = {
+        n["address"]: n for n in babel_neighbours(port, timeout)
+        if n.get("if") == "halow0" and n.get("address")
+    }
+
+    cur: dict | None = None
+    for line in r.stdout.splitlines():
+        s = line.strip()
+        if s.startswith("Station "):
+            if cur is not None:
+                peers.append(cur)
+            cur = {"mac": s.split()[1].lower()}
+        elif cur is None:
+            continue
+        elif s.startswith("inactive time:"):
+            cur["inactive_ms"] = _int_before(s, "ms")
+        elif s.startswith("signal avg:"):
+            cur["signal_avg_dbm"] = _int_before(s, "dBm")
+        elif s.startswith("connected time:"):
+            cur["connected_s"] = _int_before(s, "seconds")
+        elif s.startswith("mesh plink:"):
+            cur["plink"] = s.split(":", 1)[1].strip()
+    if cur is not None:
+        peers.append(cur)
+
+    for p in peers:
+        ipv6 = mac_to_ipv6.get(p["mac"])
+        p["ipv6"] = ipv6
+        nb = babel_by_ipv6.get(ipv6) if ipv6 else None
+        p["link_pct"] = nb.get("link_pct") if nb else None
+        p["ipv4"] = nb.get("ipv4") if nb else None
+        try:
+            p["cost"] = int(nb["cost"]) if nb and "cost" in nb else None
+        except (ValueError, TypeError):
+            p["cost"] = None
+    peers.sort(key=lambda p: p.get("ipv4") or p["mac"])
+    return peers
+
+
+def _int_before(line: str, unit: str) -> int | None:
+    """Return the integer token immediately before `unit` in `line`, or None.
+
+    Tolerant of the `iw station dump` layout ("signal avg:\t-5 dBm") where the
+    value and its unit are the last two whitespace-separated tokens.
+    """
+    toks = line.replace("\t", " ").split()
+    if unit in toks:
+        i = toks.index(unit)
+        if i > 0:
+            try:
+                return int(toks[i - 1])
+            except ValueError:
+                return None
+    return None
 
 
 def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
@@ -349,6 +460,7 @@ def collect() -> dict:
         "babel_neighbours": babel_neighbours(),
         "babel_routes": routes,
         "mesh_nodes": mesh_nodes(),
+        "halow_peers": halow_peers(),
         "meshtastic": {"services": unit_states(
             ("meshtasticd", "cot-bridge", "nucleus-meshtastic-init"))},
         "radios": radios(),
