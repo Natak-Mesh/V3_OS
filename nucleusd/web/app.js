@@ -117,6 +117,10 @@ let PEERS = null;
 let CFG = null;
 // Working copy of the HaLow settings (halow.*), edited on the HALOW page.
 let HL = null;
+// Whether the HaLow channel-reference <details> is expanded. Kept here (not in
+// the DOM) so the page's 5s dynamic rebuild doesn't snap the section shut.
+let HL_REF_OPEN = false;
+window.__halowRefToggle = (open) => { HL_REF_OPEN = !!open; };
 // Working copy of the RNode LoRa radio settings (reticulum.rnode_*), edited on
 // the RETICULUM > INTERFACES > CONFIGURE RNODE page.
 let RN = null;
@@ -237,7 +241,7 @@ const PAGES = {
       // halow0 interface is present (radios.halow.present from live status).
       const { ok: sok, d: st } = await jget("/api/v1/status");
       if (sok && st.radios && st.radios.halow && st.radios.halow.present) {
-        items.push({ type: "nav", label: "HALOW MESH", to: "halow" });
+        items.push({ type: "nav", label: "HALOW", to: "halow" });
       }
       // TAK Server is optional; show the menu entry only when it's installed.
       const { ok, d: tak } = await jget("/api/v1/tak/status");
@@ -494,7 +498,7 @@ const PAGES = {
   // applied, exactly like the Radios page. Valid channels/bandwidths come from
   // _derived.halow_channels (the schema), never a list hardcoded here.
   halow: {
-    title: "HaLow Mesh",
+    title: "HaLow",
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
@@ -511,15 +515,52 @@ const PAGES = {
           enabled: hw.enabled !== false,
           bandwidth_mhz: hw.bandwidth_mhz ?? 1,
           channel: hw.channel ?? 27,
-          prim_1mhz_index: hw.prim_1mhz_index ?? 0,
         };
       }
       // Bandwidth options are the keys of the schema channel map (1/2/4/8).
       const bws = Object.keys(chans).map((k) => parseInt(k, 10)).sort((a, b) => a - b);
       // Channel options for the currently-selected bandwidth.
       const chOpts = (chans[HL.bandwidth_mhz] || []).slice();
-      // Primary 1 MHz index range is 0 .. bandwidth-1.
-      const maxPrim = Math.max(0, HL.bandwidth_mhz - 1);
+
+      // US S1G centre frequency for a channel number (matches schema:
+      // halow_freq_mhz -> 902 + 0.5 * channel). Used for the live readout and
+      // the reference table below — all MHz figures derive from the schema's
+      // channel list, nothing is hard-coded.
+      const centreMhz = (ch) => 902 + 0.5 * ch;
+      const fmtMhz = (n) => (Math.round(n * 10) / 10).toString();
+
+      // Live readout for the current selection: channel, centre and the band it
+      // occupies (centre ± bandwidth/2).
+      const curCentre = centreMhz(HL.channel);
+      const curLo = curCentre - HL.bandwidth_mhz / 2;
+      const curHi = curCentre + HL.bandwidth_mhz / 2;
+      const readoutHtml =
+        `<div class="content"><div class="hint" style="padding-left:0">` +
+        `ch <b>${esc(HL.channel)}</b> · <b>${esc(fmtMhz(curCentre))} MHz</b> centre · ` +
+        `${esc(fmtMhz(curLo))}–${esc(fmtMhz(curHi))} MHz · ` +
+        `<b>${esc(HL.bandwidth_mhz)} MHz</b> wide</div></div>`;
+
+      // Reference list (US band): one row per channel, built from the schema
+      // channel list — channel number, bandwidth, centre and occupied band.
+      // Collapsed into a <details> so it's out of the way until opened; the open
+      // state is held in HL_REF_OPEN so the 5s rebuild doesn't close it.
+      let refRows = "";
+      for (const bw of bws) {
+        for (const ch of (chans[bw] || [])) {
+          const c = centreMhz(ch);
+          refRows +=
+            `<tr><td>${esc(ch)}</td><td>${esc(bw)} MHz</td>` +
+            `<td>${esc(fmtMhz(c - bw / 2))}–${esc(fmtMhz(c + bw / 2))} MHz</td></tr>`;
+        }
+      }
+      const refHtml =
+        `<div class="content"><details${HL_REF_OPEN ? " open" : ""} ` +
+        `ontoggle="window.__halowRefToggle(this.open)">` +
+        `<summary>Channel reference (US)</summary>` +
+        `<table><tr><td><b>Ch</b></td><td><b>BW</b></td>` +
+        `<td><b>Band</b></td></tr>` + refRows + `</table></details>` +
+        `<div class="hint" style="padding-left:0">All nodes in the mesh must ` +
+        `use the same bandwidth and channel.</div></div>`;
 
       const head = (title, sub) => ({ type: "content", html:
         `<div class="content"><div class="page-title" style="padding-left:0">${esc(title)}</div>` +
@@ -551,24 +592,19 @@ const PAGES = {
           value: HL.bandwidth_mhz,
           onChange: (v) => {
             HL.bandwidth_mhz = parseInt(v, 10);
-            // Keep channel/prim valid for the new bandwidth.
+            // Keep channel valid for the new bandwidth.
             const opts = chans[HL.bandwidth_mhz] || [];
             if (!opts.includes(HL.channel)) HL.channel = opts[0];
-            const mp = Math.max(0, HL.bandwidth_mhz - 1);
-            if (HL.prim_1mhz_index > mp) HL.prim_1mhz_index = mp;
           } },
         { type: "fselect", label: "Channel (S1G)", options: chOpts,
           value: HL.channel, onChange: (v) => HL.channel = parseInt(v, 10) },
-        { type: "fnum", label: "Primary 1MHz index", value: HL.prim_1mhz_index,
-          min: 0, max: maxPrim, onChange: (v) => HL.prim_1mhz_index = v },
+        { type: "content", html: readoutHtml },
+        { type: "content", html: refHtml },
 
         head("SSID (read-only)", `<b>${esc(der.halow_ssid || "—")}</b> · country ` +
           `<b>${esc((cfg.mesh && cfg.mesh.country) || "—")}</b>`),
 
-        { type: "button", label: "» Save (not applied)", onEnter: saveHalow },
-        { type: "button", label: "» Dry-run apply", onEnter: (S) => applyCfg(S, true) },
-        { type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) },
-        { type: "button", label: "» Reload", onEnter: (S) => { HL = null; return S.reload(); } },
+        { type: "button", label: "» Deploy", onEnter: deployHalow },
       ];
       return { items };
     },
@@ -1788,21 +1824,29 @@ async function saveCfg(S) {
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);
 }
 
-// Save the HaLow settings: read the full config, overlay the edited halow block,
-// PUT it back (validated by schema.py — bad channel/bandwidth/index is rejected
-// there, not here), then Apply reconciles nucleus-halow. Mirrors saveCfg.
-async function saveHalow(S) {
-  if (!HL) return S.msg("nothing to save", false);
+// Deploy the HaLow settings in one step: read the full config, overlay the
+// edited halow block, PUT it back (validated by schema.py — bad channel/
+// bandwidth is rejected there), then apply to reconcile nucleus-halow and
+// reload the page from the live config. If nothing changed, says so.
+async function deployHalow(S) {
+  if (!HL) return S.msg("nothing to deploy", false);
   const { d: cfg } = await jget("/api/v1/config");
   delete cfg._derived;
   cfg.halow = cfg.halow || {};
   cfg.halow.enabled = HL.enabled;
   cfg.halow.bandwidth_mhz = parseInt(HL.bandwidth_mhz, 10);
   cfg.halow.channel = parseInt(HL.channel, 10);
-  cfg.halow.prim_1mhz_index = parseInt(HL.prim_1mhz_index, 10);
-  const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
-  if (ok) S.msg("saved (" + d.hostname + ") — not yet applied");
-  else S.msg("validation failed: " + JSON.stringify(d.detail), false);
+  const put = await jsend("PUT", "/api/v1/config", cfg);
+  if (!put.ok) return S.msg("validation failed: " + JSON.stringify(put.d.detail), false);
+  const { ok, d } = await jsend("POST", "/api/v1/apply?dry_run=false");
+  if (!ok) return S.msg("apply failed", false);
+  if (!d.changed.length) { S.msg("no changes — system in sync"); }
+  else {
+    S.msg("deployed — changed " + d.changed.length + " file(s); units: " +
+      (d.units_restarted.join(", ") || "none"));
+  }
+  HL = null;
+  return S.reload();
 }
 
 async function applyCfg(S, dry) {
