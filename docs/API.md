@@ -102,10 +102,17 @@ is the epoch time it last did. A lost node keeps its last route (`via`,
 `metric`, `direct`) until it ages out. Babel takes ~1 min to notice a dead
 node. If babeld itself is down, every node is reported lost. History is
 in-memory and resets when nucleusd restarts.
+
+`babel_neighbours` is one entry per Babel *link*, so a node reached over several
+radios (e.g. wlan1 + halow0) appears more than once. `neighbour_nodes` collapses
+these to one entry per distinct node (grouped by mesh IPv4), listing the
+interfaces it is reached over — this is what the web UI header counts, so the
+count reflects nodes, not links.
 ```bash
 curl -s http://localhost:8080/api/v1/status
 # {"interfaces":{"wlan1":{...}}, "services":{"babeld":"active",...},
 #  "babel_neighbours":[{"ipv4":"10.20.1.46","link_pct":94,...}],
+#  "neighbour_nodes":[{"node":"10.20.1.52","ifaces":["halow0","wlan1"]}],
 #  "mesh_nodes":[{"node":"10.20.1.46","via":null,"metric":256,"direct":true,
 #    "reachable":true,"last_seen":1790531600.2}], ...}
 ```

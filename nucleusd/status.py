@@ -254,6 +254,32 @@ def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     return neighbours
 
 
+def neighbour_nodes(nbrs: list[dict] | None = None) -> list[dict]:
+    """Collapse Babel neighbours to one row per *node*, not per link.
+
+    One node reached over several radios (e.g. wlan1 + halow0) yields several
+    Babel neighbour entries — one per interface — all resolving to the same mesh
+    IPv4. For the header's "connected" count we want distinct nodes, so we group
+    by IPv4 (falling back to the link-local address when no IPv4 is resolved yet)
+    and list every interface each node is reached over.
+
+    Returns: [{"node": "10.20.1.52", "ifaces": ["halow0", "wlan1"]}], sorted.
+    """
+    if nbrs is None:
+        nbrs = babel_neighbours()
+    by_node: dict[str, set[str]] = {}
+    for n in nbrs:
+        key = n.get("ipv4") or n.get("address") or n.get("id", "")
+        iface = n.get("if")
+        ifaces = by_node.setdefault(key, set())
+        if iface:
+            ifaces.add(iface)
+    return [
+        {"node": node, "ifaces": sorted(ifaces)}
+        for node, ifaces in sorted(by_node.items())
+    ]
+
+
 def _parse_link(out: dict) -> None:
     """Fill oper-state and bridge master from `ip -o link show`.
 
@@ -454,10 +480,12 @@ def radios() -> dict:
 def collect() -> dict:
     routes = babel_routes()
     _mesh_update(routes, time.time())
+    nbrs = babel_neighbours()
     return {
         "interfaces": iface_addrs(),
         "services": unit_states(),
-        "babel_neighbours": babel_neighbours(),
+        "babel_neighbours": nbrs,
+        "neighbour_nodes": neighbour_nodes(nbrs),
         "babel_routes": routes,
         "mesh_nodes": mesh_nodes(),
         "halow_peers": halow_peers(),
