@@ -103,6 +103,9 @@ const PSK_MODES = ["keep", "random", "default", "none"];
 
 // Working copy of the radio config, filled from the cached read.
 let M = null;
+// Last frequency descriptor from /meshtastic/freq (region/preset/name/slot →
+// band edges MHz). Drives the live readout on the Radio Configuration page.
+let MF = null;
 // Channel URL typed into the "Apply a channel URL" field — kept separate from M
 // so editing it never overwrites this node's displayed current channel URL.
 let MCHURL = "";
@@ -193,6 +196,77 @@ let VOICE_CH = null;
 let TS_AUTHKEY = "";
 let TS_ACCT = null;
 let TS_ACCT_IDS = {};
+
+// Build the frequency readout line from a /meshtastic/freq descriptor (F) and
+// the currently-selected slot. Shows the real band edges (low–high MHz) so the
+// operator never has to work out the frequency from the slot number. Pure
+// display — the numbers are computed server-side in lora_freq.
+function mtFreqLine(F) {
+  if (!F) return `<div class="content"><div class="hint" ` +
+    `style="padding-left:0">frequency: —</div></div>`;
+  const fmt = (n) => (Math.round(n * 1000) / 1000).toFixed(3);
+  let body;
+  if (F.low_mhz == null || F.high_mhz == null) {
+    body = `slot ${esc(F.resolved_slot)} out of range ` +
+      `(region allows 1–${esc(F.num_slots)})`;
+  } else {
+    const band = `${fmt(F.low_mhz)}–${fmt(F.high_mhz)} MHz`;
+    body = F.auto
+      ? `auto → slot <b>${esc(F.resolved_slot)}</b> · <b>${band}</b>`
+      : `slot <b>${esc(F.resolved_slot)}</b> · <b>${band}</b>`;
+  }
+  return `<div class="content"><div class="hint" style="padding-left:0">` +
+    `${body}</div></div>`;
+}
+
+// Fetch the frequency descriptor for the current working copy (M). Pure
+// server-side math — no radio access. Returns null on error so the readout
+// degrades to "—" rather than throwing.
+async function mtFetchFreq() {
+  if (!M) return null;
+  const q = new URLSearchParams({
+    region: M.region || "US",
+    preset: M.modem_preset || "LONG_FAST",
+    name: M.channel_name || "",
+    slot: String(M.frequency_slot ?? 0),
+  });
+  const { ok, d } = await jget(MB + "/freq?" + q.toString());
+  return ok ? d : null;
+}
+
+// Update the frequency readout row after a field edit. `refetch` is true when
+// region/preset/name changed (the slot grid or auto-slot may move, so we must
+// re-ask the server); false when only the slot number changed, where we can
+// recompute the band edges locally from the cached descriptor's grid. Repaints
+// via the shell's redraw (build is refused mid-edit).
+function mtRefreshFreq(freqRow, refetch) {
+  const shell = window.__shell;
+  if (!refetch && MF && MF.num_slots) {
+    // Slot-only change: recompute edges from the known grid (freq_start + bw).
+    const slot = M.frequency_slot | 0;
+    const bwMhz = MF.bandwidth_khz / 1000;
+    const resolved = slot || MF.resolved_slot;  // 0 keeps the auto slot
+    const F = Object.assign({}, MF, {
+      configured_slot: slot, auto: !slot, resolved_slot: resolved,
+    });
+    if (resolved >= 1 && resolved <= MF.num_slots) {
+      const centre = MF.freq_start_mhz + bwMhz / 2 + (resolved - 1) * bwMhz;
+      F.low_mhz = centre - bwMhz / 2;
+      F.high_mhz = centre + bwMhz / 2;
+    } else {
+      F.low_mhz = F.high_mhz = null;
+    }
+    freqRow.html = mtFreqLine(F);
+    shell && shell.redraw();
+    return;
+  }
+  // region/preset/name change: re-ask the server, then repaint.
+  mtFetchFreq().then((F) => {
+    if (F) MF = F;
+    freqRow.html = mtFreqLine(F);
+    shell && shell.redraw();
+  });
+}
 
 function meshFillFrom(cfg) {
   M = {
@@ -878,14 +952,27 @@ const PAGES = {
         onEnter: (S) => radioOp(S, MB + "/config/read", null, "read"),
       }];
       if (M) {
+        // Frequency readout row, updated live from the fields below. Load its
+        // initial descriptor (MF) once per build from the pure /freq endpoint.
+        MF = await mtFetchFreq();
+        const freqRow = { type: "content", html: mtFreqLine(MF), _freq: true };
+        // Slot max follows the region/preset grid (MF.num_slots), so narrow
+        // regions and 125 kHz presets are bounded correctly instead of a fixed
+        // guess. Fall back to 104 until the first descriptor loads.
+        const slotMax = (MF && MF.num_slots) || 104;
         items.push(
           { type: "ftext", key: "owner", label: "Long name", value: M.owner, max: 39, onChange: (v) => M.owner = v },
           { type: "ftext", key: "owner_short", label: "Short name", value: M.owner_short, max: 4, onChange: (v) => M.owner_short = v },
-          { type: "fselect", key: "modem_preset", label: "Modem preset", options: MODEMS, value: M.modem_preset, onChange: (v) => M.modem_preset = v },
-          { type: "fnum", key: "frequency_slot", label: "Freq slot (0=auto)", value: M.frequency_slot, min: 0, max: 104, onChange: (v) => M.frequency_slot = v },
-          { type: "ftext", key: "channel_name", label: "Channel name", value: M.channel_name, max: 11, color: "accent", onChange: (v) => M.channel_name = v },
+          { type: "fselect", key: "modem_preset", label: "Modem preset", options: MODEMS, value: M.modem_preset,
+            onChange: (v) => { M.modem_preset = v; mtRefreshFreq(freqRow, true); } },
+          { type: "fnum", key: "frequency_slot", label: "Freq slot (0=auto)", value: M.frequency_slot, min: 0, max: slotMax,
+            onChange: (v) => { M.frequency_slot = v; mtRefreshFreq(freqRow, false); } },
+          freqRow,
+          { type: "ftext", key: "channel_name", label: "Channel name", value: M.channel_name, max: 11, color: "accent",
+            onChange: (v) => { M.channel_name = v; mtRefreshFreq(freqRow, true); } },
           { type: "fselect", key: "psk_mode", label: "Encryption key", options: PSK_MODES, value: M.psk_mode, color: "accent", onChange: (v) => M.psk_mode = v },
-          { type: "fselect", key: "region", label: "Region", options: REGIONS, value: M.region, color: "accent", onChange: (v) => M.region = v },
+          { type: "fselect", key: "region", label: "Region", options: REGIONS, value: M.region, color: "accent",
+            onChange: (v) => { M.region = v; mtRefreshFreq(freqRow, true); } },
           { type: "fnum", key: "hop_limit", label: "Hop limit", value: M.hop_limit, min: 1, max: 7, color: "warn", onChange: (v) => M.hop_limit = v },
           { type: "fnum", key: "tx_power", label: "TX power (dBm)", value: M.tx_power, min: 0, max: 30, color: "warn", onChange: (v) => M.tx_power = v },
           { type: "fselect", key: "role", label: "Role", options: ROLES, value: M.role, color: "warn", onChange: (v) => M.role = v },

@@ -62,6 +62,17 @@ def config_cached() -> dict:
     return mx.config_cached()
 
 
+@router.get("/freq")
+def freq(region: str = "US", preset: str = "LONG_FAST",
+         name: str = "", slot: int = 0) -> dict:
+    """Frequency readout (slot → band edges MHz) for an unsaved selection.
+
+    Pure math — lets the Radio Configuration page preview the real frequency of
+    a region/preset/name/slot without touching the radio.
+    """
+    return _handle(mx.freq_describe, region, preset, name, slot)
+
+
 @router.get("/config/op-status")
 def op_status() -> dict:
     return mx.config_op_status()

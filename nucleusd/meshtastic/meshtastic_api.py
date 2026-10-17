@@ -26,6 +26,8 @@ import threading
 import time
 from contextlib import contextmanager
 
+from . import lora_freq
+
 MESH_CONF_PATH = os.environ.get("NUCLEUS_CONFIG", "/etc/nucleus/config.yaml")
 
 # meshtastic CLI invoked as a module — mesh-web.service's PATH does not
@@ -390,10 +392,21 @@ def _validate_changes(changes):
             v = int(changes['frequency_slot'])
         except (TypeError, ValueError):
             return 'Frequency slot must be a number'
-        # 0 = auto (derive slot from channel name hash). Upper bound
-        # depends on region/preset; 104 is the widest case (LORA_24).
-        if not 0 <= v <= 104:
-            return 'Frequency slot must be 0-104 (0 = auto)'
+        # 0 = auto (derive slot from channel name hash). The upper bound is the
+        # slot count for the region+preset being set (falling back to the
+        # cached values), computed once in lora_freq — not a fixed guess.
+        cached = _read_cache() or {}
+        region = str(changes.get('region', cached.get('region', 'US')))
+        preset = str(changes.get('modem_preset',
+                                 cached.get('modem_preset', 'LONG_FAST')))
+        try:
+            n = lora_freq.num_slots(preset, region)
+        except KeyError:
+            n = 0
+        if n <= 0:
+            n = 104
+        if not 0 <= v <= n:
+            return f'Frequency slot must be 0-{n} (0 = auto)'
     if 'psk' in changes:
         v = str(changes['psk']).strip()
         if not v:
@@ -860,9 +873,45 @@ class RadioNotReady(Exception):
     """404 — no cached config / channel URL yet."""
 
 
+def freq_describe(region, preset, channel_name='', slot=0):
+    """Frequency readout (slot → band edges MHz) for a region/preset/name/slot.
+
+    Pure math (lora_freq) — no radio access. Lets the UI preview the real
+    frequency of an unsaved selection as the operator steps through slots.
+    """
+    region = str(region or 'US')
+    preset = str(preset or 'LONG_FAST')
+    if region not in lora_freq.REGIONS:
+        raise RadioBadRequest(f'Invalid region: {region}')
+    if preset not in lora_freq.PRESET_BW_KHZ:
+        raise RadioBadRequest(f'Invalid modem preset: {preset}')
+    try:
+        slot = int(slot or 0)
+    except (TypeError, ValueError):
+        raise RadioBadRequest('Frequency slot must be a number')
+    return lora_freq.describe(region, preset, str(channel_name or ''), slot)
+
+
 def config_cached():
-    """Return the last-read radio config (instant — no radio access)."""
-    return {'config': _read_cache(), 'busy': _config_lock.locked()}
+    """Return the last-read radio config (instant — no radio access).
+
+    The cached config is augmented with a `frequency` block (slot → band edges
+    in MHz) derived from its region/preset/channel name, so the UI can show the
+    radio's real frequency without the operator doing the slot math.
+    """
+    cfg = _read_cache()
+    if cfg:
+        try:
+            cfg = dict(cfg)
+            cfg['frequency'] = lora_freq.describe(
+                cfg.get('region', 'US'),
+                cfg.get('modem_preset', 'LONG_FAST'),
+                cfg.get('channel_name', ''),
+                int(cfg.get('frequency_slot', 0) or 0),
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+    return {'config': cfg, 'busy': _config_lock.locked()}
 
 
 def config_op_status():
