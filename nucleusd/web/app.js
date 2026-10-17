@@ -79,17 +79,25 @@ async function refreshHeader() {
     const wlan1 = (st.interfaces && st.interfaces.wlan1) || {};
     const ip = (wlan1.addrs && wlan1.addrs[0]) ? wlan1.addrs[0].split("/")[0] : "—";
     const meshSvc = (st.services && st.services["nucleus-mesh"]) || "unknown";
-    const nbrs = (st.babel_neighbours || []).length;
+    // Count distinct NODES, not Babel links: a single node reached over several
+    // radios (wlan1 + halow0) is one entry in neighbour_nodes but several in
+    // babel_neighbours. The header must not read as "N other nodes" when it is
+    // really one node over N interfaces.
+    const nodes = st.neighbour_nodes || [];
+    const n = nodes.length;
     const el = document.getElementById("h-mesh");
     let text, cls;
     if (meshSvc !== "active") {
       text = "DOWN";
       cls = "down";
-    } else if (nbrs > 0) {
-      text = nbrs + " connected";
+    } else if (n > 0) {
+      // Count distinct nodes only. Interfaces are intentionally NOT shown here:
+      // with several nodes each over different radios an interface list would be
+      // ambiguous. Per-node interfaces live in neighbour_nodes for the Monitor.
+      text = n + (n === 1 ? " node" : " nodes");
       cls = "up";
     } else {
-      text = "0 connected";
+      text = "0 nodes";
       cls = "warn";
     }
     el.textContent = text;

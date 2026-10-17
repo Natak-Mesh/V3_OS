@@ -156,6 +156,55 @@ def test_two_neighbours_distinct_ipv4(monkeypatch):
     assert by_addr["fe80::aaaa"] != by_addr["fe80::bbbb"]
 
 
+# One node (id 52) reached over BOTH radios: Babel lists it twice — once on
+# halow0, once on wlan1 — both resolving to 10.20.1.52. The header must count
+# this as ONE node, not two. Real-format dump from node 42 (0042-nucleus).
+BABEL_DUMP_MULTILINK = (
+    "BABEL 1.0\n"
+    "version babeld-1.13.1\n"
+    "host 0042-nucleus\n"
+    "my-id 2e:cf:67:ff:fe:6d:8b:b6\n"
+    "ok\n"
+    "add interface wlan1 up true ipv6 fe80::b2 ipv4 10.20.1.42\n"
+    "add interface halow0 up true ipv6 fe80::h0 ipv4 10.20.1.42\n"
+    "add neighbour 557b1b35d0 address fe80::b7dd:6ba5:30a1:8929 if halow0 "
+    "reach ffff ureach 0000 rxcost 256 txcost 292 cost 292\n"
+    "add neighbour 557b1b1650 address fe80::2ca2:848:8a70:d32f if wlan1 "
+    "reach ffff ureach 0000 rxcost 256 txcost 256 cost 256\n"
+    # node 52 originates its own /24 via both link-locals
+    "add route r1 prefix 10.20.52.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:52 metric 292 refmetric 0 "
+    "via fe80::b7dd:6ba5:30a1:8929 if halow0\n"
+    "add route r2 prefix 10.20.52.0/24 from ::/0 installed no "
+    "id 00:00:00:00:00:00:00:52 metric 256 refmetric 0 "
+    "via fe80::2ca2:848:8a70:d32f if wlan1\n"
+    "ok\n"
+)
+
+
+def test_neighbour_nodes_collapses_multilink(monkeypatch):
+    """One node over wlan1+halow0 is ONE node, listing both interfaces."""
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(BABEL_DUMP_MULTILINK)())
+    nbrs = status.babel_neighbours()
+    # Two Babel link entries...
+    assert len(nbrs) == 2
+    # ...collapse to one node reached over both radios.
+    nodes = status.neighbour_nodes(nbrs)
+    assert len(nodes) == 1
+    assert nodes[0]["node"] == "10.20.1.52"
+    assert nodes[0]["ifaces"] == ["halow0", "wlan1"]
+
+
+def test_neighbour_nodes_two_distinct(monkeypatch):
+    """Two different nodes stay two nodes."""
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(BABEL_DUMP_TWO)())
+    nodes = status.neighbour_nodes(status.babel_neighbours())
+    assert len(nodes) == 2
+    assert {n["node"] for n in nodes} == {"10.20.1.5", "10.20.1.7"}
+
+
 # ── Mesh node last-seen tracker ──
 def _route(node, direct=True, via=None, metric=256):
     return {"node": node, "via": via, "metric": metric, "direct": direct}
