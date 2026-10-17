@@ -30,6 +30,10 @@
       m.className = "msg " + (text ? (ok ? "ok" : "err") : "");
     },
     reload() { return build(true); },
+    // Repaint the current item model without rebuilding it. For live readouts
+    // that mutate an item's html from an async handler while a field is being
+    // edited (build(true) is refused mid-edit).
+    redraw() { render(); },
     // Navigate to another page, optionally passing params (read as
     // state.params in the target page's build()).
     go(pageKey, params = null) { return go(pageKey, true, params); },

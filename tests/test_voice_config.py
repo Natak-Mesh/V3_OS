@@ -129,6 +129,72 @@ def test_schema_tx_cleanup_default_true():
     assert VoiceConfig().tx_cleanup is True
 
 
+# ── HaLow: multi-iface mesh list + per-source seq dedupe ───────────────────
+def test_load_config_mesh_ifaces_includes_halow(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path, """
+        node:
+          id: 42
+        mesh:
+          subnet_prefix: 10.20.1
+        halow:
+          enabled: true
+        voice:
+          channel: 1
+    """)
+    monkeypatch.setattr(daemon, "CONFIG_YAML", cfg_path)
+    cfg = daemon.load_config()
+    assert cfg["MESH_IFACES"] == "wlan1:10.20.1.42,halow0:10.30.1.42"
+
+
+def test_load_config_mesh_ifaces_wlan1_only_when_halow_off(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path, """
+        node:
+          id: 42
+        mesh:
+          subnet_prefix: 10.20.1
+        halow:
+          enabled: false
+        voice:
+          channel: 1
+    """)
+    monkeypatch.setattr(daemon, "CONFIG_YAML", cfg_path)
+    assert daemon.load_config()["MESH_IFACES"] == "wlan1:10.20.1.42"
+
+
+def _bare_daemon():
+    """A VoiceDaemon instance with just the seq-dedupe state wired (no __init__)."""
+    import threading
+    d = daemon.VoiceDaemon.__new__(daemon.VoiceDaemon)
+    d._rx_last_seq = {}
+    d._rx_seq_lock = threading.Lock()
+    return d
+
+
+def test_seq_duplicate_dropped_from_same_node():
+    d = _bare_daemon()
+    # First seq from node 7 is new; the same seq (second-radio copy) is a dup.
+    assert d._seq_is_duplicate(7, 100) is False
+    assert d._seq_is_duplicate(7, 100) is True
+    # A new, higher seq advances the watermark.
+    assert d._seq_is_duplicate(7, 101) is False
+    # An older seq (already played) is dropped.
+    assert d._seq_is_duplicate(7, 101) is True
+
+
+def test_seq_tracked_per_node():
+    d = _bare_daemon()
+    assert d._seq_is_duplicate(1, 5) is False
+    # A different node's identical seq is independent (not a dup).
+    assert d._seq_is_duplicate(2, 5) is False
+
+
+def test_seq_large_backward_jump_is_sender_restart():
+    d = _bare_daemon()
+    assert d._seq_is_duplicate(7, 5_000_000) is False
+    # Sender rebooted and reset tx_seq to 0: a huge backward jump is accepted.
+    assert d._seq_is_duplicate(7, 0) is False
+
+
 # ── MicCleanup (shared HPF + WebRTC NS mic conditioner) ────────
 def _tone_frame(amp=8000):
     """One 640-byte S16_LE 16 kHz 20 ms frame (FRAME_SAMPLES samples)."""

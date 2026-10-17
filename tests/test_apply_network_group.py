@@ -27,12 +27,18 @@ class _Done:
     returncode = 0
 
 
-def test_networkd_links_are_reconfigured_not_reloaded(monkeypatch):
-    # Fix C: existing links need `networkctl reconfigure <links>`; `reload` only
-    # re-reads files and leaves live links on their old config.
+def test_networkd_links_are_reloaded_then_reconfigured(monkeypatch):
+    # Fix C: existing links need `networkctl reconfigure <links>`; reconfigure
+    # alone re-applies already-loaded files but will NOT pick up a new/removed
+    # .network file (e.g. 12-halow0.network added after boot), so halow0 stays
+    # unmanaged with no IP. `reload` must run first to load new files, then
+    # reconfigure to apply them to the live links. Regression guard.
     calls = _record_restart(monkeypatch)
     _restart(["systemd-networkd"])
-    assert calls == [["networkctl", "reconfigure", *NETWORKD_LINKS]]
+    assert calls == [
+        ["networkctl", "reload"],
+        ["networkctl", "reconfigure", *NETWORKD_LINKS],
+    ]
 
 
 def test_restart_order_is_fixed(monkeypatch):
@@ -41,14 +47,17 @@ def test_restart_order_is_fixed(monkeypatch):
     calls = _record_restart(monkeypatch)
     _restart(NET_GROUP_ORDER)
     restarted = [c[2].removesuffix(".service") for c in calls if c[0] == "systemctl"]
-    assert restarted == ["nucleus-mesh", "hostapd", "brlan-setup", "babeld", "smcroute"]
+    assert restarted == ["nucleus-mesh", "nucleus-halow", "hostapd", "brlan-setup", "babeld", "smcroute"]
     assert restarted.index("hostapd") < restarted.index("brlan-setup")
+    # HaLow join is ordered after the primary mesh, before the routing daemons.
+    assert restarted.index("nucleus-mesh") < restarted.index("nucleus-halow")
+    assert restarted.index("nucleus-halow") < restarted.index("babeld")
 
 
 def test_group_order_has_no_duplicates_and_expected_members():
     assert NET_GROUP_ORDER == [
-        "systemd-networkd", "nucleus-mesh", "hostapd", "brlan-setup",
-        "babeld", "smcroute",
+        "systemd-networkd", "nucleus-mesh", "nucleus-halow", "hostapd",
+        "brlan-setup", "babeld", "smcroute",
     ]
 
 

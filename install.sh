@@ -95,6 +95,7 @@ done
 
 echo "==> static system files"
 install -m 644 "$REPO/system/systemd/nucleus-mesh.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-halow.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-rf.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/brlan-setup.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleusd.service" /etc/systemd/system/
@@ -143,6 +144,16 @@ echo "==> OpenTAKServer fixup tooling (inert unless tak.variant=opentakserver)"
 # config.yaml sets tak.variant=opentakserver.
 install -m 755 "$REPO/system/bin/nucleus-ots-fixup.sh" "$OPT/bin/nucleus-ots-fixup.sh"
 ln -sf "$OPT/bin/nucleus-ots-fixup.sh" /usr/local/bin/nucleus-ots-fixup.sh
+
+echo "==> Wi-Fi HaLow driver/firmware/supplicant (Morse MM8108)"
+# Build + install the out-of-tree Morse driver (via DKMS), firmware and the Morse
+# wpa_supplicant_s1g. The script is a fast no-op when its stamp matches the pinned
+# tags + running kernel, so it only does real work on a first install on a HaLow
+# node or when a tag/kernel changed. DKMS independently rebuilds the driver on
+# kernel bumps. See docs/halow.md §10.6. Failure is non-fatal: a node without the
+# radio still installs cleanly (the HaLow service is inert without halow0).
+install -m 755 "$REPO/system/bin/nucleus-halow-build.sh" "$OPT/bin/nucleus-halow-build.sh"
+"$OPT/bin/nucleus-halow-build.sh" || echo "WARNING: HaLow build failed — HaLow mesh will be unavailable until it succeeds"
 
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
@@ -194,7 +205,7 @@ fi
 # avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
 # :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
 systemctl enable avahi-daemon nginx
-systemctl enable systemd-networkd nucleus-rf.service nucleus-mesh.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
+systemctl enable systemd-networkd nucleus-rf.service nucleus-mesh.service nucleus-halow.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
 
 # Restart the always-on app daemons so a code-only re-install (new package in the
 # venv) actually takes effect — enabling alone won't reload a running process.

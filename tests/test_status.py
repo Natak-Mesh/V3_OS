@@ -235,3 +235,109 @@ def test_dormant_mesh_without_lower_up_stays_dormant(monkeypatch):
     out = status.iface_addrs()
     # No LOWER_UP -> the radio really is down, keep DORMANT (warn, not ok).
     assert out["wlan1"]["oper_state"] == "DORMANT"
+
+
+# ── HaLow (halow0) peers ──
+# Real-format captures from 0042: `iw dev halow0 station dump`, `ip -6 neigh
+# show dev halow0`, and the babeld dump (neighbour on halow0 + its originated
+# /24, so the link-local resolves to the node's mesh IPv4). The HaLow link is
+# cheaper-than-wlan1 here only in the babel neighbour view; the point is that the
+# radio-link station is reported even when Babel installs the route over wlan1.
+HALOW_STATION_DUMP = (
+    "Station 0c:bf:74:00:29:07 (on halow0)\n"
+    "\tinactive time:\t96 ms\n"
+    "\trx bytes:\t1532182\n"
+    "\trx packets:\t15601\n"
+    "\ttx bytes:\t6612\n"
+    "\tsignal:  \t-6 dBm\n"
+    "\tsignal avg:\t-5 dBm\n"
+    "\tmesh plink:\tESTAB\n"
+    "\tconnected time:\t841 seconds\n"
+)
+HALOW_NEIGH = (
+    "10.30.1.52 lladdr 0c:bf:74:00:29:07 STALE\n"
+    "fe80::b7dd:6ba5:30a1:8929 lladdr 0c:bf:74:00:29:07 router STALE\n"
+)
+HALOW_BABEL_DUMP = (
+    "BABEL 1.0\n"
+    "ok\n"
+    "add interface halow0 up true ipv6 fe80::2770 ipv4 10.30.1.42\n"
+    "add neighbour 557b1b35d0 address fe80::b7dd:6ba5:30a1:8929 if halow0 "
+    "reach 9ff7 ureach 0000 rxcost 512 txcost 256 cost 512\n"
+    # node 52 originates its br-lan /24 over halow0 -> link-local resolves to
+    # its canonical mesh IPv4 10.20.1.52.
+    "add route r1 prefix 10.20.52.0/24 from ::/0 installed yes "
+    "id 00:00:00:00:00:00:00:52 metric 512 refmetric 0 "
+    "via fe80::b7dd:6ba5:30a1:8929 if halow0\n"
+    "ok\n"
+)
+
+
+def _fake_halow_run(cmd, **kw):
+    if "station" in cmd:
+        return subprocess.CompletedProcess(cmd, 0, stdout=HALOW_STATION_DUMP, stderr="")
+    if "neigh" in cmd:
+        return subprocess.CompletedProcess(cmd, 0, stdout=HALOW_NEIGH, stderr="")
+    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+
+def test_halow_peers_joins_radio_babel_and_neigh(monkeypatch):
+    monkeypatch.setattr(status.subprocess, "run", _fake_halow_run)
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(HALOW_BABEL_DUMP)())
+    peers = status.halow_peers()
+    assert len(peers) == 1
+    p = peers[0]
+    assert p["mac"] == "0c:bf:74:00:29:07"
+    assert p["plink"] == "ESTAB"
+    assert p["signal_avg_dbm"] == -5
+    assert p["inactive_ms"] == 96
+    assert p["connected_s"] == 841
+    assert p["ipv6"] == "fe80::b7dd:6ba5:30a1:8929"
+    # Joined to Babel: link % (9ff7 -> bits set / 16) + cost, and the node's
+    # canonical mesh IPv4 (10.20.1.52), not the HaLow-subnet address.
+    assert p["ipv4"] == "10.20.1.52"
+    assert p["cost"] == 512
+    assert p["link_pct"] == round(bin(0x9FF7).count("1") / 16 * 100)
+
+
+def test_halow_peers_absent_radio(monkeypatch):
+    """No halow0: iw exits non-zero -> no peers, never raises."""
+    def fail(cmd, **kw):
+        if "station" in cmd:
+            return subprocess.CompletedProcess(cmd, 237, stdout="",
+                                               stderr="command failed: No such device (-19)")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(status.subprocess, "run", fail)
+    assert status.halow_peers() == []
+
+
+def test_halow_peers_station_without_babel(monkeypatch):
+    """Radio link up but Babel hasn't adjacency yet: still report the station,
+    with the routing-derived fields left None."""
+    def run(cmd, **kw):
+        if "station" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=HALOW_STATION_DUMP, stderr="")
+        if "neigh" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=HALOW_NEIGH, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(status.subprocess, "run", run)
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory("BABEL 1.0\nok\nok\n")())
+    peers = status.halow_peers()
+    assert len(peers) == 1
+    p = peers[0]
+    assert p["plink"] == "ESTAB"
+    assert p["ipv6"] == "fe80::b7dd:6ba5:30a1:8929"
+    assert p["ipv4"] is None
+    assert p["link_pct"] is None
+    assert p["cost"] is None
+
+
+def test_babel_routes_tags_interface(monkeypatch):
+    """Each route carries the interface Babel installed it on, so the UI can
+    tell a wlan1-reached node from a halow0-reached one."""
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(BABEL_DUMP_ROUTES)())
+    routes = status.babel_routes()
+    assert routes and all(r["iface"] == "wlan1" for r in routes)

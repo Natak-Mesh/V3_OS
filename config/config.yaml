@@ -46,6 +46,18 @@ eth0:
   dhcp_pool_offset: 10
   dhcp_pool_size: 100
 
+halow:
+  # Wi-Fi HaLow (802.11ah) second 802.11s mesh on a Morse MM8108 USB radio
+  # (interface halow0, subnet 10.30.1.<node.id>/24). SSID/password/country are
+  # SHARED with the wlan1 mesh (mesh.*). On by default and inert on a node with no
+  # HaLow radio. The radio is renamed to halow0 by a generated udev rule; the
+  # driver/firmware/supplicant are built + installed by install.sh. See
+  # docs/halow.md. Country must be US (only the US S1G channel table is defined).
+  enabled: true
+  bandwidth_mhz: 1         # channel width in MHz: 1 | 2 | 4 | 8 (must match on every node)
+  channel: 27              # US S1G channel number (ch 27 @ 1 MHz = 915.5 MHz)
+  prim_1mhz_index: 0       # primary 1 MHz index (1MHz->0; 2MHz->0-1; 4MHz->0-3; 8MHz->0-7)
+
 meshtastic:
   enabled: true            # run meshtasticd (native) + expose radio to the bridge
   region: US               # LoRa region; radio won't TX until set

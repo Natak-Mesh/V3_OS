@@ -15,7 +15,9 @@ inline `ON` / `OFF` / `—` (unknown) switch, refreshed every 5 s from
 | **Access point** (wlan0) | rfkill-blocks phy0 and stops `hostapd`. | **Live only** — **always resets to ON at the next reboot** (a lockout-recovery path). |
 
 The RNode LoRa radio is controlled separately on the [Reticulum](reticulum.md)
-page (`reticulum.rnode_enabled`), not here.
+page (`reticulum.rnode_enabled`), not here. The optional Wi-Fi HaLow radio is
+enabled/disabled on its own [HaLow Mesh](halow.md) page (`halow.enabled`), which
+appears only when the radio is plugged in.
 
 ## How the switches apply
 

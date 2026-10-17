@@ -45,6 +45,13 @@ LORA_RX_ADDR = ("127.0.0.1", 5561)   # bridge -> us (we bind here)
 CONTROL_ADDR = ("127.0.0.1", 5562)   # API/CLI -> us (we bind here)
 
 MCAST_IF = "wlan1"                    # WiFi transport egresses the mesh iface
+# Mesh transport interfaces the WiFi lane fans out over. wlan1 is always present;
+# halow0 is appended when HaLow is enabled (schema NucleusConfig.mesh_ifaces).
+# A re-check loop re-joins/re-pins as interfaces come and go (halow0 is
+# device-started, so it may appear after this daemon). Default keeps MCAST_IF for
+# back-compat / off-box tests.
+MESH_IFACES = [MCAST_IF]
+IFACE_RECHECK_SECS = 5               # re-pin TX / re-join RX as ifaces appear
 PERSIST_PATH = "/var/lib/nucleus/messages.jsonl"
 RNS_PERSIST_PATH = "/var/lib/nucleus/rns_messages.jsonl"
 RNS_CONTACTS_PATH = "/var/lib/nucleus/rns/contacts.json"
@@ -101,6 +108,7 @@ def load_config() -> dict:
         "rns_announce_mode": "manual",
         "rns_announce_interval_secs": 1800,
         "rns_propagation_node": False,
+        "mesh_ifaces": list(MESH_IFACES),
         "_cfg": None,
     }
     try:
@@ -126,6 +134,7 @@ def load_config() -> dict:
         "rns_announce_mode": m.rns.announce_mode,
         "rns_announce_interval_secs": m.rns.announce_interval_secs,
         "rns_propagation_node": m.rns.propagation_node,
+        "mesh_ifaces": cfg.mesh_ifaces,
         "_cfg": cfg,
     })
     return out
@@ -143,7 +152,14 @@ class MessagingService:
         self.wifi_group = cfg["wifi_group"]
         self.wifi_port = int(cfg["wifi_port"])
         self.lora_enabled = bool(cfg["lora"])
-        self._wifi_tx = None
+        # Mesh interfaces the WiFi lane fans out over (wlan1 [+ halow0]). One TX
+        # socket is pinned per interface and the RX socket joins the group on each;
+        # a recheck loop keeps both in step as interfaces appear/vanish.
+        self.mesh_ifaces = list(cfg.get("mesh_ifaces") or MESH_IFACES)
+        self._wifi_tx = None                 # kept: first/primary TX sock (tests)
+        self._wifi_tx_socks: dict = {}       # iface -> pinned TX socket
+        self._wifi_rx_sock = None            # the single joined RX socket
+        self._wifi_joined: set = set()       # ifaces whose RX join succeeded
         self._lora_tx = None
         self._notify_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Local push subscribers (API WS bridges): addr -> expiry epoch.
@@ -210,14 +226,27 @@ class MessagingService:
             self._send_lora(text)
         return {"ok": True, "id": msg["id"]}
 
+    def _mesh_ifaces(self) -> list:
+        """Mesh interfaces to fan out over, falling back to the module default.
+
+        Reads MCAST_IF live (not the import-time MESH_IFACES) so tests that
+        monkeypatch service.MCAST_IF still work on a bare, __init__-less object.
+        """
+        ifaces = getattr(self, "mesh_ifaces", None)
+        return list(ifaces) if ifaces else [MCAST_IF]
+
     def _send_wifi(self, text: str) -> None:
-        try:
-            frame = json.dumps(
-                {"sender": self.sender, "text": text, "ts": time.time()}
-            ).encode("utf-8")
-            self._wifi_tx.sendto(frame, (self.wifi_group, self.wifi_port))
-        except Exception as e:
-            log(f"wifi TX error: {e}")
+        frame = json.dumps(
+            {"sender": self.sender, "text": text, "ts": time.time()}
+        ).encode("utf-8")
+        # Fan out over every mesh interface (wlan1 [+ halow0]). A WiFi-only peer
+        # is reachable over wlan1; a HaLow-only peer over halow0. Sending on both
+        # covers either without the daemon tracking which peer lives where.
+        for iface, sock in list(self._wifi_tx_socks.items()):
+            try:
+                sock.sendto(frame, (self.wifi_group, self.wifi_port))
+            except Exception as e:
+                log(f"wifi TX error on {iface}: {e}")
 
     def _send_lora(self, text: str) -> None:
         try:
@@ -226,26 +255,49 @@ class MessagingService:
             log(f"lora TX error: {e}")
 
     # ── WiFi transport ──────────────────────────────────────────
+    def _wifi_join_ifaces(self) -> None:
+        """Join the WiFi multicast group on each mesh iface that has an IPv4.
+
+        Joins are per-interface-address (not INADDR_ANY): with 0.0.0.0 the kernel
+        joins on the default-route iface (eth0 here), so mesh multicast never
+        reaches us. Idempotent — only ifaces not already joined are attempted, so
+        this is safe to call repeatedly as halow0 appears after the daemon starts.
+        """
+        sock = self._wifi_rx_sock
+        if sock is None:
+            return
+        for iface in self._mesh_ifaces():
+            if iface in self._wifi_joined:
+                continue
+            if_ip = iface_ipv4(iface)
+            if if_ip is None:
+                continue
+            try:
+                mreq = socket.inet_aton(self.wifi_group) + socket.inet_aton(if_ip)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                self._wifi_joined.add(iface)
+                log(f"WiFi RX joined {self.wifi_group} on {iface} ({if_ip})")
+            except OSError as e:
+                log(f"WiFi RX join on {iface} failed: {e}")
+
     def _wifi_rx_loop(self) -> None:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", self.wifi_port))
-        # Join on the mesh interface's address, not INADDR_ANY. With 0.0.0.0 the
-        # kernel joins on the default-route iface (eth0 here), so multicast from
-        # the mesh never reaches us. Scope the join to wlan1's IP.
-        if_ip = iface_ipv4(MCAST_IF)
-        join_ip = if_ip or "0.0.0.0"
-        if if_ip is None:
-            log(f"WARNING: {MCAST_IF} has no IPv4 addr; "
-                f"joining multicast on default iface (RX may not work)")
-        mreq = socket.inet_aton(self.wifi_group) + socket.inet_aton(join_ip)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         sock.settimeout(1.0)
+        self._wifi_rx_sock = sock
+        self._wifi_join_ifaces()
+        if not self._wifi_joined:
+            log(f"WARNING: no mesh iface has an IPv4 addr yet; "
+                f"joining as they appear (RX may not work until then)")
         log(f"WiFi RX on {self.wifi_group}:{self.wifi_port}")
         while not self._stop.is_set():
             try:
                 data, _ = sock.recvfrom(4096)
             except socket.timeout:
+                # Periodic re-check so a HaLow iface that appeared after startup
+                # (device-started) gets its join without a daemon restart.
+                self._wifi_join_ifaces()
                 continue
             except OSError:
                 break
@@ -265,21 +317,33 @@ class MessagingService:
         sock.close()
 
     def _setup_wifi_tx(self) -> None:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        """Create one egress-pinned TX socket per mesh iface that has an IPv4.
+
+        SO_BINDTODEVICE needs CAP_NET_RAW (we run unprivileged as User=natak, so
+        it silently fails and TX follows the default route out eth0). IP_MULTICAST_IF,
+        set to the iface address, pins egress without any capability. Re-callable:
+        a new iface (halow0 appearing later) gets its socket on the next call.
+        """
         ttl = int(self.cfg.get("mesh_ttl", 8))
-        s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
-        # Egress multicast out the mesh interface. SO_BINDTODEVICE needs
-        # CAP_NET_RAW (we run unprivileged as User=natak, so it silently fails
-        # and TX follows the default route out eth0). IP_MULTICAST_IF, set to
-        # wlan1's address, pins the egress iface without any capability.
-        if_ip = iface_ipv4(MCAST_IF)
-        if if_ip is not None:
+        for iface in self._mesh_ifaces():
+            if iface in self._wifi_tx_socks:
+                continue
+            if_ip = iface_ipv4(iface)
+            if if_ip is None:
+                if iface == MCAST_IF:
+                    log(f"WARNING: {iface} has no IPv4 addr; "
+                        f"multicast TX will follow the default route (may not reach mesh)")
+                continue
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
             s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
                          socket.inet_aton(if_ip))
-        else:
-            log(f"WARNING: {MCAST_IF} has no IPv4 addr; "
-                f"multicast TX will follow the default route (may not reach mesh)")
-        self._wifi_tx = s
+            self._wifi_tx_socks[iface] = s
+            # Keep the primary iface's socket on the legacy attribute (tests + any
+            # single-socket callers still read _wifi_tx).
+            if self._wifi_tx is None:
+                self._wifi_tx = s
+            log(f"WiFi TX pinned to {iface} ({if_ip})")
 
     # ── LoRa transport (via cot_bridge relay) ───────────────────
     def _lora_rx_loop(self) -> None:
@@ -578,7 +642,11 @@ class MessagingService:
             f"rns={self.rns_enabled})")
         try:
             while not self._stop.is_set():
-                time.sleep(1)
+                time.sleep(IFACE_RECHECK_SECS)
+                # Re-pin TX for any mesh iface that appeared after startup (halow0
+                # is device-started, so it may enumerate after this daemon). The RX
+                # loop re-joins on its own timeout; this keeps TX in step.
+                self._setup_wifi_tx()
         except KeyboardInterrupt:
             pass
         self._stop.set()

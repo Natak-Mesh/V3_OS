@@ -129,12 +129,17 @@ def test_usb_devices_registry_unique_ids():
     from nucleusd.schema import USB_DEVICES
 
     seen: dict[tuple[str, str], str] = {}
-    for role, ids in USB_DEVICES.items():
-        for usb_id in ids:
+    for role, dev in USB_DEVICES.items():
+        for usb_id in dev["ids"]:
             assert usb_id not in seen, f"{usb_id} claimed by {seen.get(usb_id)} and {role}"
             seen[usb_id] = role
-    # RAK4631 is the only supported RNode for now.
-    assert USB_DEVICES["rnode"] == [("239a", "8029")]
+    # RAK4631 is the only supported RNode for now (a tty-kind serial device).
+    assert USB_DEVICES["rnode"]["kind"] == "tty"
+    assert USB_DEVICES["rnode"]["ids"] == [("239a", "8029")]
+    # HaLow is a net-kind device renamed to the fixed halow0 ifname.
+    assert USB_DEVICES["halow"]["kind"] == "net"
+    assert USB_DEVICES["halow"]["ids"] == [("325b", "8100")]
+    assert USB_DEVICES["halow"]["ifname"] == "halow0"
 
 
 def test_web_defaults():

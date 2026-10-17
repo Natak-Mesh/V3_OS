@@ -103,6 +103,9 @@ const PSK_MODES = ["keep", "random", "default", "none"];
 
 // Working copy of the radio config, filled from the cached read.
 let M = null;
+// Last frequency descriptor from /meshtastic/freq (region/preset/name/slot →
+// band edges MHz). Drives the live readout on the Radio Configuration page.
+let MF = null;
 // Channel URL typed into the "Apply a channel URL" field — kept separate from M
 // so editing it never overwrites this node's displayed current channel URL.
 let MCHURL = "";
@@ -115,6 +118,12 @@ let TXR = null;
 let PEERS = null;
 // Working copy of the full node config, edited on the CONFIG page.
 let CFG = null;
+// Working copy of the HaLow settings (halow.*), edited on the HALOW page.
+let HL = null;
+// Whether the HaLow channel-reference <details> is expanded. Kept here (not in
+// the DOM) so the page's 5s dynamic rebuild doesn't snap the section shut.
+let HL_REF_OPEN = false;
+window.__halowRefToggle = (open) => { HL_REF_OPEN = !!open; };
 // Working copy of the RNode LoRa radio settings (reticulum.rnode_*), edited on
 // the RETICULUM > INTERFACES > CONFIGURE RNODE page.
 let RN = null;
@@ -188,6 +197,77 @@ let TS_AUTHKEY = "";
 let TS_ACCT = null;
 let TS_ACCT_IDS = {};
 
+// Build the frequency readout line from a /meshtastic/freq descriptor (F) and
+// the currently-selected slot. Shows the real band edges (low–high MHz) so the
+// operator never has to work out the frequency from the slot number. Pure
+// display — the numbers are computed server-side in lora_freq.
+function mtFreqLine(F) {
+  if (!F) return `<div class="content"><div class="hint" ` +
+    `style="padding-left:0">frequency: —</div></div>`;
+  const fmt = (n) => (Math.round(n * 1000) / 1000).toFixed(3);
+  let body;
+  if (F.low_mhz == null || F.high_mhz == null) {
+    body = `slot ${esc(F.resolved_slot)} out of range ` +
+      `(region allows 1–${esc(F.num_slots)})`;
+  } else {
+    const band = `${fmt(F.low_mhz)}–${fmt(F.high_mhz)} MHz`;
+    body = F.auto
+      ? `auto → slot <b>${esc(F.resolved_slot)}</b> · <b>${band}</b>`
+      : `slot <b>${esc(F.resolved_slot)}</b> · <b>${band}</b>`;
+  }
+  return `<div class="content"><div class="hint" style="padding-left:0">` +
+    `${body}</div></div>`;
+}
+
+// Fetch the frequency descriptor for the current working copy (M). Pure
+// server-side math — no radio access. Returns null on error so the readout
+// degrades to "—" rather than throwing.
+async function mtFetchFreq() {
+  if (!M) return null;
+  const q = new URLSearchParams({
+    region: M.region || "US",
+    preset: M.modem_preset || "LONG_FAST",
+    name: M.channel_name || "",
+    slot: String(M.frequency_slot ?? 0),
+  });
+  const { ok, d } = await jget(MB + "/freq?" + q.toString());
+  return ok ? d : null;
+}
+
+// Update the frequency readout row after a field edit. `refetch` is true when
+// region/preset/name changed (the slot grid or auto-slot may move, so we must
+// re-ask the server); false when only the slot number changed, where we can
+// recompute the band edges locally from the cached descriptor's grid. Repaints
+// via the shell's redraw (build is refused mid-edit).
+function mtRefreshFreq(freqRow, refetch) {
+  const shell = window.__shell;
+  if (!refetch && MF && MF.num_slots) {
+    // Slot-only change: recompute edges from the known grid (freq_start + bw).
+    const slot = M.frequency_slot | 0;
+    const bwMhz = MF.bandwidth_khz / 1000;
+    const resolved = slot || MF.resolved_slot;  // 0 keeps the auto slot
+    const F = Object.assign({}, MF, {
+      configured_slot: slot, auto: !slot, resolved_slot: resolved,
+    });
+    if (resolved >= 1 && resolved <= MF.num_slots) {
+      const centre = MF.freq_start_mhz + bwMhz / 2 + (resolved - 1) * bwMhz;
+      F.low_mhz = centre - bwMhz / 2;
+      F.high_mhz = centre + bwMhz / 2;
+    } else {
+      F.low_mhz = F.high_mhz = null;
+    }
+    freqRow.html = mtFreqLine(F);
+    shell && shell.redraw();
+    return;
+  }
+  // region/preset/name change: re-ask the server, then repaint.
+  mtFetchFreq().then((F) => {
+    if (F) MF = F;
+    freqRow.html = mtFreqLine(F);
+    shell && shell.redraw();
+  });
+}
+
 function meshFillFrom(cfg) {
   M = {
     owner: cfg.owner || "",
@@ -231,6 +311,12 @@ const PAGES = {
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
       ];
+      // HaLow is a plug-in USB radio: show its config entry only when the
+      // halow0 interface is present (radios.halow.present from live status).
+      const { ok: sok, d: st } = await jget("/api/v1/status");
+      if (sok && st.radios && st.radios.halow && st.radios.halow.present) {
+        items.push({ type: "nav", label: "HALOW", to: "halow" });
+      }
       // TAK Server is optional; show the menu entry only when it's installed.
       const { ok, d: tak } = await jget("/api/v1/tak/status");
       if (ok && tak.installed) {
@@ -270,6 +356,33 @@ const PAGES = {
         h += `</table>`;
       }
       h += `</div>`;
+
+      // HaLow (802.11ah) peers — only when the halow0 radio is present. These
+      // are the radio-link neighbours (iw station dump), which Babel's route
+      // list can hide when the same node is cheaper over wlan1.
+      const halowRadio = (st.radios && st.radios.halow) || {};
+      if (halowRadio.present) {
+        const hp = st.halow_peers || [];
+        h += `<div class="content"><div class="page-title" style="padding-left:0">HaLow mesh nodes</div>`;
+        if (!hp.length) {
+          h += `<div class="off">no HaLow peers — this node sees no other node over halow0</div>`;
+        } else {
+          h += `<table><tr><th>Node</th><th>Link</th><th>Signal</th><th>State</th><th>Seen</th></tr>`;
+          hp.forEach((p) => {
+            const node = p.ipv4 || p.mac;
+            const link = p.link_pct != null ? p.link_pct + "%" : "—";
+            const sig = p.signal_avg_dbm != null ? p.signal_avg_dbm + " dBm" : "—";
+            const estab = p.plink === "ESTAB";
+            const seen = p.inactive_ms != null ? ago(Date.now() / 1000 - p.inactive_ms / 1000) : "—";
+            h += `<tr><td>${esc(node)}</td><td>${esc(link)}</td>` +
+              `<td>${esc(sig)}</td>` +
+              `<td class="${estab ? "ok" : "warn"}">${esc(p.plink || "—")}</td>` +
+              `<td class="${estab ? "ok" : "warn"}">${esc(seen)}</td></tr>`;
+          });
+          h += `</table>`;
+        }
+        h += `</div>`;
+      }
 
       // LoRa (Meshtastic) nodes heard over RF.
       const { d: md } = await jget(MB + "/nodes");
@@ -449,6 +562,125 @@ const PAGES = {
           onEnter: (S) => rfSetAp(S, !ap.on),
           action: sw(ap.on, (S) => rfSetAp(S, !ap.on)) },
       ] };
+    },
+  },
+
+  // HaLow (802.11ah) mesh: live status + config for the plug-in Morse USB radio.
+  // Only reachable when halow0 is present (the menu entry is hidden otherwise).
+  // Settings are CONFIG-BACKED: edits mutate HL (a copy of the halow block + a
+  // couple of shared mesh keys) and are saved as one read-modify-write PUT then
+  // applied, exactly like the Radios page. Valid channels/bandwidths come from
+  // _derived.halow_channels (the schema), never a list hardcoded here.
+  halow: {
+    title: "HaLow",
+    dynamic: 5000,
+    async build() {
+      const { d: st } = await jget("/api/v1/status");
+      const radio = (st.radios && st.radios.halow) || {};
+
+      // Load a working copy once (first open or after Reload). Keep the shared
+      // mesh SSID/password/country read-only here — they live on the Config page.
+      const { d: cfg } = await jget("/api/v1/config");
+      const der = cfg._derived || {};
+      const chans = der.halow_channels || {};
+      if (!HL) {
+        const hw = cfg.halow || {};
+        HL = {
+          enabled: hw.enabled !== false,
+          bandwidth_mhz: hw.bandwidth_mhz ?? 1,
+          channel: hw.channel ?? 27,
+        };
+      }
+      // Bandwidth options are the keys of the schema channel map (1/2/4/8).
+      const bws = Object.keys(chans).map((k) => parseInt(k, 10)).sort((a, b) => a - b);
+      // Channel options for the currently-selected bandwidth.
+      const chOpts = (chans[HL.bandwidth_mhz] || []).slice();
+
+      // US S1G centre frequency for a channel number (matches schema:
+      // halow_freq_mhz -> 902 + 0.5 * channel). Used for the live readout and
+      // the reference table below — all MHz figures derive from the schema's
+      // channel list, nothing is hard-coded.
+      const centreMhz = (ch) => 902 + 0.5 * ch;
+      const fmtMhz = (n) => (Math.round(n * 10) / 10).toString();
+
+      // Live readout for the current selection: channel, centre and the band it
+      // occupies (centre ± bandwidth/2).
+      const curCentre = centreMhz(HL.channel);
+      const curLo = curCentre - HL.bandwidth_mhz / 2;
+      const curHi = curCentre + HL.bandwidth_mhz / 2;
+      const readoutHtml =
+        `<div class="content"><div class="hint" style="padding-left:0">` +
+        `ch <b>${esc(HL.channel)}</b> · <b>${esc(fmtMhz(curCentre))} MHz</b> centre · ` +
+        `${esc(fmtMhz(curLo))}–${esc(fmtMhz(curHi))} MHz · ` +
+        `<b>${esc(HL.bandwidth_mhz)} MHz</b> wide</div></div>`;
+
+      // Reference list (US band): one row per channel, built from the schema
+      // channel list — channel number, bandwidth, centre and occupied band.
+      // Collapsed into a <details> so it's out of the way until opened; the open
+      // state is held in HL_REF_OPEN so the 5s rebuild doesn't close it.
+      let refRows = "";
+      for (const bw of bws) {
+        for (const ch of (chans[bw] || [])) {
+          const c = centreMhz(ch);
+          refRows +=
+            `<tr><td>${esc(ch)}</td><td>${esc(bw)} MHz</td>` +
+            `<td>${esc(fmtMhz(c - bw / 2))}–${esc(fmtMhz(c + bw / 2))} MHz</td></tr>`;
+        }
+      }
+      const refHtml =
+        `<div class="content"><details${HL_REF_OPEN ? " open" : ""} ` +
+        `ontoggle="window.__halowRefToggle(this.open)">` +
+        `<summary>Channel reference (US)</summary>` +
+        `<table><tr><td><b>Ch</b></td><td><b>BW</b></td>` +
+        `<td><b>Band</b></td></tr>` + refRows + `</table></details>` +
+        `<div class="hint" style="padding-left:0">All nodes in the mesh must ` +
+        `use the same bandwidth and channel.</div></div>`;
+
+      const head = (title, sub) => ({ type: "content", html:
+        `<div class="content"><div class="page-title" style="padding-left:0">${esc(title)}</div>` +
+        (sub ? `<div class="hint" style="padding-left:0">${sub}</div>` : "") + `</div>` });
+
+      // Live status block.
+      const svc = radio.service || "unknown";
+      const statusHtml =
+        `<div class="content"><table>` +
+        `<tr><td>Interface</td><td class="${radio.present ? "ok" : "off"}">` +
+          `${radio.present ? "present (halow0)" : "absent"}</td></tr>` +
+        `<tr><td>IP</td><td>${esc(der.halow_ip || "—")}</td></tr>` +
+        `<tr><td>Channel</td><td>${radio.channel != null ? esc(radio.channel) : "—"}` +
+          `${radio.freq_mhz != null ? " (" + esc(radio.freq_mhz) + " MHz)" : ""}</td></tr>` +
+        `<tr><td>Bandwidth</td><td>${radio.bandwidth_mhz != null ? esc(radio.bandwidth_mhz) + " MHz" : "—"}</td></tr>` +
+        `<tr><td>Service</td><td class="${svc === "active" ? "ok" : "off"}">${esc(svc)}</td></tr>` +
+        `</table></div>`;
+
+      const items = [
+        head("Status"),
+        { type: "content", html: statusHtml },
+
+        head("Settings", "SSID, password and country are shared with the Wi-Fi " +
+          "mesh — change them on the Radio Configuration page."),
+        { type: "fselect", label: "Enabled", options: ["on", "off"],
+          value: HL.enabled ? "on" : "off",
+          onChange: (v) => HL.enabled = (v === "on") },
+        { type: "fselect", label: "Bandwidth (MHz)", options: bws,
+          value: HL.bandwidth_mhz,
+          onChange: (v) => {
+            HL.bandwidth_mhz = parseInt(v, 10);
+            // Keep channel valid for the new bandwidth.
+            const opts = chans[HL.bandwidth_mhz] || [];
+            if (!opts.includes(HL.channel)) HL.channel = opts[0];
+          } },
+        { type: "fselect", label: "Channel (S1G)", options: chOpts,
+          value: HL.channel, onChange: (v) => HL.channel = parseInt(v, 10) },
+        { type: "content", html: readoutHtml },
+        { type: "content", html: refHtml },
+
+        head("SSID (read-only)", `<b>${esc(der.halow_ssid || "—")}</b> · country ` +
+          `<b>${esc((cfg.mesh && cfg.mesh.country) || "—")}</b>`),
+
+        { type: "button", label: "» Deploy", onEnter: deployHalow },
+      ];
+      return { items };
     },
   },
 
@@ -720,14 +952,27 @@ const PAGES = {
         onEnter: (S) => radioOp(S, MB + "/config/read", null, "read"),
       }];
       if (M) {
+        // Frequency readout row, updated live from the fields below. Load its
+        // initial descriptor (MF) once per build from the pure /freq endpoint.
+        MF = await mtFetchFreq();
+        const freqRow = { type: "content", html: mtFreqLine(MF), _freq: true };
+        // Slot max follows the region/preset grid (MF.num_slots), so narrow
+        // regions and 125 kHz presets are bounded correctly instead of a fixed
+        // guess. Fall back to 104 until the first descriptor loads.
+        const slotMax = (MF && MF.num_slots) || 104;
         items.push(
           { type: "ftext", key: "owner", label: "Long name", value: M.owner, max: 39, onChange: (v) => M.owner = v },
           { type: "ftext", key: "owner_short", label: "Short name", value: M.owner_short, max: 4, onChange: (v) => M.owner_short = v },
-          { type: "fselect", key: "modem_preset", label: "Modem preset", options: MODEMS, value: M.modem_preset, onChange: (v) => M.modem_preset = v },
-          { type: "fnum", key: "frequency_slot", label: "Freq slot (0=auto)", value: M.frequency_slot, min: 0, max: 104, onChange: (v) => M.frequency_slot = v },
-          { type: "ftext", key: "channel_name", label: "Channel name", value: M.channel_name, max: 11, color: "accent", onChange: (v) => M.channel_name = v },
+          { type: "fselect", key: "modem_preset", label: "Modem preset", options: MODEMS, value: M.modem_preset,
+            onChange: (v) => { M.modem_preset = v; mtRefreshFreq(freqRow, true); } },
+          { type: "fnum", key: "frequency_slot", label: "Freq slot (0=auto)", value: M.frequency_slot, min: 0, max: slotMax,
+            onChange: (v) => { M.frequency_slot = v; mtRefreshFreq(freqRow, false); } },
+          freqRow,
+          { type: "ftext", key: "channel_name", label: "Channel name", value: M.channel_name, max: 11, color: "accent",
+            onChange: (v) => { M.channel_name = v; mtRefreshFreq(freqRow, true); } },
           { type: "fselect", key: "psk_mode", label: "Encryption key", options: PSK_MODES, value: M.psk_mode, color: "accent", onChange: (v) => M.psk_mode = v },
-          { type: "fselect", key: "region", label: "Region", options: REGIONS, value: M.region, color: "accent", onChange: (v) => M.region = v },
+          { type: "fselect", key: "region", label: "Region", options: REGIONS, value: M.region, color: "accent",
+            onChange: (v) => { M.region = v; mtRefreshFreq(freqRow, true); } },
           { type: "fnum", key: "hop_limit", label: "Hop limit", value: M.hop_limit, min: 1, max: 7, color: "warn", onChange: (v) => M.hop_limit = v },
           { type: "fnum", key: "tx_power", label: "TX power (dBm)", value: M.tx_power, min: 0, max: 30, color: "warn", onChange: (v) => M.tx_power = v },
           { type: "fselect", key: "role", label: "Role", options: ROLES, value: M.role, color: "warn", onChange: (v) => M.role = v },
@@ -1664,6 +1909,31 @@ async function saveCfg(S) {
   const { ok, d } = await jsend("PUT", "/api/v1/config", body);
   if (ok) S.msg("saved (" + d.hostname + ") — not yet applied");
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);
+}
+
+// Deploy the HaLow settings in one step: read the full config, overlay the
+// edited halow block, PUT it back (validated by schema.py — bad channel/
+// bandwidth is rejected there), then apply to reconcile nucleus-halow and
+// reload the page from the live config. If nothing changed, says so.
+async function deployHalow(S) {
+  if (!HL) return S.msg("nothing to deploy", false);
+  const { d: cfg } = await jget("/api/v1/config");
+  delete cfg._derived;
+  cfg.halow = cfg.halow || {};
+  cfg.halow.enabled = HL.enabled;
+  cfg.halow.bandwidth_mhz = parseInt(HL.bandwidth_mhz, 10);
+  cfg.halow.channel = parseInt(HL.channel, 10);
+  const put = await jsend("PUT", "/api/v1/config", cfg);
+  if (!put.ok) return S.msg("validation failed: " + JSON.stringify(put.d.detail), false);
+  const { ok, d } = await jsend("POST", "/api/v1/apply?dry_run=false");
+  if (!ok) return S.msg("apply failed", false);
+  if (!d.changed.length) { S.msg("no changes — system in sync"); }
+  else {
+    S.msg("deployed — changed " + d.changed.length + " file(s); units: " +
+      (d.units_restarted.join(", ") || "none"));
+  }
+  HL = null;
+  return S.reload();
 }
 
 async function applyCfg(S, dry) {

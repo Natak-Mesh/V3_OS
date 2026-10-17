@@ -19,6 +19,12 @@ interface wlan1 type wireless link-quality true split-horizon false rxcost 256 h
 # Wired bridge interface (br-lan)
 interface br-lan type wired rxcost 96 hello-interval 4
 
+{% if halow_enabled %}
+# Wi-Fi HaLow (802.11ah) mesh interface (halow0). babeld treats a missing iface
+# as down, so this is harmless on a node without the HaLow radio.
+interface {{ halow_iface }} type wireless link-quality true split-horizon false rxcost 256 hello-interval 4 update-interval 16
+{% endif %}
+
 # Block router LAN networks from being redistributed (prevents asymmetric routing)
 redistribute ip 192.168.0.0/16 deny
 
@@ -27,6 +33,11 @@ redistribute ip {{ mesh_subnet }} allow
 
 # Redistribute br-lan network
 redistribute ip {{ br_lan_subnet }} allow
+
+{% if halow_enabled %}
+# Redistribute the HaLow mesh network (10.30.1.0/24)
+redistribute ip 10.30.1.0/24 allow
+{% endif %}
 
 # Redistribute default route for internet gateway sharing
 redistribute ip 0.0.0.0/0 allow

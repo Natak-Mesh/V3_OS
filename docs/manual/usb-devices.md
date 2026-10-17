@@ -9,13 +9,18 @@ symlink, so no Nucleus service ever opens it.
 ## Registry
 
 The supported devices are a single table in `nucleusd/schema.py` (`USB_DEVICES`),
-keyed by role, each listing the `(idVendor, idProduct)` pairs it matches:
+keyed by role. Each entry carries a **`kind`** (`tty` = a serial device bound to a
+stable `/dev/nucleus/<role>` symlink; `net` = a network interface renamed to a
+fixed name), its matching `(idVendor, idProduct)` pairs, and — for `net` — the
+fixed `ifname`:
 
-| Role | Symlink | Supported device(s) | Used by |
-|------|---------|---------------------|---------|
-| `rnode` | `/dev/nucleus/rnode` | RAKwireless WisBlock RAK4631 (`239a:8029`) | Reticulum RNodeInterface — see [reticulum.md](reticulum.md) |
+| Role | Kind | Bound to | Supported device(s) | Used by |
+|------|------|----------|---------------------|---------|
+| `rnode` | `tty` | `/dev/nucleus/rnode` | RAKwireless WisBlock RAK4631 (`239a:8029`) | Reticulum RNodeInterface — see [reticulum.md](reticulum.md) |
+| `halow` | `net` | `halow0` (interface) | Morse Micro MM8108 Wi-Fi HaLow (`325b:8100`) | HaLow 802.11s mesh — see [../halow.md](../halow.md) |
 
-Only the RAK4631 is supported as an RNode for now.
+Only the RAK4631 is supported as an RNode, and only the MM8108 as a HaLow radio,
+for now.
 
 ## How it works
 
@@ -36,8 +41,9 @@ up the new rule without a reboot. This supersedes the old
 
 ## Adding a device
 
-1. Add the role and its `(vid, pid)` to `USB_DEVICES` in `nucleusd/schema.py`
-   (lowercase hex, as udev matches `ATTRS{idVendor}`/`ATTRS{idProduct}`).
+1. Add the role to `USB_DEVICES` in `nucleusd/schema.py` with its `kind`, its
+   `ids` `(vid, pid)` pairs (lowercase hex, as udev matches
+   `ATTRS{idVendor}`/`ATTRS{idProduct}`), and — for a `net` device — its `ifname`.
 2. Have the owning service open `/dev/nucleus/<role>`.
 3. `install.sh` → `nucleusctl apply` on the node; confirm the link:
    `ls -l /dev/nucleus/`.
