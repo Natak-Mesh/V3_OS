@@ -57,9 +57,12 @@ def test_power_routes_exist(monkeypatch):
 
 
 def test_power_page_wired_in_ui():
+    # The power actions live on the NODE SETTINGS page (key `node`), which also
+    # carries the display-theme picker. Pin the menu entry, the page, and the
+    # API wiring so the rename can't silently drop the power controls.
     web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
     app_js = (web / "app.js").read_text()
-    assert 'to: "power"' in app_js, "POWER menu entry missing"
-    assert "power: {" in app_js, "power page definition missing"
+    assert 'to: "node"' in app_js, "NODE SETTINGS menu entry missing"
+    assert "node: {" in app_js, "node settings page definition missing"
     assert "async function powerOp" in app_js, "powerOp handler missing"
     assert '/api/v1/power/${action}' in app_js, "powerOp no longer calls the API"

@@ -4,6 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
   <title>Nucleus V3</title>
+  <!-- Apply the saved display theme before the stylesheet paints, so there is no
+       flash of the default palette. Theme is chosen in NODE SETTINGS and stored
+       per-browser; "classic" is the implicit default (no data-theme attr). -->
+  <script>
+    try {
+      var t = localStorage.getItem("nucleus-theme");
+      if (t && t !== "classic") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="cli.css">
 </head>
 <body>

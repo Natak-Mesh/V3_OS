@@ -1,17 +1,77 @@
 /* Nucleus V3 — CLI/TUI shell.
    One layout, one control set, one focus model for every page.
-   Terminal aesthetic: monospace, dark, green/amber/red status colours. */
+   Terminal aesthetic: monospace, dark, green/amber/red status colours.
+
+   Theming: every colour, the font and the base size are CSS variables on the
+   theme scope. The default (`classic`) palette lives in :root; alternate themes
+   override only the variables they change via [data-theme="..."] on <html>.
+   The theme is chosen in the UI (NODE SETTINGS) and stored per-browser in
+   localStorage, applied by index.html before first paint. No backend/config. */
+
+/* Terminus console font, bundled so mesh clients with no internet still get it.
+   Regular + bold only; the htop theme uses it, classic keeps DejaVu Sans Mono. */
+@font-face {
+  font-family: "Terminus";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("terminus.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Terminus";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("terminus-bold.woff2") format("woff2");
+}
 
 :root {
   --bg-primary: #0c0c0c;
   --bg-card: #111111;
+  --bg-deep: #060606;       /* <pre>/log wells, darker than the page */
+  --bg-edit: #062616;       /* field row while editing (dark green) */
   --border-color: #222222;
+  --scroll-thumb: #2a2a2a;
   --text-primary: #c8c8c8;
   --text-secondary: #6a6a6a;
   --ok: #00ff88;
   --off: #ff4444;
   --warn: #ffaa00;
   --accent: #00ff88;
+  --on-accent: #05120b;     /* text drawn on an --accent / --ok fill */
+  --on-voice: #05121f;      /* voice.html on-accent (bluer black) */
+  --font: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace;
+  --fs: 15px;
+  /* Per-theme text scale. Every font-size in this file is wrapped in
+     calc(Npx * var(--fscale)) so a theme can grow/shrink all text at once —
+     needed because the Terminus bitmap font renders ~20% smaller than DejaVu
+     at the same px. Classic = 1 (unchanged). */
+  --fscale: 1;
+}
+
+/* htop theme: muted ANSI palette, Terminus bitmap font, flat compact rows and
+   reverse-video bars like a real terminal monitor. Overrides variables only;
+   a few structural tweaks (row height, borders, text case) live further down,
+   gated on [data-theme="htop"]. */
+[data-theme="htop"] {
+  --bg-primary: #000000;
+  --bg-card: #000000;
+  --bg-deep: #000000;
+  --bg-edit: #00005f;       /* reverse-video blue, MC-style edit field */
+  --border-color: #1c1c1c;
+  --scroll-thumb: #303030;
+  --text-primary: #cdcdcd;
+  --text-secondary: #8a8a8a;
+  --ok: #5fd75f;            /* ansi bright green */
+  --off: #ff5f5f;           /* ansi bright red */
+  --warn: #ffd75f;          /* ansi bright yellow */
+  --accent: #5fd7d7;        /* ansi cyan — htop's selection/column colour */
+  --on-accent: #000000;
+  --on-voice: #000000;
+  --font: "Terminus", "DejaVu Sans Mono", monospace;
+  /* Terminus renders smaller per px; bump all text so it reads larger than
+     classic. Drives every calc()-wrapped font-size in this file. */
+  --fscale: 1.4;
 }
 
 * { box-sizing: border-box; }
@@ -21,8 +81,8 @@ html, body {
   height: 100%;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace;
-  font-size: 15px;
+  font-family: var(--font);
+  font-size: calc(var(--fs) * var(--fscale));
   -webkit-user-select: none;
   user-select: none;
 }
@@ -48,7 +108,7 @@ html, body {
   flex-wrap: wrap;
   gap: 6px 16px;
   align-items: center;
-  font-size: 13px;
+  font-size: calc(13px * var(--fscale));
   line-height: 1.4;
 }
 #hdr .k { color: var(--text-secondary); }
@@ -81,13 +141,13 @@ html, body {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: .1em;
-  font-size: 12px;
+  font-size: calc(12px * var(--fscale));
   padding: 6px 14px 4px;
 }
 
 .hint {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--fscale));
   padding: 2px 14px 8px;
   line-height: 1.5;
 }
@@ -109,13 +169,13 @@ html, body {
 }
 .row.sel {
   background: var(--accent);
-  color: #05120b;
+  color: var(--on-accent);
 }
-.row.sel .cur { color: #05120b; }
+.row.sel .cur { color: var(--on-accent); }
 .row .label { flex: 1 1 auto; }
 .row .val { color: var(--text-secondary); text-align: right; }
-.row.sel .val { color: #05120b; }
-.row.editing { background: #062616; color: var(--text-primary); }
+.row.sel .val { color: var(--on-accent); }
+.row.editing { background: var(--bg-edit); color: var(--text-primary); }
 .row.editing .cur { color: var(--warn); }
 
 /* ── Row kinds: tell headers, commands and variables apart ──── */
@@ -140,11 +200,11 @@ html, body {
 }
 .row-fselect .val, .row-fnum .val, .row-ftext .val { color: var(--text-primary); }
 /* Selection + edit states keep their dark-on-accent contrast. */
-.row-section.sel .label, .row-button.sel .label { color: #05120b; }
-.row.sel .val { color: #05120b; }
+.row-section.sel .label, .row-button.sel .label { color: var(--on-accent); }
+.row.sel .val { color: var(--on-accent); }
 /* Selected (bright-green) field row: force BOTH label and value black so the
    indented variable rows stay legible, matching the button/section rows. */
-.row-fselect.sel .label, .row-fnum.sel .label, .row-ftext.sel .label { color: #05120b; }
+.row-fselect.sel .label, .row-fnum.sel .label, .row-ftext.sel .label { color: var(--on-accent); }
 /* Editing (dark-green) field row: light label + amber value (matching the edit
    cursor) so black-on-dark-green is never shown. Last so it wins over .sel. */
 .row.editing .label { color: var(--text-primary); }
@@ -156,7 +216,7 @@ html, body {
   border: 1px solid var(--accent); border-radius: 0;
   padding: 4px 6px; text-align: left;
 }
-.row.sel .val.placeholder { color: #05120b; border-color: #05120b; }
+.row.sel .val.placeholder { color: var(--on-accent); border-color: var(--on-accent); }
 
 /* Inline row-action button (e.g. per-contact "req path"), pinned to the row's
    right end. Stays tappable while the rest of the row navigates. */
@@ -168,22 +228,22 @@ html, body {
   border-radius: 0;
   padding: 6px 10px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--fscale));
   letter-spacing: .06em;
   text-transform: uppercase;
   cursor: pointer;
 }
-.row .row-act:active { background: var(--accent); color: #05120b; }
-.row.sel .row-act { border-color: #05120b; color: #05120b; }
+.row .row-act:active { background: var(--accent); color: var(--on-accent); }
+.row.sel .row-act { border-color: var(--on-accent); color: var(--on-accent); }
 
 /* On/off switch variant of the inline row-action (Radios page). Filled when ON,
    muted outline when OFF, warn tint when state is unknown. */
-.row .row-act.sw-on  { background: var(--ok);  color: #05120b; border-color: var(--ok); }
+.row .row-act.sw-on  { background: var(--ok);  color: var(--on-accent); border-color: var(--ok); }
 .row .row-act.sw-off { background: transparent; color: var(--off); border-color: var(--off); }
 .row .row-act.sw-unknown { background: transparent; color: var(--warn); border-color: var(--warn); }
 .row.sel .row-act.sw-on,
 .row.sel .row-act.sw-off,
-.row.sel .row-act.sw-unknown { border-color: #05120b; }
+.row.sel .row-act.sw-unknown { border-color: var(--on-accent); }
 
 .row .val input, .row .val select {
   background: var(--bg-primary);
@@ -192,7 +252,7 @@ html, body {
   border-radius: 0;
   padding: 4px 6px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: calc(14px * var(--fscale));
   max-width: 220px;
   caret-color: var(--accent);
 }
@@ -218,7 +278,7 @@ html, body {
   border-radius: 0;
   padding: 10px 10px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: calc(14px * var(--fscale));
   min-width: 0;
   caret-color: var(--accent);
 }
@@ -230,17 +290,17 @@ html, body {
   border-radius: 0;
   padding: 10px 16px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: calc(14px * var(--fscale));
   font-weight: bold;
   letter-spacing: .1em;
   text-transform: uppercase;
   cursor: pointer;
 }
-.compose-send:active { background: var(--accent); color: #05120b; }
+.compose-send:active { background: var(--accent); color: var(--on-accent); }
 
 /* Content archetype: read-only panels, tables, logs. */
 .content { padding: 4px 14px 12px; user-select: text; }
-.content table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.content table { width: 100%; border-collapse: collapse; font-size: calc(13px * var(--fscale)); }
 .content th {
   text-align: left; color: var(--text-secondary);
   border-bottom: 1px solid var(--border-color); padding: 6px 8px; font-weight: normal;
@@ -250,8 +310,8 @@ html, body {
 .content .off { color: var(--off); }
 .content .warn { color: var(--warn); }
 .content pre {
-  background: #060606; border: 1px solid var(--border-color); border-radius: 0;
-  padding: 10px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  background: var(--bg-deep); border: 1px solid var(--border-color); border-radius: 0;
+  padding: 10px; overflow: auto; font-size: calc(12px * var(--fscale)); white-space: pre-wrap; word-break: break-word;
 }
 .content .kv { display: flex; gap: 10px; padding: 4px 0; }
 .content .kv .k { color: var(--text-secondary); min-width: 130px; }
@@ -260,13 +320,13 @@ html, body {
 .act {
   background: transparent; color: var(--text-primary);
   border: 1px solid var(--border-color); border-radius: 0;
-  padding: 10px 14px; font-family: inherit; font-size: 14px; cursor: pointer; min-height: 44px;
+  padding: 10px 14px; font-family: inherit; font-size: calc(14px * var(--fscale)); cursor: pointer; min-height: 44px;
   text-transform: uppercase; letter-spacing: .08em;
 }
 .act.primary { background: transparent; color: var(--accent); border-color: var(--accent); }
-.act:active { background: var(--accent); color: #05120b; }
+.act:active { background: var(--accent); color: var(--on-accent); }
 
-.msg { padding: 4px 14px; font-size: 13px; min-height: 20px; }
+.msg { padding: 4px 14px; font-size: calc(13px * var(--fscale)); min-height: 20px; }
 .msg.ok { color: var(--ok); }
 .msg.err { color: var(--off); }
 
@@ -285,22 +345,22 @@ html, body {
 #ctrl button {
   background: transparent; color: var(--text-primary);
   border: none; border-right: 1px solid var(--border-color);
-  padding: 16px 0; font-family: inherit; font-size: 18px; cursor: pointer;
+  padding: 16px 0; font-family: inherit; font-size: calc(18px * var(--fscale)); cursor: pointer;
 }
-#ctrl button:active { background: var(--accent); color: #05120b; }
+#ctrl button:active { background: var(--accent); color: var(--on-accent); }
 #c-up { grid-area: up; }
-#c-enter { grid-area: enter; font-size: 15px; letter-spacing: .1em; }
+#c-enter { grid-area: enter; font-size: calc(15px * var(--fscale)); letter-spacing: .1em; }
 #c-down { grid-area: down; border-right: none; }
 #c-back {
   grid-area: back; border-top: 1px solid var(--border-color);
-  font-size: 14px; letter-spacing: .1em; color: var(--text-secondary);
+  font-size: calc(14px * var(--fscale)); letter-spacing: .1em; color: var(--text-secondary);
 }
 
 /* Thin dark scrollbar to match the terminal shell. */
 #view::-webkit-scrollbar { width: 8px; }
 #view::-webkit-scrollbar-track { background: var(--bg-primary); }
-#view::-webkit-scrollbar-thumb { background: #2a2a2a; }
-#view { scrollbar-width: thin; scrollbar-color: #2a2a2a var(--bg-primary); }
+#view::-webkit-scrollbar-thumb { background: var(--scroll-thumb); }
+#view { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) var(--bg-primary); }
 
 /* Blinking block cursor on the title for that live-terminal feel. */
 #hdr .title::after {
@@ -309,3 +369,51 @@ html, body {
   animation: blink 1.1s step-end infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* ── htop theme: structural overrides ───────────────────────────
+   Colours/font come from the [data-theme="htop"] variable block near the top.
+   These rules reshape the chrome to read like a terminal monitor rather than a
+   neon card UI: flat compact rows, no rounded neon, reverse-video header/column
+   bars, normal-case text and a classic key-hint control bar. */
+
+/* Tighter, borderless rows — htop lists have no inter-row rules. */
+[data-theme="htop"] .row { min-height: 30px; padding: 4px 12px; border-bottom: none; }
+[data-theme="htop"] .row-fselect,
+[data-theme="htop"] .row-fnum,
+[data-theme="htop"] .row-ftext { min-height: 28px; }
+
+/* Column/section header bar: black on green, like htop's field header row. */
+[data-theme="htop"] .row-section {
+  background: var(--ok);
+  color: var(--on-accent);
+  letter-spacing: 0;
+}
+[data-theme="htop"] .row-section .label { color: var(--on-accent); }
+
+/* Drop the uppercase+tracking shout that marks the AI-card look; a terminal
+   shows plain text. Keep section/table headers readable without the spacing. */
+[data-theme="htop"] .page-title,
+[data-theme="htop"] .row-section,
+[data-theme="htop"] .act,
+[data-theme="htop"] .compose-send,
+[data-theme="htop"] .row .row-act,
+[data-theme="htop"] #c-enter,
+[data-theme="htop"] #c-back { letter-spacing: 0; text-transform: none; }
+
+/* Status header: flat black bar, no card tint. */
+[data-theme="htop"] #hdr { background: var(--bg-primary); }
+/* No blinking cursor — htop has a static header. */
+[data-theme="htop"] #hdr .title::after { content: ""; animation: none; }
+
+/* Table header row as a reverse-video bar (htop column heads). */
+[data-theme="htop"] .content th {
+  background: var(--ok);
+  color: var(--on-accent);
+  border-bottom: none;
+}
+[data-theme="htop"] .content td { border-bottom: 1px solid var(--border-color); }
+
+/* Control bar: key-hint style — label on a muted bar, flat and compact. */
+[data-theme="htop"] #ctrl { background: var(--bg-primary); }
+[data-theme="htop"] #ctrl button { padding: 10px 0; color: var(--text-primary); }
+[data-theme="htop"] #ctrl button:active { background: var(--accent); color: var(--on-accent); }

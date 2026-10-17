@@ -4,6 +4,22 @@
 
 const MB = "/api/v1/meshtastic";
 
+// ── Display theme ────────────────────────────────────────────────
+// Pure client-side preference (no backend/config): the palette, font and base
+// size are driven by [data-theme] on <html> (see cli.css). "classic" is the
+// implicit default — no attribute, matching the pre-paint loader in index.html.
+const THEMES = ["classic", "htop"];
+function getTheme() {
+  try { return localStorage.getItem("nucleus-theme") || "classic"; }
+  catch (e) { return "classic"; }
+}
+function setTheme(name) {
+  const t = THEMES.includes(name) ? name : "classic";
+  try { localStorage.setItem("nucleus-theme", t); } catch (e) {}
+  if (t === "classic") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+}
+
 async function jget(url) {
   const r = await fetch(url);
   const d = await r.json().catch(() => ({}));
@@ -324,7 +340,7 @@ const PAGES = {
         items.push({ type: "nav", label, to: "tak" });
       }
       items.push({ type: "nav", label: "SYSTEM UPDATE", to: "update" });
-      items.push({ type: "nav", label: "POWER", to: "power" });
+      items.push({ type: "nav", label: "NODE SETTINGS", to: "node" });
       return { items };
     },
   },
@@ -1268,11 +1284,24 @@ const PAGES = {
 
   // Power: reboot / power off this node. Each action confirms first (see
   // powerOp) because it takes the node — and its mesh links — down immediately.
-  power: {
-    title: "Power",
+  // Node settings: per-device UI preferences (display theme) plus the power
+  // actions. Theme is a browser-local preference only — it never touches the
+  // config pipeline or the API, so it refreshes instantly and per-client.
+  node: {
+    title: "Node Settings",
     async build() {
       return {
         items: [
+          { type: "content", html: `<div class="content"><div class="page-title" ` +
+            `style="padding-left:0">Display</div></div>` },
+          { type: "fselect", key: "theme", label: "Theme", options: THEMES,
+            value: getTheme(), onChange: (v) => setTheme(v) },
+          { type: "content", html: `<div class="content"><div class="hint" ` +
+            `style="padding-left:0">Classic: neon green terminal. htop: muted ` +
+            `ANSI colours and the Terminus console font. Saved in this browser ` +
+            `only.</div></div>` },
+          { type: "content", html: `<div class="content"><div class="page-title" ` +
+            `style="padding-left:0">Power</div></div>` },
           { type: "content", html: `<div class="content"><div class="kv">` +
             `<span class="warn">These actions take this node down immediately.` +
             ` A power off needs physical access to bring it back.</span></div></div>` },
