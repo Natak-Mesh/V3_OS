@@ -86,14 +86,22 @@ def _get_op_state():
 
 
 def _load_mesh_cfg():
-    """Load the meshtastic section from the V3 config.yaml (dict, never raises)."""
+    """Return the meshtastic section as a dict, via the validated schema.
+
+    Loads through the single config contract (``nucleusd.config.load``) rather
+    than a bespoke YAML read, so this module shares the same defaults/validation
+    as the rest of the system (per the repo rule that code loads config through
+    ``config.load()``). Never raises: on an unreadable/invalid config it returns
+    the schema defaults, so callers see a validated, fully-populated section
+    (previously an invalid config returned {}, which silently read as
+    "radio enabled").
+    """
     try:
-        import yaml
-        with open(MESH_CONF_PATH) as f:
-            raw = yaml.safe_load(f) or {}
-        return raw.get("meshtastic", {}) or {}
+        from .. import config as cfgmod
+        return cfgmod.load(MESH_CONF_PATH).meshtastic.model_dump()
     except Exception:
-        return {}
+        from ..schema import MeshtasticConfig
+        return MeshtasticConfig().model_dump()
 
 
 def _is_meshtasticd():

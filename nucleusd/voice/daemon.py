@@ -308,70 +308,63 @@ def load_config():
     """Build the flat KEY=value settings dict from the node config.yaml.
 
     V3 OS has one validated config file (/etc/nucleus/config.yaml). This daemon
-    was written against a flat dict, so we read the YAML and expose exactly the
-    keys it consumes (MESH_IP / MESH_802_TTL are derived from node identity;
-    everything else comes from the `voice` section). No .conf file involved.
-    """
-    cfg = {}
-    try:
-        import yaml
-        with open(CONFIG_YAML) as f:
-            raw = yaml.safe_load(f) or {}
-    except OSError as e:
-        log("WARNING: cannot read {}: {}".format(CONFIG_YAML, e))
-        return cfg
-    except Exception as e:
-        log("WARNING: bad config {}: {}".format(CONFIG_YAML, e))
-        return cfg
+    was written against a flat dict, so we load the config through the single
+    contract (``nucleusd.config.load`` -> validated schema) and expose exactly
+    the flat keys it consumes. MESH_IP / MESH_802_TTL / MESH_IFACES are taken
+    from the schema's derived values (not re-derived here), so they can't drift
+    from the rest of the system; everything else comes from the `voice` section.
 
-    # ── Node identity → MESH_IP / MESH_802_TTL (matches schema derivation) ──
-    node = raw.get("node", {}) or {}
-    mesh = raw.get("mesh", {}) or {}
-    nid = node.get("id")
-    if nid is None:
-        host = socket.gethostname().split(".")[0]
-        if host.endswith("-nucleus") and host[:4].isdigit():
-            nid = int(host[:4])
-    prefix = mesh.get("subnet_prefix", "10.20.1")
-    if nid is not None:
-        cfg["MESH_IP"] = "{}.{}".format(prefix, int(nid))
-    cfg["MESH_802_TTL"] = str(mesh.get("mesh_802_ttl", 8))
+    Per the repo rule, new/updated code loads config through ``config.load()``.
+    Returns an empty dict only if the config is unreadable/invalid, so the daemon
+    still starts (the callers below all ``.get(...)`` with inline fallbacks).
+    """
+    try:
+        from .. import config as cfgmod
+        full = cfgmod.load(CONFIG_YAML)
+    except Exception as e:
+        log("WARNING: cannot load {}: {}".format(CONFIG_YAML, e))
+        return {}
+
+    cfg = {}
+
+    # ── Node identity → MESH_IP / MESH_802_TTL (schema-derived) ──
+    cfg["MESH_IP"] = full.mesh_ip
+    cfg["MESH_802_TTL"] = str(full.mesh.mesh_802_ttl)
 
     # ── Mesh transport interfaces → (iface, ip) pairs for multi-radio TX/join ──
-    # wlan1 is always present; halow0 (10.30.1.<id>) is added when HaLow is enabled
-    # (mirrors schema NucleusConfig.mesh_ifaces). The daemon fans voice out over
-    # each and joins the group on each, so a HaLow-only peer is reachable too.
-    halow = raw.get("halow", {}) or {}
-    halow_enabled = halow.get("enabled", True)  # schema default is True
-    ifaces = [("wlan1", cfg.get("MESH_IP", "0.0.0.0"))]
-    if halow_enabled and nid is not None:
-        ifaces.append(("halow0", "10.30.1.{}".format(int(nid))))
+    # wlan1 is always present; halow0 (10.30.1.<id>) is added when HaLow is
+    # enabled. The iface list and both IPs come straight from the schema's
+    # derived values (NucleusConfig.mesh_ifaces / mesh_ip / halow_ip). The daemon
+    # fans voice out over each and joins the group on each, so a HaLow-only peer
+    # is reachable too.
+    iface_ip = {"wlan1": full.mesh_ip, "halow0": full.halow_ip}
+    ifaces = [(i, iface_ip.get(i, "0.0.0.0")) for i in full.mesh_ifaces]
     # Flattened "iface:ip,iface:ip" (the daemon re-parses; keeps the flat-str cfg).
     cfg["MESH_IFACES"] = ",".join("{}:{}".format(i, ip) for i, ip in ifaces)
 
     # ── voice section → VOICE_* keys ──
-    v = raw.get("voice", {}) or {}
+    v = full.voice
 
     def _b(x):
         return "true" if x else "false"
 
-    cfg["VOICE_CHANNEL"] = str(v.get("channel", 1))
-    cfg["VOICE_CHANNELS"] = str(v.get("channels", "1:Command"))
-    cfg["VOICE_JITTER_MS"] = str(v.get("jitter_ms", 80))
-    cfg["VOICE_TX_GAIN"] = str(v.get("tx_gain", 4.0))
-    cfg["VOICE_LORA_ENABLED"] = _b(v.get("lora_enabled", False))
-    cfg["VOICE_LORA_MAX_SECS"] = str(v.get("lora_max_secs", 30.0))
-    cfg["VOICE_LORA_PORTNUM"] = str(v.get("lora_portnum", 260))
-    cfg["VOICE_LORA_HOP_LIMIT"] = str(v.get("lora_hop_limit", 0))
-    cfg["VOICE_STT_ENGINE"] = str(v.get("stt_engine", "vosk"))
-    if v.get("stt_model"):
-        cfg["VOICE_STT_MODEL"] = str(v["stt_model"])
-    if v.get("stt_grammar"):
-        cfg["VOICE_STT_GRAMMAR"] = str(v["stt_grammar"])
-    cfg["VOICE_STT_CLEANUP"] = _b(v.get("stt_cleanup", True))
-    cfg["VOICE_TX_CLEANUP"] = _b(v.get("tx_cleanup", True))
-    cfg["VOICE_LORA_STREAM_ENABLED"] = _b(v.get("stream_enabled", False))
-    cfg["VOICE_LORA_STREAM_PORTNUM"] = str(v.get("stream_portnum", 256))
+    cfg["VOICE_CHANNEL"] = str(v.channel)
+    cfg["VOICE_CHANNELS"] = str(v.channels)
+    cfg["VOICE_JITTER_MS"] = str(v.jitter_ms)
+    cfg["VOICE_TX_GAIN"] = str(v.tx_gain)
+    cfg["VOICE_LORA_ENABLED"] = _b(v.lora_enabled)
+    cfg["VOICE_LORA_MAX_SECS"] = str(v.lora_max_secs)
+    cfg["VOICE_LORA_PORTNUM"] = str(v.lora_portnum)
+    cfg["VOICE_LORA_HOP_LIMIT"] = str(v.lora_hop_limit)
+    cfg["VOICE_STT_ENGINE"] = str(v.stt_engine)
+    if v.stt_model:
+        cfg["VOICE_STT_MODEL"] = str(v.stt_model)
+    if v.stt_grammar:
+        cfg["VOICE_STT_GRAMMAR"] = str(v.stt_grammar)
+    cfg["VOICE_STT_CLEANUP"] = _b(v.stt_cleanup)
+    cfg["VOICE_TX_CLEANUP"] = _b(v.tx_cleanup)
+    cfg["VOICE_LORA_STREAM_ENABLED"] = _b(v.stream_enabled)
+    cfg["VOICE_LORA_STREAM_PORTNUM"] = str(v.stream_portnum)
     return cfg
 
 

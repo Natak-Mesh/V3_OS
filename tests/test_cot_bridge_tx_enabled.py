@@ -26,6 +26,18 @@ import pytest  # noqa: E402
 
 from nucleusd.meshtastic import cot_bridge  # noqa: E402
 
+# _read_mesh_conf() now loads through the validated schema, so fixtures must be
+# complete configs: mesh.password + ap.password are required fields.
+_REQUIRED = 'mesh:\n  password: "52235223"\nap:\n  password: "52235223"\n'
+
+
+def _write_conf(tmp_path, monkeypatch, body):
+    """Write a real-format config.yaml and point the bridge's MESH_CONF at it."""
+    p = tmp_path / "config.yaml"
+    p.write_text(_REQUIRED + body)
+    monkeypatch.setattr(cot_bridge, "MESH_CONF", str(p))
+    return p
+
 
 @pytest.fixture(autouse=True)
 def _restore_gate():
@@ -50,19 +62,27 @@ def test_apply_tx_enabled_missing_key_leaves_gate_unchanged():
 
 
 def test_read_mesh_conf_surfaces_tx_enabled(tmp_path, monkeypatch):
-    conf = tmp_path / "config.yaml"
-    conf.write_text("meshtastic:\n  enabled: true\n  tx_enabled: false\n")
-    monkeypatch.setattr(cot_bridge, "MESH_CONF", str(conf))
+    _write_conf(tmp_path, monkeypatch,
+                "meshtastic:\n  enabled: true\n  tx_enabled: false\n")
     cfg = cot_bridge._read_mesh_conf()
     assert cfg["TX_ENABLED"] == "false"
 
 
 def test_read_mesh_conf_defaults_tx_enabled_true(tmp_path, monkeypatch):
-    conf = tmp_path / "config.yaml"
-    conf.write_text("meshtastic:\n  enabled: true\n")  # no tx_enabled key
-    monkeypatch.setattr(cot_bridge, "MESH_CONF", str(conf))
+    # no tx_enabled key -> schema default (True)
+    _write_conf(tmp_path, monkeypatch, "meshtastic:\n  enabled: true\n")
     cfg = cot_bridge._read_mesh_conf()
     assert cfg["TX_ENABLED"] == "true"
+
+
+def test_read_mesh_conf_invalid_config_returns_empty(tmp_path, monkeypatch):
+    # Regression: an invalid config (mesh.password too short) fails the schema,
+    # so _read_mesh_conf() returns {} and the live _apply_* gates keep their
+    # current value rather than reading unvalidated keys.
+    p = tmp_path / "config.yaml"
+    p.write_text('mesh:\n  password: "short"\nap:\n  password: "52235223"\n')
+    monkeypatch.setattr(cot_bridge, "MESH_CONF", str(p))
+    assert cot_bridge._read_mesh_conf() == {}
 
 
 class _FakeIface:

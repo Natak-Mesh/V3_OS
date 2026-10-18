@@ -117,7 +117,7 @@ MESHTASTICD_PORT = 4403
 # starting value only; the live value is read from config.yaml
 # (meshtastic.tx_min_interval_secs) each main-loop pass — see _apply_tx_min_interval().
 # The default lives solely in the schema so it can't drift.
-from nucleusd.schema import MeshtasticConfig  # noqa: E402
+from nucleusd.schema import MeshtasticConfig, VoiceConfig  # noqa: E402
 TX_MIN_INTERVAL = MeshtasticConfig.model_fields["tx_min_interval_secs"].default
 
 # Receive-only gate. True = radio may TX; False = RX-only (never transmit). The
@@ -211,47 +211,53 @@ def _read_mesh_conf():
 
     V3 OS replaced the shell-style /etc/nucleus/mesh.conf with a single
     validated YAML config (/etc/nucleus/config.yaml). The rest of this bridge
-    was written against the old KEY=value dict, so we load the YAML and expose
-    exactly the keys the bridge consumes — nothing else in the file changes.
+    was written against the old KEY=value dict, so we load the config through
+    the single contract (``nucleusd.config.load`` -> validated schema) and
+    expose exactly the keys the bridge consumes — nothing else changes. Loading
+    through the schema (not a bespoke YAML read) keeps this bridge on the same
+    config contract/defaults/validation as the rest of the system, per the repo
+    rule that code loads config through ``config.load()``.
 
     Native meshtasticd always presents its API over TCP (localhost:4403), so
     MESHTASTICD_ENABLED maps directly to meshtastic.enabled.
+
+    A malformed/unreadable config must not crash the bridge (it is re-read every
+    main-loop pass): on failure we log and return {}, which leaves every live
+    _apply_* gate at its current value (the schema defaults at startup).
     """
     cfg = {}
     try:
-        import yaml
-        with open(MESH_CONF) as f:
-            raw = yaml.safe_load(f) or {}
-        m = raw.get("meshtastic", {}) or {}
-        cfg["MESHTASTICD_ENABLED"] = "true" if m.get("enabled", True) else "false"
-        # Receive-only toggle: when tx_enabled is false the radio still RX's but
-        # the bridge must not queue any TX (CoT/text/voice/stream/heartbeat) the
-        # firmware would drop. Read live each main-loop pass (no restart needed).
-        cfg["TX_ENABLED"] = "true" if m.get("tx_enabled", True) else "false"
-        # Voice-over-LoRa transports (top-level `voice:` section in V3 config;
-        # validated by nucleusd.schema.VoiceConfig). Disabled unless configured.
-        voice = raw.get("voice", {}) or {}
-        if voice.get("lora_enabled"):
-            cfg["VOICE_LORA_ENABLED"] = "true"
-            cfg["VOICE_LORA_PORTNUM"] = str(voice.get("lora_portnum", 260))
-            cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("lora_hop_limit", 0))
-        if voice.get("stream_enabled"):
-            cfg["VOICE_LORA_STREAM_ENABLED"] = "true"
-            cfg["VOICE_LORA_STREAM_PORTNUM"] = str(voice.get("stream_portnum", 256))
-            cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.get("lora_hop_limit", 0))
-        # Presence heartbeat: tiny periodic broadcast so peers stay visible in
-        # the node list even without ATAK traffic. Defaults on at 5 min.
-        hb = m.get("heartbeat", {}) or {}
-        cfg["HEARTBEAT_ENABLED"] = "true" if hb.get("enabled", True) else "false"
-        cfg["HEARTBEAT_INTERVAL"] = str(hb.get("interval_secs", 300))
-        # Per-UID TX rate limit. Only surfaced when present so a missing/invalid
-        # key leaves TX_MIN_INTERVAL untouched (schema owns the default).
-        if "tx_min_interval_secs" in m:
-            cfg["TX_MIN_INTERVAL"] = str(m.get("tx_min_interval_secs"))
-    except OSError:
-        pass
-    except Exception as e:  # malformed YAML must not crash the bridge
-        logger.warning(f"could not read {MESH_CONF}: {e}")
+        from .. import config as cfgmod
+        full = cfgmod.load(MESH_CONF)
+    except Exception as e:  # unreadable/invalid config must not crash the bridge
+        logger.warning(f"could not load {MESH_CONF}: {e}")
+        return cfg
+
+    m = full.meshtastic
+    cfg["MESHTASTICD_ENABLED"] = "true" if m.enabled else "false"
+    # Receive-only toggle: when tx_enabled is false the radio still RX's but
+    # the bridge must not queue any TX (CoT/text/voice/stream/heartbeat) the
+    # firmware would drop. Read live each main-loop pass (no restart needed).
+    cfg["TX_ENABLED"] = "true" if m.tx_enabled else "false"
+    # Voice-over-LoRa transports (top-level `voice:` section in V3 config;
+    # validated by nucleusd.schema.VoiceConfig). Disabled unless configured.
+    voice = full.voice
+    if voice.lora_enabled:
+        cfg["VOICE_LORA_ENABLED"] = "true"
+        cfg["VOICE_LORA_PORTNUM"] = str(voice.lora_portnum)
+        cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.lora_hop_limit)
+    if voice.stream_enabled:
+        cfg["VOICE_LORA_STREAM_ENABLED"] = "true"
+        cfg["VOICE_LORA_STREAM_PORTNUM"] = str(voice.stream_portnum)
+        cfg["VOICE_LORA_HOP_LIMIT"] = str(voice.lora_hop_limit)
+    # Presence heartbeat: tiny periodic broadcast so peers stay visible in
+    # the node list even without ATAK traffic. Defaults on at 5 min.
+    hb = m.heartbeat
+    cfg["HEARTBEAT_ENABLED"] = "true" if hb.enabled else "false"
+    cfg["HEARTBEAT_INTERVAL"] = str(hb.interval_secs)
+    # Per-UID TX rate limit (schema always provides it; surfaced so the live
+    # _apply_tx_min_interval picks up changes without a restart).
+    cfg["TX_MIN_INTERVAL"] = str(m.tx_min_interval_secs)
     return cfg
 
 
@@ -263,10 +269,11 @@ def _load_voice_config():
     cfg = _read_mesh_conf()
     if cfg.get("VOICE_LORA_ENABLED", "false").lower() not in ("true", "1", "yes"):
         return None, 0
+    _default_portnum = VoiceConfig.model_fields["lora_portnum"].default
     try:
-        portnum = int(cfg.get("VOICE_LORA_PORTNUM", 256))
+        portnum = int(cfg.get("VOICE_LORA_PORTNUM", _default_portnum))
     except ValueError:
-        portnum = 256
+        portnum = _default_portnum
     try:
         hop = int(cfg.get("VOICE_LORA_HOP_LIMIT", 0))
     except ValueError:
@@ -285,10 +292,11 @@ def _load_stream_config():
     if cfg.get("VOICE_LORA_STREAM_ENABLED",
                "false").lower() not in ("true", "1", "yes"):
         return None, 0
+    _default_portnum = VoiceConfig.model_fields["stream_portnum"].default
     try:
-        portnum = int(cfg.get("VOICE_LORA_STREAM_PORTNUM", 256))
+        portnum = int(cfg.get("VOICE_LORA_STREAM_PORTNUM", _default_portnum))
     except ValueError:
-        portnum = 256
+        portnum = _default_portnum
     try:
         hop = int(cfg.get("VOICE_LORA_HOP_LIMIT", 0))
     except ValueError:
