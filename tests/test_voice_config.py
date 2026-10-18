@@ -41,9 +41,23 @@ def test_parse_channels_empty_falls_back_to_default():
 
 
 # ── load_config ────────────────────────────────────────────────
-def _write_cfg(tmp_path, body):
+# load_config() goes through the validated schema (nucleusd.config.load), so the
+# fixtures must be complete, valid configs: mesh.password + ap.password are
+# required fields. _write_cfg injects them unless the body already sets them.
+_REQUIRED = """\
+mesh:
+  password: "52235223"
+ap:
+  password: "52235223"
+"""
+
+
+def _write_cfg(tmp_path, body, *, add_required=True):
     p = tmp_path / "config.yaml"
-    p.write_text(textwrap.dedent(body))
+    text = textwrap.dedent(body)
+    if add_required:
+        text = _REQUIRED + text
+    p.write_text(text)
     return str(p)
 
 
@@ -54,13 +68,17 @@ def test_load_config_voice_section(tmp_path, monkeypatch):
         mesh:
           subnet_prefix: 10.20.1
           mesh_802_ttl: 8
+          password: "52235223"
         voice:
           channel: 2
           channels: "1:Command,2:Squad"
           jitter_ms: 60
           lora_enabled: true
           stt_engine: vosk
-    """)
+    """, add_required=False)
+    # ap.password still required; the body above overrides the mesh block only.
+    with open(cfg_path, "a") as f:
+        f.write('ap:\n  password: "52235223"\n')
     monkeypatch.setattr(daemon, "CONFIG_YAML", cfg_path)
     cfg = daemon.load_config()
     assert cfg["MESH_IP"] == "10.20.1.42"
@@ -79,8 +97,6 @@ def test_load_config_defaults_when_voice_missing(tmp_path, monkeypatch):
     cfg_path = _write_cfg(tmp_path, """
         node:
           id: 7
-        mesh:
-          subnet_prefix: 10.20.1
     """)
     monkeypatch.setattr(daemon, "CONFIG_YAML", cfg_path)
     cfg = daemon.load_config()
@@ -95,14 +111,27 @@ def test_load_config_missing_file_is_empty(tmp_path, monkeypatch):
     assert daemon.load_config() == {}
 
 
+def test_load_config_invalid_config_is_empty(tmp_path, monkeypatch):
+    # Regression: an invalid config (mesh.password too short) must fail the
+    # schema and fall back to {} rather than feeding unvalidated values through.
+    cfg_path = _write_cfg(tmp_path, """
+        node:
+          id: 42
+        mesh:
+          password: "short"
+    """, add_required=False)
+    with open(cfg_path, "a") as f:
+        f.write('ap:\n  password: "52235223"\n')
+    monkeypatch.setattr(daemon, "CONFIG_YAML", cfg_path)
+    assert daemon.load_config() == {}
+
+
 # ── tx_cleanup config (live TX mic conditioning) ───────────────
 def test_load_config_tx_cleanup_defaults_on(tmp_path, monkeypatch):
     # Absent from the file -> the daemon-side default is on (matches schema).
     cfg_path = _write_cfg(tmp_path, """
         node:
           id: 42
-        mesh:
-          subnet_prefix: 10.20.1
         voice:
           channel: 1
     """)
@@ -114,8 +143,6 @@ def test_load_config_tx_cleanup_can_be_disabled(tmp_path, monkeypatch):
     cfg_path = _write_cfg(tmp_path, """
         node:
           id: 42
-        mesh:
-          subnet_prefix: 10.20.1
         voice:
           channel: 1
           tx_cleanup: false
@@ -134,8 +161,6 @@ def test_load_config_mesh_ifaces_includes_halow(tmp_path, monkeypatch):
     cfg_path = _write_cfg(tmp_path, """
         node:
           id: 42
-        mesh:
-          subnet_prefix: 10.20.1
         halow:
           enabled: true
         voice:
@@ -150,8 +175,6 @@ def test_load_config_mesh_ifaces_wlan1_only_when_halow_off(tmp_path, monkeypatch
     cfg_path = _write_cfg(tmp_path, """
         node:
           id: 42
-        mesh:
-          subnet_prefix: 10.20.1
         halow:
           enabled: false
         voice:

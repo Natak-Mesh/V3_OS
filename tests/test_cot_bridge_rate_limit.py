@@ -24,7 +24,13 @@ if "pubsub" not in sys.modules:
 from nucleusd.meshtastic import cot_bridge  # noqa: E402
 from nucleusd.schema import MeshtasticConfig  # noqa: E402
 
+# Complete, valid config: _read_mesh_conf() loads through the schema, which
+# requires mesh.password + ap.password.
 MESH_BLOCK = """\
+mesh:
+  password: "52235223"
+ap:
+  password: "52235223"
 meshtastic:
   enabled: true
   region: US
@@ -62,10 +68,12 @@ def test_read_mesh_conf_surfaces_value(tmp_path, monkeypatch):
     assert cot_bridge._read_mesh_conf()["TX_MIN_INTERVAL"] == "5"
 
 
-def test_read_mesh_conf_omits_missing_key(tmp_path, monkeypatch):
-    # Key absent → not surfaced, so _apply_ leaves the current value untouched.
+def test_read_mesh_conf_uses_schema_default_when_key_missing(tmp_path, monkeypatch):
+    # Key absent in the file → the schema fills in its default, which is now
+    # always surfaced (loading through the schema means no key is ever "missing").
     _write_conf(tmp_path, monkeypatch, tx=None)
-    assert "TX_MIN_INTERVAL" not in cot_bridge._read_mesh_conf()
+    assert cot_bridge._read_mesh_conf()["TX_MIN_INTERVAL"] == str(
+        MeshtasticConfig.model_fields["tx_min_interval_secs"].default)
 
 
 def test_apply_updates_global(monkeypatch):

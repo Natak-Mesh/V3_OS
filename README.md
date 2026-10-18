@@ -55,12 +55,6 @@ Everything flows one direction, from one file:
   first normalizes `config.yaml` so keys added by a code update gain their
   schema defaults.
 
-> **Known debt:** `messaging/service.py`, `voice/daemon.py`,
-> `meshtastic/meshtastic_api.py` and `meshtastic/cot_bridge.py` were ported from
-> V2 and still read `config.yaml` directly with their own defaults, bypassing
-> `config.py`/`schema.py`. This violates the rules above and is logged to fix.
-> New code must load config through `config.load()`.
-
 ---
 
 ## 2. Components (`nucleusd/`)
