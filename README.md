@@ -11,7 +11,8 @@ memory is a first-class concern.
 **Subsystems:** Wi-Fi 802.11s mesh (babeld L3 routing, smcroute multicast, HWMP
 off), Meshtastic LoRa + ATAK CoT bridge, WiFi+LoRa text messaging, mesh PTT
 voice, Reticulum (rnsd), nginx-fronted web UI, UFW host firewall. Optional per
-node: Wi-Fi HaLow (802.11ah) second mesh on a Morse MM8108 USB radio (see §10),
+node: Wi-Fi HaLow (802.11ah) second mesh on a Morse MM8108 USB radio
+([docs/halow.md](docs/halow.md)),
 Tailscale, official TAK Server **or** OpenTAKServer (either/or; see §4).
 
 ---
@@ -32,11 +33,12 @@ Everything flows one direction, from one file:
         v   (write-if-changed)
    networkd/*.network, wpa_supplicant-mesh.conf, nucleus-mesh-up.sh,
    babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
-   ~natak/.reticulum/config, 60-nucleus-usb.rules (udev), nginx vhost + htpasswd
+   ~natak/.reticulum/config, 60-nucleus-usb.rules (udev), nginx vhost + htpasswd,
+   wpa_supplicant-halow.conf, nucleus-halow-up.sh, nucleus-morse.conf (HaLow)
         |
         v   (restart / enable / reload only what changed)
    networkd, nucleus-mesh, babeld, smcroute, hostapd, brlan-setup,
-   meshtasticd, cot-bridge, rnsd, udev, nginx
+   meshtasticd, cot-bridge, rnsd, nucleus-halow, udev, nginx
 ```
 
 **Rules**
@@ -74,8 +76,10 @@ Everything flows one direction, from one file:
 | `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |
 | `reticulum.py`, `reticulum_router.py` | Read-only rnsd status via the shared-instance control socket. |
 | `update.py` | Self-update: version check + launches `nucleus-update.sh`. |
+| `power.py` | Imperative node power control (reboot / power off) via `systemctl`; the router/API only relays to it. |
+| `meshtastic/lora_freq.py` | Pure LoRa frequency math — region/preset/channel → slot + band edges (MHz); drives the radio-config page's frequency readout. |
 | `templates/` | Jinja2 templates, named after their destination. |
-| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum monitor and the Direct Messages/contacts page are in `app.js`. |
+| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum monitor and the Direct Messages/contacts page are in `app.js`. Selectable display theme (classic / htop) with a bundled Terminus font. |
 | `mesh_peers.py` | Shared mesh-neighbour discovery helper: Babel neighbours (monitor on `[::1]:33123`) → per-node HTTP pulls. Used to fetch peers' contact cards for one-tap add. |
 
 Routers are thin HTTP layers: logic stays in the module/daemon they wrap.
@@ -114,6 +118,10 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
 5. **hostapd** — 5 GHz AP on `wlan0`.
 6. **brlan-setup** — enslaves `wlan0` into `br-lan` (networkd can't while
    hostapd owns it). `apply` re-runs it whenever networkd or hostapd bounce.
+7. **nucleus-halow** (optional) runs `nucleus-halow-up.sh`: brings the Morse
+   MM8108 USB radio's `halow0` into an 802.11ah 802.11s mesh (own
+   `wpa_supplicant-halow.conf`), joined to Babel. Inert unless the radio is
+   present; auto-starts on plug-in. See [docs/halow.md](docs/halow.md).
 
 nginx fronts the UI on :80/:443 (self-signed cert, `<hostname>.local` via avahi);
 requests over eth0 need HTTP Basic auth, trusted nets (mesh, br-lan, Tailscale,
@@ -170,6 +178,8 @@ node:
   `nucleus-update.sh`, `nucleus-tak-setup.sh`, `nucleus-ots-fixup.sh` (inert
   unless used). The USB udev rule (`60-nucleus-usb.rules`) is **generated** by
   `apply`, not a static file.
+- `nucleus-halow-build.sh` → builds + installs the out-of-tree Morse HaLow
+  driver (via DKMS) + firmware; a no-op on non-HaLow nodes.
 - GPS UART prep (boot config/cmdline)
 - `config/config.yaml` → `/etc/nucleus/config.yaml` **only if absent**
 - enables services, restarts the app daemons to pick up new code
@@ -203,7 +213,7 @@ Derived from id `9`: mesh IP `10.20.1.9`, br-lan IP `10.20.9.1`, AP SSID
 
 Other sections: `br_lan`, `eth0`, `meshtastic`, `messaging`, `voice`,
 `reticulum`, `web`, `firewall`, `tak`, `halow` (optional 802.11ah USB radio;
-inert unless the radio is plugged in — see §10 / [docs/halow.md](docs/halow.md)).
+inert unless the radio is plugged in — see [docs/halow.md](docs/halow.md)).
 Defaults and comments are in
 [config/config.yaml](config/config.yaml); per-page detail in the
 [manual](docs/manual/README.md).
@@ -229,11 +239,12 @@ V3_OS/
 │   ├── templates/       # Jinja2, named after destination files
 │   └── web/             # static UI
 ├── system/              # static (non-rendered) system files
-│   ├── systemd/         # nucleusd, nucleus-mesh, brlan-setup, cot-bridge,
-│   │                    # nucleus-meshtastic-init, nucleus-messaging,
-│   │                    # nucleus-voice, rnsd, takserver.service.d/
+│   ├── systemd/         # nucleusd, nucleus-mesh, nucleus-rf, nucleus-halow,
+│   │                    # brlan-setup, cot-bridge, nucleus-meshtastic-init,
+│   │                    # nucleus-messaging, nucleus-voice, rnsd,
+│   │                    # takserver.service.d/
 │   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh,
-│   │                    # nucleus-ots-fixup.sh
+│   │                    # nucleus-ots-fixup.sh, nucleus-halow-build.sh
 │   └── networkmanager/  sudoers.d/
 ├── config/config.yaml   # default config, seeded to /etc on install
 ├── docs/                # API.md + operator manual
