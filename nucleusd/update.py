@@ -57,6 +57,13 @@ def _git(*args: str, timeout: int = 25) -> subprocess.CompletedProcess:
     )
 
 
+def _read_checkout_version() -> str | None:
+    """Return the VERSION file in the local checkout, or None if unreadable."""
+    try:
+        return (REPO_DIR / "VERSION").read_text().strip() or None
+    except OSError:
+        return None
+
 
 def version_info() -> dict:
     """Compare the installed (running) version with the git remote.
@@ -68,6 +75,11 @@ def version_info() -> dict:
       dirty      True if the working tree has uncommitted changes
       offline    True if the remote could not be reached
       local_head/remote_head  short commit ids (for display)
+      checkout   VERSION in the local checkout (None if unreadable)
+      install_pending  True if the installed (running) version differs from the
+                 local checkout's VERSION — new code is present in the repo but
+                 was never reinstalled into the venv, so the service still runs
+                 the old version even though git shows no commits behind.
     """
     info = {
         "installed": __version__,
@@ -77,12 +89,22 @@ def version_info() -> dict:
         "offline": False,
         "local_head": None,
         "remote_head": None,
+        "checkout": None,
+        "install_pending": False,
         "error": None,
     }
 
     if not (REPO_DIR / ".git").exists():
         info["error"] = f"{REPO_DIR} is not a git repository"
         return info
+
+    # Version in the local checkout. If it differs from the installed (running)
+    # version, the repo holds code the venv was never (re)installed with — an
+    # install is pending regardless of how the local checkout compares to the
+    # remote (behind may be 0 after a pull that was never reinstalled).
+    info["checkout"] = _read_checkout_version()
+    if info["checkout"] and info["checkout"] != info["installed"]:
+        info["install_pending"] = True
 
     # Dirty working tree (uncommitted local changes block a clean update).
     st = _git("status", "--porcelain")

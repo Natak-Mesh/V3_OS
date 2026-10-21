@@ -78,3 +78,57 @@ def test_version_info_installed_is_package_version(monkeypatch, tmp_path):
     assert info["installed"] == update.__version__
     assert info["error"]
     assert info["available"] is None
+
+
+def _stub_git(responses):
+    """Return a _git replacement serving canned CompletedProcess results by arg."""
+    import subprocess
+
+    def fake(*args, timeout=25):
+        for key, (rc, out) in responses.items():
+            if key in args:
+                return subprocess.CompletedProcess(args, rc, out, "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    return fake
+
+
+def _make_repo(tmp_path, version):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "VERSION").write_text(version + "\n")
+    return tmp_path
+
+
+def test_version_info_install_pending_when_checkout_ahead_of_installed(monkeypatch, tmp_path):
+    # Real-world case: a pull landed 0.16.0 in the checkout but the venv still
+    # runs 0.15.4, and HEAD == origin/main (behind 0). install_pending must be
+    # True so the UI stops saying "up to date". Fixture mirrors the live
+    # /api/v1/update/check output (installed 0.15.4, available 0.16.0, behind 0).
+    _make_repo(tmp_path, "0.16.0")
+    monkeypatch.setattr(update, "REPO_DIR", tmp_path)
+    monkeypatch.setattr(update, "__version__", "0.15.4")
+    monkeypatch.setattr(update, "_git", _stub_git({
+        "status": (0, ""),
+        "--count": (0, "0"),
+        "show": (0, "0.16.0"),
+        "--short": (0, "1df5e0f"),
+    }))
+    info = update.version_info()
+    assert info["installed"] == "0.15.4"
+    assert info["checkout"] == "0.16.0"
+    assert info["behind"] == 0
+    assert info["install_pending"] is True
+
+
+def test_version_info_not_pending_when_installed_matches_checkout(monkeypatch, tmp_path):
+    _make_repo(tmp_path, "0.16.0")
+    monkeypatch.setattr(update, "REPO_DIR", tmp_path)
+    monkeypatch.setattr(update, "__version__", "0.16.0")
+    monkeypatch.setattr(update, "_git", _stub_git({
+        "status": (0, ""),
+        "--count": (0, "0"),
+        "show": (0, "0.16.0"),
+    }))
+    info = update.version_info()
+    assert info["install_pending"] is False
+    assert info["behind"] == 0

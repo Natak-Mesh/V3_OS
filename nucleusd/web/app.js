@@ -1255,7 +1255,13 @@ const PAGES = {
       } else {
         const avail = v.available || "?";
         const behind = v.behind;
-        if (behind === 0) {
+        if (v.install_pending) {
+          // New code is in the checkout but the venv was never reinstalled, so
+          // the running version differs from the repo even when behind === 0.
+          statusHtml = `<span class="warn">installed ${esc(installed)} ≠ ` +
+            `repo ${esc(v.checkout || "?")} — reinstall needed</span>`;
+          canUpdate = true;
+        } else if (behind === 0) {
           statusHtml = `<span class="ok">up to date</span>`;
         } else if (behind > 0) {
           statusHtml = `<span class="warn">update available` +

@@ -109,9 +109,19 @@ else
     AFTER_HEAD="$(git rev-parse HEAD 2>/dev/null)"
     log "git HEAD after pull: $AFTER_HEAD"
     if [ "$BEFORE_HEAD" = "$AFTER_HEAD" ]; then
-        log "already up to date - no new code pulled"
-        log "===== update finished (no changes) ====="
-        exit 1
+        # No new commits. But the checkout may already hold code the venv was
+        # never reinstalled with (e.g. a prior pull that never ran install.sh),
+        # leaving the running version behind the repo. Only then is there
+        # genuinely nothing to do; otherwise fall through to reinstall.
+        INSTALLED_VER="$(/opt/nucleus/venv/bin/python -c 'import nucleusd; print(nucleusd.__version__)' 2>/dev/null)"
+        CHECKOUT_VER="$(cat "$REPO_DIR/VERSION" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "$CHECKOUT_VER" ] && [ "$INSTALLED_VER" != "$CHECKOUT_VER" ]; then
+            log "no new commits, but installed $INSTALLED_VER != checkout $CHECKOUT_VER - reinstalling"
+        else
+            log "already up to date - no new code pulled"
+            log "===== update finished (no changes) ====="
+            exit 1
+        fi
     fi
 
     # --- self-update: hand off to the just-pulled script --------------------
