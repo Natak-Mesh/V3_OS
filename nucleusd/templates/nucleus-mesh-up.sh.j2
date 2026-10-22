@@ -36,6 +36,14 @@ rm -f /var/run/wpa_supplicant/wlan1
 # vanishes from the mesh. keep_addr_on_down=1 makes the address survive the bounce.
 sysctl -w net.ipv6.conf.wlan1.keep_addr_on_down=1
 
+{% if reti_auto_eth0 %}
+# Same treatment for eth0's link-local: Reticulum AutoInterface peers over the
+# fe80 address on eth0 (wired/fiber, no router). A carrier bounce on the media
+# converter would otherwise drop the address and break peering until rnsd is
+# restarted. keep_addr_on_down=1 keeps it across the bounce.
+sysctl -w net.ipv6.conf.eth0.keep_addr_on_down=1
+{% endif %}
+
 # --- Put wlan1 into encrypted 802.11s mesh mode -----------------------------
 ip link set wlan1 down
 iw reg set "{{ mesh_country }}"
@@ -109,6 +117,14 @@ ufw allow in on tailscale0
 # replacing the ad-hoc `ufw allow in on wlan2` rules the manual bring-up left
 # (wiped by the next `ufw --force reset`).
 ufw allow in on {{ halow_iface }}
+{% endif %}
+{% if reti_auto_eth0 %}
+# Reticulum AutoInterface over eth0 (wired/fiber peering, no router needed).
+# AutoInterface finds peers over IPv6 link-local using these UDP ports; without
+# them the default-deny on eth0 would silently drop node-to-node discovery/data.
+ufw allow in on eth0 to any port {{ reti_auto_discovery_port }} proto udp comment 'reticulum autointerface discovery'
+ufw allow in on eth0 to any port {{ reti_auto_unicast_port }} proto udp comment 'reticulum autointerface unicast discovery'
+ufw allow in on eth0 to any port {{ reti_auto_data_port }} proto udp comment 'reticulum autointerface data'
 {% endif %}
 {% if web_eth0_access %}
 # Web UI over ethernet (home LAN etc). nginx password-protects any request that

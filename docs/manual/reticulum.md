@@ -8,11 +8,22 @@ The config is rendered by `nucleusctl apply` from `/etc/nucleus/config.yaml`
 
 | Interface | Type | Mode | Purpose |
 |-----------|------|------|---------|
-| Mesh AutoInterface | AutoInterface on `wlan1` | internal | Auto-peers with other nodes over the 802.11s mesh (IPv6 link-local). |
+| Mesh AutoInterface | AutoInterface on `wlan1` (+ `halow0`, `eth0`) | internal | Auto-peers with other nodes over the 802.11s mesh, HaLow, and the wired/fiber port using IPv6 link-local. |
 | LAN TCP Server | TCPServerInterface on `br-lan:4242` | internal | Attach point for client apps (Sideband, MeshChat, nomadnet) on the node's AP/LAN. |
 | Entry Node | TCPClientInterface | boundary | Optional uplink to a public-IP Reticulum node joining the wider network. |
 | KISS TNC | KISSInterface (serial) | — | Optional packet radio TNC, off by default. |
 | RNode LoRa | RNodeInterface on `/dev/nucleus/rnode` | — | USB LoRa RNode radio, on by default (harmless with no radio plugged in). Only the RAK4631 is supported. |
+
+### Wired/fiber peering (`auto_eth0`)
+
+`reticulum.auto_eth0` (default **on**) adds `eth0` to the AutoInterface device
+list and opens the AutoInterface UDP ports (29716 discovery, 29717 unicast
+discovery, 42671 data) on `eth0` in the firewall. This lets two nodes peer
+directly over an Ethernet or fiber (media-converter) link with **no router** —
+AutoInterface uses each side's IPv6 link-local address, so no DHCP or static IP
+is needed. `eth0` stays in its usual WAN/LAN mode; peering rides on the
+link-local address alongside any DHCP lease. Turn it off to stop the node from
+auto-peering with Reticulum devices on a home/WAN network plugged into `eth0`.
 
 ### Announce propagation (boundary/internal modes)
 

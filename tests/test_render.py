@@ -24,9 +24,10 @@ def test_reticulum_config_defaults():
     r = rendered()["/home/natak/.reticulum/config"]
     assert "enable_transport = Yes" in r
     assert "loglevel = 4" in r
-    # AutoInterface on the wlan1 mesh.
+    # AutoInterface on the wlan1 mesh; halow0 (HaLow on by default) and eth0
+    # (auto_eth0 on by default, for wired/fiber peering with no router) follow.
     assert "type = AutoInterface" in r
-    assert "devices = wlan1" in r
+    assert "devices = wlan1, halow0, eth0" in r
     # TCPServer on br-lan.
     assert "type = TCPServerInterface" in r
     assert "device = br-lan" in r
@@ -92,6 +93,63 @@ def test_reticulum_rnode_enabled():
     assert "txpower = 17" in r
     assert "spreadingfactor = 8" in r
     assert "codingrate = 6" in r
+
+
+RETI_ETH0_UDP_RULES = (
+    "ufw allow in on eth0 to any port 29716 proto udp comment 'reticulum autointerface discovery'",
+    "ufw allow in on eth0 to any port 29717 proto udp comment 'reticulum autointerface unicast discovery'",
+    "ufw allow in on eth0 to any port 42671 proto udp comment 'reticulum autointerface data'",
+)
+
+
+def test_reticulum_auto_eth0_default_on():
+    # Default config peers over eth0: it is appended to the AutoInterface device
+    # list, the UDP discovery/data ports are opened on eth0, and eth0's
+    # link-local is preserved across a carrier bounce.
+    all_files = rendered()
+    r = all_files["/home/natak/.reticulum/config"]
+    # eth0 is the last device in the AutoInterface list (halow0 on by default).
+    assert "devices = wlan1, halow0, eth0" in r
+    m = all_files["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    for rule in RETI_ETH0_UDP_RULES:
+        assert rule in m
+        # After the reset, before ufw is enabled.
+        assert m.index("ufw --force reset") < m.index(rule) < m.index("ufw --force enable")
+    assert "net.ipv6.conf.eth0.keep_addr_on_down=1" in m
+
+
+def test_reticulum_auto_eth0_off():
+    # auto_eth0 off: eth0 drops out of the device list, no eth0 UDP rules, and
+    # no eth0 keep_addr_on_down line.
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {"auto_eth0": False},
+    })
+    all_files = render_all(cfg)
+    r = all_files["/home/natak/.reticulum/config"]
+    # halow0 stays (HaLow on by default); eth0 is gone from the device list.
+    assert "devices = wlan1, halow0\n" in r
+    assert "eth0" not in r
+    m = all_files["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    for rule in RETI_ETH0_UDP_RULES:
+        assert rule not in m
+    assert "net.ipv6.conf.eth0.keep_addr_on_down=1" not in m
+
+
+def test_reticulum_auto_eth0_rules_absent_when_firewall_disabled():
+    # The UDP rules live inside the firewall block, so disabling the firewall
+    # drops them even though auto_eth0 is on.
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "firewall": {"enabled": False},
+    })
+    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    for rule in RETI_ETH0_UDP_RULES:
+        assert rule not in m
 
 
 def test_usb_udev_rule():

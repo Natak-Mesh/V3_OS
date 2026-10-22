@@ -144,7 +144,8 @@ def test_render_halow_stanzas_vanish_when_disabled():
     assert "halow0" not in r["/etc/smcroute.conf"]
     assert "halow0" not in r["/opt/nucleus/bin/nucleus-mesh-up.sh"]
     reti = r["/home/natak/.reticulum/config"]
-    assert "devices = wlan1\n" in reti
+    # halow0 drops out of the AutoInterface list; eth0 stays (auto_eth0 default on).
+    assert "devices = wlan1, eth0\n" in reti
     assert "halow0" not in reti
 
 

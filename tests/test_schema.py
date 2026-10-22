@@ -81,6 +81,7 @@ def test_reticulum_defaults():
     assert r.enabled is True
     assert r.transport is True
     assert r.auto_device == "wlan1"
+    assert r.auto_eth0 is True
     assert r.tcp_server_port == 4242
     assert r.entry_node_host == "173.230.150.24"
     assert r.entry_node_port == 4243

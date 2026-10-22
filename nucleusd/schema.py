@@ -66,6 +66,14 @@ RNODE_DEVICE_PATH = "/dev/nucleus/rnode"
 # networkd file, supplicant, babeld, smcroute, messaging/voice — uses this name.
 HALOW_IFACE = "halow0"
 
+# Reticulum AutoInterface default UDP ports (RNS defaults, see
+# RNS.Interfaces.AutoInterface): multicast discovery, unicast discovery
+# (discovery+1) and data. Opened on eth0 in the firewall when
+# reticulum.auto_eth0 is on, so wired/fiber peering is not blocked by UFW.
+RETI_AUTO_DISCOVERY_PORT = 29716
+RETI_AUTO_UNICAST_PORT = 29717
+RETI_AUTO_DATA_PORT = 42671
+
 # US S1G channel table — single source of truth, transcribed from the Morse
 # driver's dot11ah/s1g_channels_rules.c (us_s1g_channels[]). Keyed by channel
 # bandwidth in MHz; each value is the tuple of valid S1G channel numbers at that
@@ -423,6 +431,14 @@ class ReticulumConfig(BaseModel):
     # AutoInterface over the 802.11s WiFi mesh.
     auto_interface: bool = Field(True, description="AutoInterface peering on the wlan1 mesh.")
     auto_device: str = Field("wlan1", description="Interface AutoInterface peers over.")
+    auto_eth0: bool = Field(
+        True,
+        description=(
+            "Also auto-peer over eth0 (wired/fiber). Lets two nodes talk directly "
+            "over an Ethernet/fiber link with no router, using IPv6 link-local. "
+            "Opens the AutoInterface UDP discovery/data ports on eth0 in the firewall."
+        ),
+    )
 
     # TCPServer on br-lan for wired/AP-side clients.
     tcp_server: bool = Field(True, description="Expose a TCPServerInterface on br-lan.")
@@ -816,12 +832,20 @@ class NucleusConfig(BaseModel):
             "reti_auto_interface": self.reticulum.auto_interface,
             "reti_auto_device": self.reticulum.auto_device,
             # AutoInterface peers over every mesh radio: wlan1 always, halow0 too
-            # when HaLow is enabled. reti_auto_device stays the single wlan1 value
-            # (back-compat); the template uses this comma-joined list.
+            # when HaLow is enabled, and eth0 when auto_eth0 is on (wired/fiber
+            # peering with no router). reti_auto_device stays the single wlan1
+            # value (back-compat); the template uses this comma-joined list.
             "reti_auto_devices": ", ".join(
                 [self.reticulum.auto_device]
                 + ([HALOW_IFACE] if self.halow.enabled else [])
+                + (["eth0"] if self.reticulum.auto_eth0 else [])
             ),
+            # Open AutoInterface's UDP ports on eth0 in the firewall when peering
+            # over the wire is enabled; the mesh-up template gates on this flag.
+            "reti_auto_eth0": self.reticulum.auto_eth0,
+            "reti_auto_discovery_port": RETI_AUTO_DISCOVERY_PORT,
+            "reti_auto_unicast_port": RETI_AUTO_UNICAST_PORT,
+            "reti_auto_data_port": RETI_AUTO_DATA_PORT,
             "reti_tcp_server": self.reticulum.tcp_server,
             "reti_tcp_server_device": "br-lan",
             "reti_tcp_server_port": self.reticulum.tcp_server_port,

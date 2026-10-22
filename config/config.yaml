@@ -104,6 +104,7 @@ reticulum:
   loglevel: 4              # rnsd verbosity 0=critical .. 7=extreme
   auto_interface: true     # AutoInterface peering on the wlan1 802.11s mesh
   auto_device: wlan1
+  auto_eth0: true          # also auto-peer over eth0 (wired/fiber, no router needed)
   tcp_server: true         # TCPServerInterface on br-lan for wired/AP clients
   tcp_server_port: 4242
   entry_node: true         # uplink to a public-IP Reticulum entry node

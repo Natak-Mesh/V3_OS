@@ -40,6 +40,7 @@ With the firewall enabled, the following rules are applied, in this order:
 | allow in on wlan1 | Trust the 802.11s mesh (WPA3-encrypted). |
 | allow in on br-lan | Trust the local wired LAN / AP bridge. |
 | allow in on tailscale0 | Trust Tailscale. |
+| allow in on eth0 port 29716/29717/42671 udp | Reticulum AutoInterface over the wired/fiber port (node-to-node peering with no router). Only present when `reticulum.auto_eth0: true` (default). |
 | allow in on eth0 port 80/443 tcp | Web UI over ethernet. Only present when `web.eth0_access: true`. nginx password-protects these. |
 | allow in on eth0 port 8443/8089/8446 tcp, 8090 udp | Official TAK Server over ethernet. Only present when the `takserver` package is installed — checked at run time with `dpkg-query`, not from config. Open to any source; see [TAK Server](takserver.md#ports). |
 | allow in on eth0 port 8444/8443/8446/8089/8883/8322/1936 tcp | OpenTAKServer over ethernet. Only present when `opentakserver.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. 8082 (plain HTTP, unauthenticated) is never opened on eth0. Open to any source; see [OpenTAKServer](opentakserver.md#ports). |
