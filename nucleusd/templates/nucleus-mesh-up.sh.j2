@@ -101,6 +101,11 @@ ufw --force default deny incoming
 ufw --force default allow outgoing
 ufw --force default deny routed
 ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
+# Reticulum AutoInterface over eth0 (wired/fiber peering): discovery, unicast
+# discovery, and data UDP ports must be open or peers never form over eth0.
+ufw allow in on eth0 to any port 29716 proto udp comment 'reticulum autointerface discovery'
+ufw allow in on eth0 to any port 29717 proto udp comment 'reticulum autointerface unicast discovery'
+ufw allow in on eth0 to any port 42671 proto udp comment 'reticulum autointerface data'
 ufw allow in on wlan1
 ufw allow in on br-lan
 ufw allow in on tailscale0

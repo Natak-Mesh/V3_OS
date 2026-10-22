@@ -821,6 +821,7 @@ class NucleusConfig(BaseModel):
             "reti_auto_devices": ", ".join(
                 [self.reticulum.auto_device]
                 + ([HALOW_IFACE] if self.halow.enabled else [])
+                + ["eth0"]
             ),
             "reti_tcp_server": self.reticulum.tcp_server,
             "reti_tcp_server_device": "br-lan",

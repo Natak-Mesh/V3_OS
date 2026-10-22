@@ -28,6 +28,7 @@
     listen_port = {{ reti_tcp_server_port }}
 
 {% endif %}
+{#- Entry Node (public-IP TCP uplink) commented out: force mesh/eth0-only peering.
 {% if reti_entry_node %}
   [[Entry Node]]
     # boundary: announces from the public network are NOT flooded into the
@@ -40,6 +41,7 @@
     target_port = {{ reti_entry_node_port }}
 
 {% endif %}
+-#}
 {% if reti_kiss_enabled %}
   [[KISS TNC]]
     type = KISSInterface
