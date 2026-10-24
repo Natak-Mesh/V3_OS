@@ -142,7 +142,7 @@ As built:
   runs `pkill -f 'wpa_supplicant .*-i wlan1' || true`, waits (≤5 s) for the
   process to exit, and removes the stale control socket
   `/var/run/wpa_supplicant/wlan1`. Stops the script aborting mid-run under
-  `set -euo pipefail` (which otherwise skipped the UFW + mcast-TTL sections).
+  `set -euo pipefail` (which otherwise skipped the mcast-TTL section). *(UFW + eth0 NAT have since moved out to `nucleus-firewall.service`, decoupled from the mesh radio; see [manual/firewall.md](manual/firewall.md).)*
 - **C — apply rebuilds the whole network group in a fixed order**
   (`nucleusd/apply.py`). New `NET_GROUP_ORDER = [systemd-networkd, nucleus-mesh,
   hostapd, brlan-setup, babeld, smcroute]`; if any member's rendered file

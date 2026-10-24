@@ -55,9 +55,14 @@ Header: derived br-lan IP.
 
 | Field | Notes |
 |-------|-------|
-| Mode | `wan` or `lan`. |
+| Mode | `wan` (DHCP client, shares internet to the mesh via NAT) or `lan` (static gateway serving DHCP to a directly-connected device). For a direct Pi↔Pi (or fiber) link, flip one node to `lan` so it becomes the DHCP server and the other stays `wan` as its client. |
 | DHCP pool offset | 0–254 (lan mode). |
 | DHCP pool size | 1–254 (lan mode). |
+
+In `lan` mode the rendered network config also enables a router-less IPv6
+link-local (`LinkLocalAddressing=ipv6`, `IPv6AcceptRA=no`) so Reticulum's
+AutoInterface can peer over eth0 with no router/RA present. The `wan` branch is
+unchanged (it owns the DHCP/DNS path).
 
 ## Meshtastic Radio
 

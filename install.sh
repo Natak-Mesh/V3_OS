@@ -95,6 +95,7 @@ done
 
 echo "==> static system files"
 install -m 644 "$REPO/system/systemd/nucleus-mesh.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-firewall.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-halow.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-rf.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/brlan-setup.service" /etc/systemd/system/
@@ -205,7 +206,7 @@ fi
 # avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
 # :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
 systemctl enable avahi-daemon nginx
-systemctl enable systemd-networkd nucleus-rf.service nucleus-mesh.service nucleus-halow.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
+systemctl enable systemd-networkd nucleus-rf.service nucleus-mesh.service nucleus-firewall.service nucleus-halow.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
 
 # Restart the always-on app daemons so a code-only re-install (new package in the
 # venv) actually takes effect — enabling alone won't reload a running process.

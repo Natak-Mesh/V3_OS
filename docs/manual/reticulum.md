@@ -8,7 +8,7 @@ The config is rendered by `nucleusctl apply` from `/etc/nucleus/config.yaml`
 
 | Interface | Type | Mode | Purpose |
 |-----------|------|------|---------|
-| Mesh AutoInterface | AutoInterface on `wlan1` | internal | Auto-peers with other nodes over the 802.11s mesh (IPv6 link-local). |
+| Mesh AutoInterface | AutoInterface on `wlan1`, `eth0` (+ `halow0` if present) | internal | Auto-peers with other nodes over the 802.11s mesh and over a direct wired/fiber `eth0` link (IPv6 link-local + multicast). In eth0 `lan` mode the network config enables a router-less IPv6 link-local (`LinkLocalAddressing=ipv6`, `IPv6AcceptRA=no`) so the multicast route installs with no router present; its UDP ports (29716/29717/42671) are opened by the host firewall. |
 | LAN TCP Server | TCPServerInterface on `br-lan:4242` | internal | Attach point for client apps (Sideband, MeshChat, nomadnet) on the node's AP/LAN. |
 | Entry Node | TCPClientInterface | boundary | Optional uplink to a public-IP Reticulum node joining the wider network. |
 | KISS TNC | KISSInterface (serial) | — | Optional packet radio TNC, off by default. |

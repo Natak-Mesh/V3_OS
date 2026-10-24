@@ -32,13 +32,13 @@ Everything flows one direction, from one file:
         |
         v   (write-if-changed)
    networkd/*.network, wpa_supplicant-mesh.conf, nucleus-mesh-up.sh,
-   babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
+   nucleus-firewall.sh, babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
    ~natak/.reticulum/config, 60-nucleus-usb.rules (udev), nginx vhost + htpasswd,
    wpa_supplicant-halow.conf, nucleus-halow-up.sh, nucleus-morse.conf (HaLow)
         |
         v   (restart / enable / reload only what changed)
-   networkd, nucleus-mesh, babeld, smcroute, hostapd, brlan-setup,
-   meshtasticd, cot-bridge, rnsd, nucleus-halow, udev, nginx
+   networkd, nucleus-mesh, nucleus-firewall, babeld, smcroute, hostapd,
+   brlan-setup, meshtasticd, cot-bridge, rnsd, nucleus-halow, udev, nginx
 ```
 
 **Rules**
@@ -107,18 +107,22 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
    - `wlan1` into 802.11s mesh mode, SAE/WPA3 join (`wpa_supplicant-mesh.conf`),
    - **HWMP off** (`mesh_fwding=0`) — Babel owns all L3 routing,
    - `mesh_ttl`/`mesh_element_ttl` and RTS threshold,
-   - nftables NAT (WAN mode) + multicast-TTL mangle rule,
+   - multicast-TTL mangle rule (nftables).
+3. **`nucleus-firewall.service`** runs `nucleus-firewall.sh` — the host firewall,
+   **decoupled from the mesh radio** (ordered only after networkd, no wlan1
+   dependency) so it applies even when wlan1 is RF-killed:
+   - eth0 WAN NAT masquerade (WAN mode),
    - UFW rebuilt every run (`ufw --force reset`, then rules from config;
-     `firewall.enabled: false` disables it). TAK/OpenTAKServer/MediaMTX ports
-     on eth0 are opened only if those are installed (checked at run time).
-     nftables rules are untouched.
-     See [Firewall](docs/manual/firewall.md).
-3. **babeld** — unicast routes (mesh + br-lan subnets + default route).
-4. **smcroute** — multicast between `wlan1` and `br-lan`.
-5. **hostapd** — 5 GHz AP on `wlan0`.
-6. **brlan-setup** — enslaves `wlan0` into `br-lan` (networkd can't while
+     `firewall.enabled: false` disables it). Includes the eth0 Reticulum UDP
+     ports for wired peering; TAK/OpenTAKServer/MediaMTX ports on eth0 are opened
+     only if those are installed (checked at run time). The mangle/Tailscale
+     nftables rules are untouched. See [Firewall](docs/manual/firewall.md).
+4. **babeld** — unicast routes (mesh + br-lan subnets + default route).
+5. **smcroute** — multicast between `wlan1` and `br-lan`.
+6. **hostapd** — 5 GHz AP on `wlan0`.
+7. **brlan-setup** — enslaves `wlan0` into `br-lan` (networkd can't while
    hostapd owns it). `apply` re-runs it whenever networkd or hostapd bounce.
-7. **nucleus-halow** (optional) runs `nucleus-halow-up.sh`: brings the Morse
+8. **nucleus-halow** (optional) runs `nucleus-halow-up.sh`: brings the Morse
    MM8108 USB radio's `halow0` into an 802.11ah 802.11s mesh (own
    `wpa_supplicant-halow.conf`), joined to Babel. Inert unless the radio is
    present; auto-starts on plug-in. See [docs/halow.md](docs/halow.md).
@@ -239,8 +243,8 @@ V3_OS/
 │   ├── templates/       # Jinja2, named after destination files
 │   └── web/             # static UI
 ├── system/              # static (non-rendered) system files
-│   ├── systemd/         # nucleusd, nucleus-mesh, nucleus-rf, nucleus-halow,
-│   │                    # brlan-setup, cot-bridge, nucleus-meshtastic-init,
+│   ├── systemd/         # nucleusd, nucleus-mesh, nucleus-firewall, nucleus-rf,
+│   │                    # nucleus-halow, brlan-setup, cot-bridge, nucleus-meshtastic-init,
 │   │                    # nucleus-messaging, nucleus-voice, rnsd,
 │   │                    # takserver.service.d/
 │   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh,

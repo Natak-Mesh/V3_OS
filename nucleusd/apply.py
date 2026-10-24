@@ -55,6 +55,11 @@ MESH_UNITS = ["nucleus-mesh", "babeld", "smcroute"]
 # MESH_UNITS) so a disabled HaLow never comes back up.
 HALOW_UNIT = "nucleus-halow"
 
+# Host-firewall unit (UFW + eth0 WAN NAT). Deliberately NOT in NET_GROUP_ORDER:
+# it is decoupled from the mesh-radio group so it applies even when wlan1 is
+# RF-killed. apply() restarts it directly when nucleus-firewall.sh changes.
+FIREWALL_UNIT = "nucleus-firewall"
+
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 # Each target maps a rendered template to its destination and the units that
@@ -82,6 +87,11 @@ TARGETS: list[Target] = [
     Target("wpa_supplicant-mesh.conf.j2", Path("/etc/wpa_supplicant/wpa_supplicant-mesh.conf"), ("nucleus-mesh",), 0o600),
     Target("wpa_supplicant-halow.conf.j2", HALOW_SUPPLICANT_CONF, ("nucleus-halow",), 0o600),
     Target("nucleus-mesh-up.sh.j2", Path("/opt/nucleus/bin/nucleus-mesh-up.sh"), ("nucleus-mesh",), 0o755),
+    # Host firewall (UFW) + eth0 WAN NAT. Its unit (nucleus-firewall) is kept OUT
+    # of NET_GROUP_ORDER on purpose: it must NOT be coupled to the mesh-radio
+    # group bounce (that coupling is the bug this split fixes). apply restarts it
+    # directly when this script changes — see the explicit handling in apply().
+    Target("nucleus-firewall.sh.j2", Path("/opt/nucleus/bin/nucleus-firewall.sh"), (FIREWALL_UNIT,), 0o755),
     Target("nucleus-halow-up.sh.j2", HALOW_UP_SCRIPT, ("nucleus-halow",), 0o755),
     # modprobe.d conf for the Morse driver country — no unit (modprobe, not systemd).
     Target("nucleus-morse.conf.j2", HALOW_MODPROBE_CONF, ()),
@@ -470,6 +480,14 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
             ordered = [u for u in ordered if u not in MESH_UNITS]
         _restart(ordered)
         result.units_restarted = ordered
+
+    # Host firewall: restart it on its own whenever nucleus-firewall.sh changed.
+    # It is intentionally outside NET_GROUP_ORDER (so it never rides the mesh
+    # bounce and applies even with wlan1 RF-killed), so the group logic above
+    # won't touch it — handle it directly here.
+    if FIREWALL_UNIT in units_to_restart:
+        _restart([FIREWALL_UNIT])
+        result.units_restarted.append(FIREWALL_UNIT)
 
     # Reconcile the wlan1 mesh RF + units to match mesh.enabled every apply
     # (idempotent): rfkill phy1 and enable/disable nucleus-mesh/babeld/smcroute.

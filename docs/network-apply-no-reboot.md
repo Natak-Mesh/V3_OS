@@ -31,7 +31,10 @@ units "up". The AP stayed unusable until a reboot.
 2. **`nucleus-mesh-up.sh` is not safe to re-run.** It runs
    `wpa_supplicant -B -i wlan1 ...` without stopping the instance already
    running. On a re-run that fails and, under `set -euo pipefail`, the script
-   aborts before the UFW and multicast-TTL mangle sections.
+   aborts before the UFW and multicast-TTL mangle sections. *(Superseded: UFW +
+   eth0 NAT have since moved to `nucleus-firewall.sh` / `nucleus-firewall.service`,
+   decoupled from the mesh radio so they apply even when wlan1 is RF-killed. Only
+   the multicast-TTL mangle still lives in `nucleus-mesh-up.sh`.)*
 
 3. **Adding wlan0 to br-lan is a race.** Three things touch it: networkd
    (`Bridge=br-lan` in `30-wlan0.network`), hostapd putting wlan0 in AP mode,

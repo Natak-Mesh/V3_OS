@@ -11,6 +11,13 @@ IPv4Forwarding=yes
 {% else %}
 # LAN: static gateway that serves DHCP to a directly-connected device.
 Address={{ eth0_static_ip }}/24
+# Router-less IPv6: with no upstream router/RA on a direct Pi<->Pi (or fiber)
+# link, keep a kernel IPv6 link-local and stop waiting on a Router Advertisement
+# that never arrives, so the ff00::/8 multicast route installs and Reticulum's
+# AutoInterface can peer over eth0. Mirrors 21-br-lan.network. The wan branch is
+# left untouched (it is the DHCP/DNS path).
+LinkLocalAddressing=ipv6
+IPv6AcceptRA=no
 DHCPServer=yes
 
 [DHCPServer]

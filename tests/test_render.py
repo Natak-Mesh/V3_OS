@@ -16,7 +16,7 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 19
+    assert len(r) == 20
     assert all(v.strip() for v in r.values())
 
 
@@ -155,7 +155,9 @@ def test_meshup_sets_params():
     assert "iw dev wlan1 set mesh_param mesh_fwding=0" in m
     assert "mesh_ttl=8" in m
     assert "set rts 500" in m
-    assert "masquerade" in m  # eth0 wan NAT
+    # UFW and eth0 WAN NAT moved to nucleus-firewall.sh — mesh-up no longer has them.
+    assert "masquerade" not in m
+    assert "ufw" not in m
 
 
 def test_meshup_preserves_link_local_across_bounce():
@@ -166,8 +168,36 @@ def test_meshup_preserves_link_local_across_bounce():
     assert "networkctl reconfigure wlan1" in m
 
 
-def test_meshup_firewall_rules():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+FIREWALL_PATH = "/opt/nucleus/bin/nucleus-firewall.sh"
+
+
+def test_firewall_script_header():
+    # UFW now lives in its own radio-independent script.
+    f = rendered()[FIREWALL_PATH]
+    assert f.startswith("#!/bin/bash")
+    assert "set -euo pipefail" in f
+
+
+def test_firewall_wan_nat_moved_here():
+    # The eth0 WAN NAT masquerade moved out of mesh-up into the firewall script,
+    # kept adjacent to the `ufw route ... out on eth0` rules it backs.
+    f = rendered()[FIREWALL_PATH]
+    assert 'nft add rule ip nat POSTROUTING oifname "eth0" masquerade' in f
+    assert f.index("masquerade") < f.index("ufw route allow in on br-lan out on eth0")
+
+
+def test_firewall_reti_udp_ports():
+    # The three Reticulum AutoInterface UDP ports must be opened on eth0 so wired
+    # peering forms; these are the rules that silently never applied when UFW was
+    # coupled to the wlan1 mesh bring-up.
+    f = rendered()[FIREWALL_PATH]
+    assert "ufw allow in on eth0 to any port 29716 proto udp" in f
+    assert "ufw allow in on eth0 to any port 29717 proto udp" in f
+    assert "ufw allow in on eth0 to any port 42671 proto udp" in f
+
+
+def test_firewall_rules():
+    m = rendered()[FIREWALL_PATH]
     # Default-deny inbound, but ssh over ethernet must survive.
     assert "ufw --force default deny incoming" in m
     assert "ufw allow in on eth0 to any port 22 proto tcp" in m
@@ -180,10 +210,10 @@ def test_meshup_firewall_rules():
     assert "ufw --force enable" in m
 
 
-def test_meshup_firewall_reset_before_allow():
+def test_firewall_reset_before_allow():
     # config.yaml is the single source of truth: the ruleset is rebuilt every
     # run, so a reset must precede the first `ufw allow` (no stale rules linger).
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    m = rendered()[FIREWALL_PATH]
     assert "ufw --force reset" in m
     assert m.index("ufw --force reset") < m.index("ufw allow")
     # ssh-on-eth0 is added first, right after the reset, so admin access over
@@ -194,14 +224,14 @@ def test_meshup_firewall_reset_before_allow():
     assert "rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*" in m
 
 
-def test_meshup_firewall_disabled():
+def test_firewall_disabled():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
         "mesh": {"password": "52235223"},
         "ap": {"password": "52235223"},
         "firewall": {"enabled": False},
     })
-    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    m = render_all(cfg)[FIREWALL_PATH]
     # Firewall off: ufw is disabled and no rules are rendered at all.
     assert "ufw --force disable" in m
     assert "ufw allow" not in m
@@ -218,8 +248,8 @@ TAK_ETH0_RULES = (
 )
 
 
-def test_meshup_tak_ports_gated_on_installed_package():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+def test_firewall_tak_ports_gated_on_installed_package():
+    m = rendered()[FIREWALL_PATH]
     # Runtime dpkg check (not config) decides whether TAK ports open on eth0.
     check = ("if [ \"$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)\""
              " = \"install ok installed\" ]; then")
@@ -239,8 +269,8 @@ MEDIAMTX_ETH0_RULES = (
 )
 
 
-def test_meshup_mediamtx_ports_gated_on_enabled_unit():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+def test_firewall_mediamtx_ports_gated_on_enabled_unit():
+    m = rendered()[FIREWALL_PATH]
     # Runtime systemd check decides whether MediaMTX ports open on eth0.
     check = "if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then"
     assert check in m
@@ -262,8 +292,8 @@ OTS_ETH0_RULES = (
 )
 
 
-def test_meshup_ots_ports_gated_on_enabled_unit():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+def test_firewall_ots_ports_gated_on_enabled_unit():
+    m = rendered()[FIREWALL_PATH]
     # Runtime systemd check decides whether OpenTAKServer ports open on eth0.
     check = "if systemctl is-enabled --quiet opentakserver.service 2>/dev/null; then"
     assert check in m
@@ -276,14 +306,14 @@ def test_meshup_ots_ports_gated_on_enabled_unit():
     assert "port 8082" not in m
 
 
-def test_meshup_tak_ports_absent_when_firewall_disabled():
+def test_firewall_tak_ports_absent_when_firewall_disabled():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
         "mesh": {"password": "52235223"},
         "ap": {"password": "52235223"},
         "firewall": {"enabled": False},
     })
-    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    m = render_all(cfg)[FIREWALL_PATH]
     assert "dpkg-query" not in m
     assert "mediamtx" not in m
     assert "opentakserver" not in m
@@ -291,14 +321,14 @@ def test_meshup_tak_ports_absent_when_firewall_disabled():
         assert rule not in m
 
 
-def test_meshup_no_wan_route_in_lan_mode():
+def test_firewall_no_wan_route_in_lan_mode():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
         "mesh": {"password": "52235223"},
         "ap": {"password": "52235223"},
         "eth0": {"mode": "lan", "static_ip": "10.10.9.1"},
     })
-    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    m = render_all(cfg)[FIREWALL_PATH]
     # No internet egress routing when eth0 is a LAN port, but ssh + mesh<->lan
     # forwarding still apply.
     assert "ufw route allow in on br-lan out on eth0" not in m
@@ -331,20 +361,20 @@ def test_htpasswd_deterministic():
         render_all(CFG)["/etc/nginx/nucleus.htpasswd"]
 
 
-def test_meshup_web_over_eth0():
-    m = rendered()["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+def test_firewall_web_over_eth0():
+    m = rendered()[FIREWALL_PATH]
     assert "ufw allow in on eth0 to any port 80 proto tcp" in m
     assert "ufw allow in on eth0 to any port 443 proto tcp" in m
 
 
-def test_meshup_web_over_eth0_disabled():
+def test_firewall_web_over_eth0_disabled():
     cfg = NucleusConfig.model_validate({
         "node": {"id": 9},
         "mesh": {"password": "52235223"},
         "ap": {"password": "52235223"},
         "web": {"eth0_access": False},
     })
-    m = render_all(cfg)["/opt/nucleus/bin/nucleus-mesh-up.sh"]
+    m = render_all(cfg)[FIREWALL_PATH]
     assert "ufw allow in on eth0 to any port 80 proto tcp" not in m
     assert "ufw allow in on eth0 to any port 443 proto tcp" not in m
     # The reset rebuilds the ruleset, so any 80/443 rule left from an earlier
@@ -390,3 +420,26 @@ def test_eth0_lan_mode():
     e = render_all(cfg)["/etc/systemd/network/40-eth0.network"]
     assert "Address=10.10.9.1/24" in e
     assert "DHCPServer=yes" in e
+    # Router-less IPv6 so Reticulum AutoInterface peers over eth0 without an RA.
+    assert "LinkLocalAddressing=ipv6" in e
+    assert "IPv6AcceptRA=no" in e
+
+
+def test_eth0_wan_mode_no_ipv6_overrides():
+    # The wan branch must stay untouched (it is the DHCP/DNS path): the router-less
+    # IPv6 lines belong only to lan mode.
+    e = rendered()["/etc/systemd/network/40-eth0.network"]  # default = wan
+    assert "DHCP=ipv4" in e
+    assert "LinkLocalAddressing=ipv6" not in e
+    assert "IPv6AcceptRA=no" not in e
+
+
+def test_firewall_target_wired_and_decoupled():
+    # The firewall renders to its own script+unit and is deliberately NOT part of
+    # the mesh-radio network group (so it applies even with wlan1 RF-killed).
+    from nucleusd.apply import TARGETS, NET_GROUP_ORDER, FIREWALL_UNIT
+    fw = [t for t in TARGETS if str(t.dest) == "/opt/nucleus/bin/nucleus-firewall.sh"]
+    assert len(fw) == 1
+    assert fw[0].units == (FIREWALL_UNIT,)
+    assert fw[0].mode == 0o755
+    assert FIREWALL_UNIT not in NET_GROUP_ORDER

@@ -6,7 +6,9 @@
 # systemd-networkd owns the DECLARATIVE bits (br-lan, addresses, DHCP). This
 # script does only the IMPERATIVE bits that networkd cannot express: putting
 # wlan1 into 802.11s mesh mode, the SAE join, kernel mesh params, and the
-# nftables multicast-TTL mangle rule.
+# nftables multicast-TTL mangle rule. The host firewall (UFW) and eth0 WAN NAT
+# live in nucleus-firewall.sh / nucleus-firewall.service, decoupled from this
+# radio-dependent unit so they apply even when wlan1 is RF-killed.
 # ============================================================
 set -euo pipefail
 
@@ -19,8 +21,8 @@ done
 
 # --- Make this script safe to re-run (apply without reboot) -----------------
 # A stale wpa_supplicant still bound to wlan1 makes the join below fail, which
-# under `set -euo pipefail` aborts the script before the UFW and multicast-TTL
-# sections. Kill any existing instance, wait for it to release the interface,
+# under `set -euo pipefail` aborts the script before the multicast-TTL mangle
+# section. Kill any existing instance, wait for it to release the interface,
 # and drop its control socket so the fresh -B launch starts clean.
 pkill -f 'wpa_supplicant .*-i wlan1' || true
 for _ in $(seq 1 10); do
@@ -71,110 +73,6 @@ iw dev wlan1 set mesh_param mesh_element_ttl={{ mesh_802_ttl }}
 # RTS/CTS for collision avoidance (hidden-node / 3+ node scenarios).
 MESH_PHY=$(iw dev wlan1 info | awk '/wiphy/{print "phy"$2}')
 iw phy "$MESH_PHY" set rts {{ mesh_rts_threshold }}
-{% endif %}
-
-{% if eth0_mode == "wan" %}
-# NAT for internet gateway sharing (WAN mode).
-nft list chain ip nat POSTROUTING 2>/dev/null | grep -q 'oifname "eth0" masquerade' || {
-    nft add table ip nat 2>/dev/null || true
-    nft 'add chain ip nat POSTROUTING { type nat hook postrouting priority 100 ; }' 2>/dev/null || true
-    nft add rule ip nat POSTROUTING oifname "eth0" masquerade
-}
-{% endif %}
-
-# --- Host firewall (UFW) ----------------------------------------------------
-{% if firewall_enabled %}
-# config.yaml is the single source of truth: reset first so the live ruleset is
-# rebuilt from the current config on every run and never accumulates stale rules
-# from an earlier apply. `ufw --force reset` only clears UFW's own rules — the
-# nftables NAT masquerade, the multicast-TTL mangle rules (both set up above via
-# nft), and Tailscale's chains live in separate tables and are untouched. Reset
-# leaves timestamped backups of the rule files behind; drop them so /etc/ufw
-# does not fill up over time.
-ufw --force reset
-rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*
-# Trust internal interfaces (WPA3 mesh + local LAN + tailscale); default-deny
-# everything arriving on eth0 EXCEPT ssh, so ethernet admin access survives.
-# The ssh-on-eth0 rule is added first, right after the reset, so admin access
-# over ethernet is never left dangling by a later bad rule.
-ufw --force default deny incoming
-ufw --force default allow outgoing
-ufw --force default deny routed
-ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
-# Reticulum AutoInterface over eth0 (wired/fiber peering): discovery, unicast
-# discovery, and data UDP ports must be open or peers never form over eth0.
-ufw allow in on eth0 to any port 29716 proto udp comment 'reticulum autointerface discovery'
-ufw allow in on eth0 to any port 29717 proto udp comment 'reticulum autointerface unicast discovery'
-ufw allow in on eth0 to any port 42671 proto udp comment 'reticulum autointerface data'
-ufw allow in on wlan1
-ufw allow in on br-lan
-ufw allow in on tailscale0
-{% if halow_enabled %}
-# Wi-Fi HaLow mesh (halow0) — trusted like wlan1. These are persistent now,
-# replacing the ad-hoc `ufw allow in on wlan2` rules the manual bring-up left
-# (wiped by the next `ufw --force reset`).
-ufw allow in on {{ halow_iface }}
-{% endif %}
-{% if web_eth0_access %}
-# Web UI over ethernet (home LAN etc). nginx password-protects any request that
-# does not come from a trusted source net (mesh/br-lan/tailscale). Port 8080
-# (the raw app) stays closed on eth0 — only the nginx proxy (80/443) is exposed.
-ufw allow in on eth0 to any port 80 proto tcp comment 'web ui over ethernet'
-ufw allow in on eth0 to any port 443 proto tcp comment 'web ui (https) over ethernet'
-{% endif %}
-# Official TAK Server: open its ports on eth0 whenever the package is installed.
-# Checked at run time (dpkg), not from config, so it tracks what is actually on
-# the node — nodes without TAK open nothing extra. Exact string compare (no
-# pipeline) so `set -euo pipefail` can't abort on a missing package.
-# 8443/8089/8090 require a client cert; 8446 (enrollment) is user/password.
-if [ "$(dpkg-query -W -f='${Status}' takserver 2>/dev/null)" = "install ok installed" ]; then
-    ufw allow in on eth0 to any port 8443 proto tcp comment 'tak web admin'
-    ufw allow in on eth0 to any port 8089 proto tcp comment 'tak client tls'
-    ufw allow in on eth0 to any port 8446 proto tcp comment 'tak cert enrollment'
-    ufw allow in on eth0 to any port 8090 proto udp comment 'tak quic'
-fi
-# OpenTAKServer (either/or with the official server; installed manually, not a
-# .deb): open its TLS ports on eth0 whenever its unit is enabled. The plain-HTTP
-# 8082 (unauthenticated Marti API) is deliberately NOT opened on eth0.
-if systemctl is-enabled --quiet opentakserver.service 2>/dev/null; then
-    ufw allow in on eth0 to any port 8444 proto tcp comment 'ots web ui'
-    ufw allow in on eth0 to any port 8443 proto tcp comment 'ots marti api'
-    ufw allow in on eth0 to any port 8446 proto tcp comment 'ots cert enrollment'
-    ufw allow in on eth0 to any port 8089 proto tcp comment 'ots client tls'
-    ufw allow in on eth0 to any port 8883 proto tcp comment 'ots mqtt tls'
-    ufw allow in on eth0 to any port 8322 proto tcp comment 'ots rtsps'
-    ufw allow in on eth0 to any port 1936 proto tcp comment 'ots rtmps'
-fi
-# MediaMTX (installed by nucleus-tak-setup.sh, not a .deb): open RTSP + SRT on
-# eth0 whenever its unit is enabled. `if` keeps a non-zero exit from tripping -e.
-if systemctl is-enabled --quiet mediamtx.service 2>/dev/null; then
-    ufw allow in on eth0 to any port 8554 proto tcp comment 'mediamtx rtsp'
-    ufw allow in on eth0 to any port 8000 proto udp comment 'mediamtx rtp'
-    ufw allow in on eth0 to any port 8001 proto udp comment 'mediamtx rtcp'
-    ufw allow in on eth0 to any port 8890 proto udp comment 'mediamtx srt'
-fi
-{% if eth0_mode == "wan" %}
-# WAN mode: let LAN/mesh clients route OUT to the internet via eth0. NAT
-# masquerade for these is set up in the WAN block above; inbound-from-internet
-# forwarding stays denied by the default deny-routed policy (established replies
-# are still permitted by conntrack).
-ufw route allow in on br-lan out on eth0
-ufw route allow in on wlan1 out on eth0
-{% if halow_enabled %}
-ufw route allow in on {{ halow_iface }} out on eth0
-{% endif %}
-{% endif %}
-# Always allow mesh <-> LAN forwarding regardless of eth0 mode.
-ufw route allow in on br-lan out on wlan1
-ufw route allow in on wlan1 out on br-lan
-{% if halow_enabled %}
-ufw route allow in on br-lan out on {{ halow_iface }}
-ufw route allow in on {{ halow_iface }} out on br-lan
-{% endif %}
-ufw --force enable
-{% else %}
-# Firewall disabled in config (firewall.enabled: false) — turn UFW off entirely.
-ufw --force disable
 {% endif %}
 
 {% if mesh_mcast_ttl > 0 %}

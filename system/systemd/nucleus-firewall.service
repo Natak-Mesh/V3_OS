@@ -1,0 +1,19 @@
+[Unit]
+Description=Nucleus host firewall (UFW + eth0 WAN NAT)
+# Independent of the mesh radio by design: ordered only behind networkd (which
+# creates eth0/br-lan), with NO wlan1 device dependency and nothing radio-related
+# in Before=. The firewall — including the eth0 Reticulum UDP ports and the
+# NAT/route rules — must apply even when wlan1 is RF-killed or the mesh never
+# comes up. It used to live in nucleus-mesh-up.sh, which aborts under
+# `set -euo pipefail` if the mesh join fails, before the UFW section could run.
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Rendered from /etc/nucleus/config.yaml by `nucleusctl apply`.
+ExecStart=/opt/nucleus/bin/nucleus-firewall.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -396,12 +396,14 @@ Named after their destination, per the repo convention:
    ATAK group add `mgroup from halow0 group G`, `mroute from halow0 group G to
    br-lan`, `mroute from br-lan group G to halow0`. **Do not** add any
    `wlan1↔halow0` mroute (decision §10.0.3).
-8. **`templates/nucleus-mesh-up.sh.j2`** (EXTEND, UFW block): when
+8. **`templates/nucleus-firewall.sh.j2`** (EXTEND, UFW block): when
    `halow_enabled` add `ufw allow in on halow0`, `ufw route allow in on br-lan
    out on halow0`, `ufw route allow in on halow0 out on br-lan`, and in WAN mode
    `ufw route allow in on halow0 out on eth0`. These replace the ad-hoc,
    non-persistent `ufw allow in on wlan2` rules currently live on 0042 (wiped by
-   the next `ufw --force reset`). nftables mcast-TTL mangle stays br-lan-only.
+   the next `ufw --force reset`). (The UFW block lived in `nucleus-mesh-up.sh.j2`
+   before it was split into the radio-independent firewall unit.) nftables
+   mcast-TTL mangle stays br-lan-only, in `nucleus-mesh-up.sh.j2`.
 9. **`templates/reticulum-config.j2`** (EXTEND): AutoInterface `devices`
    includes `halow0` when `halow_enabled` (build the device list in
    `render_context`; `reti_auto_device` stays wlan1).

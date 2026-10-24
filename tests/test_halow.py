@@ -129,10 +129,11 @@ def test_render_babeld_and_smcroute_halow():
 
 def test_render_ufw_and_reticulum_halow():
     r = _render(cfg())
-    mesh_up = r["/opt/nucleus/bin/nucleus-mesh-up.sh"]
-    assert "ufw allow in on halow0" in mesh_up
-    assert "ufw route allow in on br-lan out on halow0" in mesh_up
-    assert "ufw route allow in on halow0 out on br-lan" in mesh_up
+    # UFW now lives in nucleus-firewall.sh (decoupled from the wlan1 mesh unit).
+    fw = r["/opt/nucleus/bin/nucleus-firewall.sh"]
+    assert "ufw allow in on halow0" in fw
+    assert "ufw route allow in on br-lan out on halow0" in fw
+    assert "ufw route allow in on halow0 out on br-lan" in fw
 
     assert "devices = wlan1, halow0" in r["/home/natak/.reticulum/config"]
 
