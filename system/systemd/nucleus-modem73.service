@@ -4,8 +4,13 @@ Description=Nucleus modem73 soundmodem (aicodix OFDM KISS TNC)
 # (like meshtasticd/rnsd). Ordered before rnsd so the KISS socket is usually up
 # when the Reticulum TCPClientInterface attaches; ordering is soft — the RNS
 # interface retries, so a late start just means a brief reconnect.
-After=network-online.target
+After=network-online.target dev-nucleus-modem.device
 Wants=network-online.target
+# Device-started: the generated udev rule tags /dev/nucleus/modem with
+# SYSTEMD_WANTS and pulls this unit in when the adapter appears. BindsTo stops it
+# when the adapter is unplugged; After orders it behind the device so modem73
+# never opens PTT before the symlink exists (the PTT-open race).
+BindsTo=dev-nucleus-modem.device
 Before=rnsd.service
 
 [Service]

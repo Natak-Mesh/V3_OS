@@ -160,10 +160,16 @@ def test_usb_udev_rule():
     assert 'SYMLINK+="nucleus/rnode"' in r
     assert 'ENV{ID_MM_DEVICE_IGNORE}="1"' in r
     assert 'ENV{MTP_NO_PROBE}="1"' in r
-    # modem73 serial/PTT adapter (CP210x, tty kind) → /dev/nucleus/modem.
+    # modem73 serial/PTT adapter (CP210x, tty kind) → /dev/nucleus/modem, and
+    # device-started (tagged for systemd) so its service can't race the symlink.
     assert 'ATTRS{idVendor}=="10c4"' in r
     assert 'ATTRS{idProduct}=="ea60"' in r
     assert 'SYMLINK+="nucleus/modem"' in r
+    modem_line = next(l for l in r.splitlines() if 'SYMLINK+="nucleus/modem"' in l)
+    assert 'ENV{SYSTEMD_WANTS}="nucleus-modem73.service"' in modem_line
+    # rnode is just an rnsd interface (no service key) — its tty rule stays plain.
+    rnode_line = next(l for l in r.splitlines() if 'SYMLINK+="nucleus/rnode"' in l)
+    assert "SYSTEMD_WANTS" not in rnode_line
     # HaLow (net kind): Morse MM8108 renamed to halow0 + service wanted.
     assert 'SUBSYSTEM=="net"' in r
     assert 'ATTRS{idVendor}=="325b"' in r

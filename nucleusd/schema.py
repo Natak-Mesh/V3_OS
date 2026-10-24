@@ -60,6 +60,10 @@ USB_DEVICES: dict[str, dict] = {
     "modem": {
         "kind": "tty",
         "ids": [("10c4", "ea60")],  # Silicon Labs CP210x UART bridge (DigiRig)
+        # Device-start the modem73 service when this adapter appears, so it never
+        # races udev creating /dev/nucleus/modem (the PTT-open race). rnode has no
+        # service key — it's just an rnsd interface — so its tty rule stays plain.
+        "service": "nucleus-modem73",
     },
     "halow": {
         "kind": "net",
