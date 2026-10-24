@@ -54,7 +54,10 @@ def test_reticulum_config_defaults():
     assert "target_host = 127.0.0.1" in r
     assert "target_port = 8001" in r
     assert "fixed_mtu = 500" in r
-    assert "bitrate = 300" in r
+    # Bitrate is derived from the default OFDM mode (qpsk_1_2 → 1577 bps), not a
+    # placeholder; it matches the modem73 launch flags so RNS sizes framing and
+    # the announce rate-cap to the real on-air rate.
+    assert "bitrate = 1577" in r
 
 
 def test_reticulum_config_minimal():
@@ -130,6 +133,32 @@ def test_modem73_launch_script():
     # KISS/control ports match the RNS interface constants.
     assert "--port 8001" in r
     assert "--control-port 8073" in r
+    # Default OFDM mode (qpsk_1_2) is passed explicitly so the on-air rate is known
+    # and matches the RNS bitrate rather than relying on the modem's own default.
+    assert "--modem ofdm" in r
+    assert "--modulation QPSK" in r
+    assert "--rate 1/2" in r
+
+
+def test_modem73_mode_selection_matches_bitrate():
+    """A selected OFDM mode drives BOTH the launch flags and the RNS bitrate from
+    one registry entry, so the modem and Reticulum can never disagree."""
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {"modem73_mode": "qam256_5_6"},
+    })
+    r = render_all(cfg)
+    # Launch script carries the matching modulation + code rate.
+    script = r["/opt/nucleus/bin/nucleus-modem73-up.sh"]
+    assert "--modulation QAM256" in script
+    assert "--rate 5/6" in script
+    # Reticulum interface is told the exact modem-reported on-air bitrate for that
+    # mode (QAM256 5/6 → 10500 bps), not the default and not a placeholder.
+    reti = r["/home/natak/.reticulum/config"]
+    assert "bitrate = 10500" in reti
+    assert "bitrate = 1577" not in reti
 
 
 def test_modem73_launch_script_custom():

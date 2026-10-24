@@ -966,13 +966,16 @@ const PAGES = {
           ptt_line: r.modem73_ptt_line,
           callsign: r.modem73_callsign,
           tx_level: r.modem73_tx_level,
+          mode: r.modem73_mode,
         };
       }
       const P = RN_SCHEMA;
       const items = [
         { type: "content", html: `<div class="content"><div class="hint" ` +
           `style="padding-left:0">USB soundcard TNC (e.g. DigiRig) for Reticulum. ` +
-          `Audio device name is from 'modem73 --list-audio'. Save, then Apply to ` +
+          `Audio device name is from 'modem73 --list-audio'. OFDM mode sets the ` +
+          `on-air rate: lower = slower but decodes in poorer conditions, higher = ` +
+          `faster but needs a cleaner signal. Save, then Apply to ` +
           `restart rnsd + modem73.</div></div>` },
         { type: "fselect", label: "modem73", options: ["on", "off"],
           value: MO.enabled ? "on" : "off", onChange: (v) => MO.enabled = (v === "on") },
@@ -985,6 +988,24 @@ const PAGES = {
       items.push({ type: "fselect", label: "PTT line",
         options: (pl.enum || ["rts", "dtr", "both", "-rts", "-dtr", "-both"]),
         value: MO.ptt_line, onChange: (v) => MO.ptt_line = v });
+      // OFDM mode: schema enum -> dropdown, labelled with the real on-air bitrate
+      // from the schema's `modes` metadata (one contract, no rate copy here). The
+      // label is cosmetic; the enum key is what's stored. Lower modes are slower
+      // but decode in poorer conditions; higher QAM modes are faster on a clean
+      // link. fselect cycles label strings, so map label <-> key on read/write.
+      const mo = P.modem73_mode || {};
+      const modes = mo.modes || {};
+      const modeLabel = (k) => {
+        const m = modes[k];
+        return m ? `${k} (${(m.bitrate / 1000).toFixed(2)} kbps)` : k;
+      };
+      const modeOpts = (mo.enum || []).map(modeLabel);
+      const labelToKey = {};
+      (mo.enum || []).forEach((k) => { labelToKey[modeLabel(k)] = k; });
+      items.push({ type: "fselect", label: "OFDM mode",
+        options: modeOpts,
+        value: MO.mode != null ? modeLabel(MO.mode) : "",
+        onChange: (v) => MO.mode = (labelToKey[v] != null ? labelToKey[v] : v) });
       items.push({ type: "ftext", label: "Callsign",
         value: MO.callsign != null ? MO.callsign : "",
         onChange: (v) => MO.callsign = v });
@@ -1864,6 +1885,7 @@ async function saveModem73(S) {
   cfg.reticulum.modem73_ptt_line = MO.ptt_line;
   cfg.reticulum.modem73_callsign = MO.callsign;
   cfg.reticulum.modem73_tx_level = parseInt(MO.tx_level, 10);
+  cfg.reticulum.modem73_mode = MO.mode;
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("modem73 saved — not yet applied; press Apply to restart rnsd + modem73");
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);

@@ -254,3 +254,42 @@ def test_tx_min_interval_out_of_range_rejected():
         cfg(meshtastic={"tx_min_interval_secs": -1})
     with pytest.raises(ValidationError):
         cfg(meshtastic={"tx_min_interval_secs": 3601})
+
+
+def test_modem73_mode_default_and_derived_bitrate():
+    from nucleusd.schema import MODEM73_DEFAULT_MODE, MODEM73_MODES
+    c = cfg()
+    # Default is modem73's own OFDM default (QPSK 1/2), so on-air behaviour is
+    # unchanged from the pre-mode build.
+    assert c.reticulum.modem73_mode == MODEM73_DEFAULT_MODE == "qpsk_1_2"
+    # The RNS bitrate and the launch-flag modulation/code-rate are BOTH derived
+    # from the one registry entry, so the modem and Reticulum can never disagree.
+    ctx = c.render_context()
+    sel = MODEM73_MODES[c.reticulum.modem73_mode]
+    assert ctx["reti_modem73_bitrate"] == sel["bitrate"] == 1577
+    assert ctx["modem73_modulation"] == sel["modulation"] == "QPSK"
+    assert ctx["modem73_code_rate"] == sel["rate"] == "1/2"
+
+
+def test_modem73_mode_selection_derives_matching_values():
+    c = cfg(reticulum={"modem73_mode": "qam4096_5_6"})
+    ctx = c.render_context()
+    assert ctx["modem73_modulation"] == "QAM4096"
+    assert ctx["modem73_code_rate"] == "5/6"
+    assert ctx["reti_modem73_bitrate"] == 15959
+
+
+def test_modem73_mode_rejects_unknown():
+    with pytest.raises(ValidationError):
+        cfg(reticulum={"modem73_mode": "qam9999_1_1"})
+
+
+def test_modem73_mode_publishes_rate_metadata_in_schema():
+    """The published JSON schema carries the per-mode bitrate (json_schema_extra)
+    so the web UI can label the dropdown from the one contract, not a JS copy."""
+    from nucleusd.schema import MODEM73_MODES, ReticulumConfig
+    prop = ReticulumConfig.model_json_schema()["properties"]["modem73_mode"]
+    assert prop["modes"] == MODEM73_MODES
+    # Every enum value has matching rate metadata.
+    assert set(prop["enum"]) == set(MODEM73_MODES)
+    assert prop["modes"]["qpsk_1_2"]["bitrate"] == 1577

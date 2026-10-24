@@ -130,6 +130,15 @@ reticulum:
   # modem73_ptt_line: rts        # rts | dtr | both | -rts | -dtr | -both
   # modem73_callsign: N0CALL
   # modem73_tx_level: 100        # 5-100 percent
+  # OFDM mode: modulation + FEC code rate. Sets BOTH the modem on-air rate and
+  # the matching RNS bitrate (one source of truth). Lower = slower but decodes in
+  # poorer conditions; higher = faster but needs a cleaner signal. On-air rates:
+  #   bpsk_1_2   ~788 bps     qam64_2_3   ~6406 bps
+  #   qpsk_1_2   ~1577 bps    qam64_3_4   ~7193 bps
+  #   (default)               qam256_3_4  ~9464 bps
+  #   qam16_1_2  ~3155 bps    qam256_5_6  ~10500 bps
+  #   qam16_2_3  ~4215 bps    qam4096_5_6 ~15959 bps
+  # modem73_mode: qpsk_1_2
   # rnode_frequency: 914875000   # Hz (150M-960M, SX1262 range)
   # rnode_bandwidth: 250000      # Hz — one step: 7800/10400/15600/20800/31250/41700/62500/125000/250000/500000
   # rnode_txpower: 22            # dBm (RAK4631 max 22)

@@ -118,6 +118,28 @@ def test_reticulum_nodes_route_removed():
     assert client.get("/api/v1/reticulum/nodes").status_code == 404
 
 
+def test_modem73_page_wires_ofdm_mode():
+    """The modem73 config page must expose the OFDM mode selector and persist it.
+
+    Node isn't installed on this node, so pin the wiring in the static app.js
+    rather than executing the JS: the page loads modem73_mode into its working
+    copy, renders an 'OFDM mode' dropdown whose options come from the schema
+    contract (enum + per-mode bitrate), and saveModem73 writes the key back.
+    """
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    # Working copy loads the current mode from the config.
+    assert "mode: r.modem73_mode," in app_js, "modem73 page lost the mode load"
+    # Dropdown is schema-driven (enum + bitrate from the published `modes` meta),
+    # not a hardcoded rate table in the frontend.
+    assert 'label: "OFDM mode"' in app_js, "no OFDM mode dropdown on the page"
+    assert "P.modem73_mode" in app_js, "mode dropdown isn't driven by the schema"
+    assert "mo.modes" in app_js, "mode labels don't read bitrate from the contract"
+    # Save persists the selected mode.
+    assert "cfg.reticulum.modem73_mode = MO.mode;" in app_js, \
+        "saveModem73 no longer persists the OFDM mode"
+
+
 def test_rns_direct_message_ui_wired():
     """The Reticulum page links to the Direct Messages contact list, which opens
     a per-peer conversation; pin that wiring in the static assets (no Node here)."""
