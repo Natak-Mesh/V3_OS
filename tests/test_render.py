@@ -31,14 +31,14 @@ def test_reticulum_config_defaults():
     assert "type = TCPServerInterface" in r
     assert "device = br-lan" in r
     assert "listen_port = 4242" in r
-    # Entry-node uplink.
-    assert "type = TCPClientInterface" in r
-    # Interface modes: entry node is boundary, local interfaces internal,
-    # so public-network announces are not flooded into the mesh/LAN.
-    assert "mode = boundary" in r
+    # No public entry-node TCPClient uplink: peering is over eth0 via the
+    # AutoInterface now (dropped in the eth0-peering change).
+    assert "type = TCPClientInterface" not in r
+    assert "mode = boundary" not in r
+    assert "target_host" not in r
+    # Both local interfaces (AutoInterface + TCPServer) are internal so
+    # announces are not flooded.
     assert r.count("mode = internal") == 2
-    assert "target_host = 173.230.150.24" in r
-    assert "target_port = 4243" in r
     # KISS off by default.
     assert "KISSInterface" not in r
     # RNode on by default, bound to the stable udev symlink.
