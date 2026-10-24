@@ -105,6 +105,7 @@ install -m 644 "$REPO/system/systemd/nucleus-meshtastic-init.service" /etc/syste
 install -m 644 "$REPO/system/systemd/nucleus-messaging.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-voice.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/rnsd.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-modem73.service" /etc/systemd/system/
 # The USB udev rule (/etc/udev/rules.d/60-nucleus-usb.rules) is a generated
 # artifact of `nucleusctl apply`, not a static file. Remove the obsolete
 # Meshtastic rule it supersedes if an older install left it behind.
@@ -155,6 +156,38 @@ echo "==> Wi-Fi HaLow driver/firmware/supplicant (Morse MM8108)"
 # radio still installs cleanly (the HaLow service is inert without halow0).
 install -m 755 "$REPO/system/bin/nucleus-halow-build.sh" "$OPT/bin/nucleus-halow-build.sh"
 "$OPT/bin/nucleus-halow-build.sh" || echo "WARNING: HaLow build failed — HaLow mesh will be unavailable until it succeeds"
+
+echo "==> modem73 soundmodem (KISS TNC for the aicodix OFDM modem)"
+# modem73 drives an analogue radio over a USB sound card + serial PTT (e.g. a
+# DigiRig) and exposes a KISS socket that Reticulum attaches to. It is NOT in any
+# apt repo; upstream ships per-distro .debs on GitHub releases. Pick the asset that
+# matches THIS machine's Debian version + dpkg architecture, verify its sha256,
+# and apt-install it (apt resolves libhamlib4/libncurses6/etc.). Non-fatal: a node
+# without the adapter still installs cleanly (the service is enable-driven and
+# simply retries). Pin the version so every node converges on the same build.
+MODEM73_VER="2.4.2"
+. /etc/os-release
+DEB_ARCH="$(dpkg --print-architecture)"            # arm64 on a Pi, amd64 on x86
+MODEM73_ASSET="modem73_${MODEM73_VER}_debian-${VERSION_ID}_${DEB_ARCH}.deb"
+MODEM73_URL="https://github.com/RFnexus/modem73/releases/download/v${MODEM73_VER}/${MODEM73_ASSET}"
+if dpkg-query -W -f='${Version}' modem73 2>/dev/null | grep -qx "$MODEM73_VER"; then
+    echo "    modem73 $MODEM73_VER already installed — skipping"
+else
+    MODEM73_TMP="$(mktemp -d)"
+    if curl -fsSL -o "$MODEM73_TMP/$MODEM73_ASSET" "$MODEM73_URL" \
+        && curl -fsSL -o "$MODEM73_TMP/$MODEM73_ASSET.sha256" "$MODEM73_URL.sha256" \
+        && ( cd "$MODEM73_TMP" && sha256sum -c "$MODEM73_ASSET.sha256" ); then
+        apt-get install -y -o DPkg::Lock::Timeout=120 "$MODEM73_TMP/$MODEM73_ASSET" \
+            || echo "WARNING: modem73 install failed — soundmodem link unavailable until fixed"
+    else
+        echo "WARNING: could not download/verify $MODEM73_ASSET — soundmodem link unavailable"
+        echo "         (no prebuilt asset for debian-${VERSION_ID}_${DEB_ARCH}? check the release)"
+    fi
+    rm -rf "$MODEM73_TMP"
+fi
+# modem73 runs as 'natak'; it needs the USB sound card (audio) and the CP210x
+# serial PTT line (dialout). Idempotent.
+usermod -aG audio,dialout natak 2>/dev/null || true
 
 echo "==> seed config (only if missing)"
 mkdir -p /etc/nucleus
@@ -207,6 +240,10 @@ fi
 # :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
 systemctl enable avahi-daemon nginx
 systemctl enable systemd-networkd nucleus-rf.service nucleus-mesh.service nucleus-firewall.service nucleus-halow.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
+# nucleus-modem73 is enable/disable-driven by `nucleusctl apply`
+# (reticulum.modem73_enabled), like meshtasticd — disable the default autostart
+# here so apply owns its lifecycle and a node without the adapter doesn't flap.
+systemctl disable nucleus-modem73.service 2>/dev/null || true
 
 # Restart the always-on app daemons so a code-only re-install (new package in the
 # venv) actually takes effect — enabling alone won't reload a running process.

@@ -33,12 +33,14 @@ Everything flows one direction, from one file:
         v   (write-if-changed)
    networkd/*.network, wpa_supplicant-mesh.conf, nucleus-mesh-up.sh,
    nucleus-firewall.sh, babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
-   ~natak/.reticulum/config, 60-nucleus-usb.rules (udev), nginx vhost + htpasswd,
+   ~natak/.reticulum/config, nucleus-modem73-up.sh (modem73 soundmodem),
+   60-nucleus-usb.rules (udev), nginx vhost + htpasswd,
    wpa_supplicant-halow.conf, nucleus-halow-up.sh, nucleus-morse.conf (HaLow)
         |
         v   (restart / enable / reload only what changed)
    networkd, nucleus-mesh, nucleus-firewall, babeld, smcroute, hostapd,
-   brlan-setup, meshtasticd, cot-bridge, rnsd, nucleus-halow, udev, nginx
+   brlan-setup, meshtasticd, cot-bridge, rnsd, nucleus-modem73, nucleus-halow,
+   udev, nginx
 ```
 
 **Rules**
@@ -246,7 +248,7 @@ V3_OS/
 │   ├── systemd/         # nucleusd, nucleus-mesh, nucleus-firewall, nucleus-rf,
 │   │                    # nucleus-halow, brlan-setup, cot-bridge, nucleus-meshtastic-init,
 │   │                    # nucleus-messaging, nucleus-voice, rnsd,
-│   │                    # takserver.service.d/
+│   │                    # nucleus-modem73, takserver.service.d/
 │   ├── bin/             # nucleus-update.sh, nucleus-tak-setup.sh,
 │   │                    # nucleus-ots-fixup.sh, nucleus-halow-build.sh
 │   └── networkmanager/  sudoers.d/

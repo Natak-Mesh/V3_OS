@@ -45,10 +45,21 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 #           (nRF52840 + SX1262) is supported for now. (tty)
 #   halow — Morse Micro MM8108 Wi-Fi HaLow (802.11ah) transceiver, presented as
 #           a network interface renamed to halow0. (net)
+#   modem — the serial/PTT side of a soundcard-TNC adapter (e.g. DigiRig Mobile),
+#           a Silicon Labs CP210x UART bridge whose RTS/DTR line keys the radio's
+#           PTT. Bound to /dev/nucleus/modem so modem73's PTT never depends on the
+#           plug-order /dev/ttyUSB* name. NOTE: the CP210x USB id (10c4:ea60) is
+#           generic to countless serial adapters, unlike the RAK-specific rnode id,
+#           so if another CP210x device is plugged in this symlink is ambiguous.
+#           (tty)
 USB_DEVICES: dict[str, dict] = {
     "rnode": {
         "kind": "tty",
         "ids": [("239a", "8029")],  # RAKwireless WisBlock RAK4631
+    },
+    "modem": {
+        "kind": "tty",
+        "ids": [("10c4", "ea60")],  # Silicon Labs CP210x UART bridge (DigiRig)
     },
     "halow": {
         "kind": "net",
@@ -59,6 +70,11 @@ USB_DEVICES: dict[str, dict] = {
 
 # Stable path a supported RNode is bound to by the generated udev rule.
 RNODE_DEVICE_PATH = "/dev/nucleus/rnode"
+
+# Stable path the modem73 serial/PTT adapter is bound to by the generated udev
+# rule (parallels RNODE_DEVICE_PATH), so modem73's --com-port never depends on
+# the plug-order /dev/ttyUSB* name.
+MODEM_DEVICE_PATH = "/dev/nucleus/modem"
 
 # Fixed interface name the HaLow radio is renamed to by the generated udev rule
 # (parallels RNODE_DEVICE_PATH). The interface the driver enumerates as
@@ -437,6 +453,31 @@ class ReticulumConfig(BaseModel):
     kiss_enabled: bool = Field(False, description="Enable a KISSInterface on a serial TNC.")
     kiss_port: str = Field("/dev/rfcomm0", description="Serial device for the KISS TNC.")
     kiss_speed: int = Field(115200, ge=1, description="KISS serial baud rate.")
+
+    # modem73 soundmodem over KISS-on-TCP (on by default; harmless if modem73
+    # isn't running — rnsd just retries 127.0.0.1:8001). modem73 is a KISS TNC
+    # frontend for the aicodix OFDM modem, driving an analogue radio over a USB
+    # sound device + serial PTT (e.g. a DigiRig). It exposes a KISS socket on TCP
+    # 8001, so this uses RNS's built-in TCPClientInterface with kiss_framing
+    # (manual: "connect via ... software-based soundmodems") rather than a custom
+    # interface. fixed_mtu/bitrate tell RNS the link is a slow radio channel so
+    # its framing and timeouts are sized correctly.
+    modem73_enabled: bool = Field(True, description="Enable a TCPClientInterface (KISS framing) to the modem73 soundmodem.")
+    # modem73 process (nucleus-modem73.service) settings. The RNS interface above
+    # talks to this process over KISS-on-TCP; these drive the process itself —
+    # which USB sound card to use and how PTT is keyed. The audio device is matched
+    # by NAME (modem73 --list-audio), never a card index, so it's stable across
+    # reboots/plug order. PTT keys the radio over the CP210x serial line's control
+    # signal (RTS on a DigiRig) at MODEM_DEVICE_PATH.
+    modem73_audio_device: str = Field(
+        "USB Audio Device, USB Audio",
+        description="modem73 audio device name (from 'modem73 --list-audio'), used for both capture and playback.",
+    )
+    modem73_ptt_line: Literal["rts", "dtr", "both", "-rts", "-dtr", "-both"] = Field(
+        "rts", description="Serial control line that keys PTT on the modem adapter (DigiRig = rts)."
+    )
+    modem73_callsign: str = Field("N0CALL", description="modem73 station callsign.")
+    modem73_tx_level: int = Field(100, ge=5, le=100, description="modem73 TX audio output level, 5-100 percent.")
 
     # RNode LoRa radio attached over USB (on by default). Bound to the
     # stable RNODE_DEVICE_PATH symlink by the generated udev rule, so the config
@@ -839,6 +880,25 @@ class NucleusConfig(BaseModel):
             "reti_rnode_txpower": self.reticulum.rnode_txpower,
             "reti_rnode_spreadingfactor": self.reticulum.rnode_spreadingfactor,
             "reti_rnode_codingrate": self.reticulum.rnode_codingrate,
+            # modem73 soundmodem: built-in TCPClientInterface with KISS framing to
+            # modem73's local KISS-on-TCP socket. Host/port/mtu/bitrate are fixed
+            # constants (one source of truth shared with the modem73 service), not
+            # operator knobs — the two sides must agree, like reti_tcp_server_device.
+            "reti_modem73_enabled": self.reticulum.modem73_enabled,
+            "reti_modem73_host": "127.0.0.1",
+            "reti_modem73_port": 8001,
+            "reti_modem73_fixed_mtu": 500,
+            "reti_modem73_bitrate": 300,
+            # modem73 process (nucleus-modem73.service) — audio/PTT/KISS flags.
+            # Port/control-port mirror the RNS interface constants above so the two
+            # sides can never disagree; the serial PTT device is the stable symlink.
+            "modem73_audio_device": self.reticulum.modem73_audio_device,
+            "modem73_ptt_line": self.reticulum.modem73_ptt_line,
+            "modem73_ptt_device": MODEM_DEVICE_PATH,
+            "modem73_callsign": self.reticulum.modem73_callsign,
+            "modem73_tx_level": self.reticulum.modem73_tx_level,
+            "modem73_kiss_port": 8001,
+            "modem73_control_port": 8073,
             # --- USB device registry (generated udev rule) ---
             "usb_devices": USB_DEVICES,
             # --- Web UI auth (nginx) ---
