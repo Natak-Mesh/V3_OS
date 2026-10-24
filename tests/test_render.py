@@ -16,7 +16,7 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 20
+    assert len(r) == 21
     assert all(v.strip() for v in r.values())
 
 
@@ -32,10 +32,11 @@ def test_reticulum_config_defaults():
     assert "device = br-lan" in r
     assert "listen_port = 4242" in r
     # No public entry-node TCPClient uplink: peering is over eth0 via the
-    # AutoInterface now (dropped in the eth0-peering change).
-    assert "type = TCPClientInterface" not in r
+    # AutoInterface now (dropped in the eth0-peering change). The boundary Entry
+    # Node is gone; the only TCPClientInterface present is the modem73 soundmodem.
     assert "mode = boundary" not in r
-    assert "target_host" not in r
+    assert "Entry Node" not in r
+    assert "target_host = 173.230.150.24" not in r
     # Both local interfaces (AutoInterface + TCPServer) are internal so
     # announces are not flooded.
     assert r.count("mode = internal") == 2
@@ -45,6 +46,15 @@ def test_reticulum_config_defaults():
     assert "type = RNodeInterface" in r
     assert "port = /dev/nucleus/rnode" in r
     assert "frequency = 914875000" in r
+    # modem73 soundmodem on by default: built-in TCPClientInterface with KISS
+    # framing to the local modem73 KISS-on-TCP socket.
+    assert "[[MODEM73 Soundmodem]]" in r
+    assert "type = TCPClientInterface" in r
+    assert "kiss_framing = True" in r
+    assert "target_host = 127.0.0.1" in r
+    assert "target_port = 8001" in r
+    assert "fixed_mtu = 500" in r
+    assert "bitrate = 300" in r
 
 
 def test_reticulum_config_minimal():
@@ -58,6 +68,7 @@ def test_reticulum_config_minimal():
             "entry_node": False,
             "kiss_enabled": True,
             "kiss_port": "/dev/ttyUSB0",
+            "modem73_enabled": False,
         },
     })
     r = render_all(cfg)["/home/natak/.reticulum/config"]
@@ -67,6 +78,18 @@ def test_reticulum_config_minimal():
     assert "type = AutoInterface" in r          # still on by default
     assert "type = KISSInterface" in r
     assert "port = /dev/ttyUSB0" in r
+
+
+def test_reticulum_modem73_disabled():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {"modem73_enabled": False},
+    })
+    r = render_all(cfg)["/home/natak/.reticulum/config"]
+    assert "MODEM73 Soundmodem" not in r
+    assert "kiss_framing" not in r
 
 
 def test_reticulum_rnode_enabled():
@@ -94,6 +117,40 @@ def test_reticulum_rnode_enabled():
     assert "codingrate = 6" in r
 
 
+def test_modem73_launch_script():
+    r = rendered()["/opt/nucleus/bin/nucleus-modem73-up.sh"]
+    assert "/usr/bin/modem73" in r
+    assert "--headless" in r
+    # Audio by name (stable), not a card index.
+    assert "--device 'USB Audio Device, USB Audio'" in r
+    # Serial PTT on the stable udev symlink, keyed on the RTS line (DigiRig).
+    assert "--ptt com" in r
+    assert "--com-port /dev/nucleus/modem" in r
+    assert "--com-line rts" in r
+    # KISS/control ports match the RNS interface constants.
+    assert "--port 8001" in r
+    assert "--control-port 8073" in r
+
+
+def test_modem73_launch_script_custom():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {
+            "modem73_audio_device": "Some Other Card, USB Audio",
+            "modem73_ptt_line": "dtr",
+            "modem73_callsign": "TEST-1",
+            "modem73_tx_level": 80,
+        },
+    })
+    r = render_all(cfg)["/opt/nucleus/bin/nucleus-modem73-up.sh"]
+    assert "--device 'Some Other Card, USB Audio'" in r
+    assert "--com-line dtr" in r
+    assert "--callsign 'TEST-1'" in r
+    assert "--tx-level 80" in r
+
+
 def test_usb_udev_rule():
     r = rendered()["/etc/udev/rules.d/60-nucleus-usb.rules"]
     # RAK4631 (tty kind) → /dev/nucleus/rnode, with ModemManager/mtp-probe left off.
@@ -103,6 +160,10 @@ def test_usb_udev_rule():
     assert 'SYMLINK+="nucleus/rnode"' in r
     assert 'ENV{ID_MM_DEVICE_IGNORE}="1"' in r
     assert 'ENV{MTP_NO_PROBE}="1"' in r
+    # modem73 serial/PTT adapter (CP210x, tty kind) → /dev/nucleus/modem.
+    assert 'ATTRS{idVendor}=="10c4"' in r
+    assert 'ATTRS{idProduct}=="ea60"' in r
+    assert 'SYMLINK+="nucleus/modem"' in r
     # HaLow (net kind): Morse MM8108 renamed to halow0 + service wanted.
     assert 'SUBSYSTEM=="net"' in r
     assert 'ATTRS{idVendor}=="325b"' in r

@@ -19,6 +19,9 @@ from pathlib import Path
 # Reticulum daemon (rnsd) runs as this user; its config lives in ~/.reticulum.
 RETI_USER = "natak"
 RETI_CONFIG = Path(f"/home/{RETI_USER}/.reticulum/config")
+# modem73 soundmodem launch script (rendered) + its enable/disable-driven unit.
+MODEM73_UP_SCRIPT = Path("/opt/nucleus/bin/nucleus-modem73-up.sh")
+MODEM73_UNIT = "nucleus-modem73"
 
 # nginx reverse-proxy paths (port-less .local + by-IP access to the :8080 UI).
 NGINX_VHOST = Path("/etc/nginx/sites-available/nucleus")
@@ -102,6 +105,10 @@ TARGETS: list[Target] = [
     # rnsd is enable/disable-driven like meshtasticd (handled in apply()), and
     # the file must land owned by RETI_USER — see _write_reticulum below.
     Target("reticulum-config.j2", RETI_CONFIG, ("rnsd",)),
+    # modem73 launch script. Its unit is enable/disable-driven (handled in apply()
+    # via _reconcile_modem73), so no unit is listed here — a plain restart must not
+    # start a unit we may be about to disable.
+    Target("nucleus-modem73-up.sh.j2", MODEM73_UP_SCRIPT, (), 0o755),
     # USB device → /dev/nucleus/<role> udev rule. udev is not a systemd unit, so
     # a change triggers a udevadm reload/trigger specially in apply() (no units).
     Target("60-nucleus-usb.rules.j2", USB_UDEV_RULE, ()),
@@ -329,6 +336,22 @@ def _reconcile_reticulum(cfg: NucleusConfig) -> list[str]:
     return ["rnsd"]
 
 
+def _reconcile_modem73(cfg: NucleusConfig, changed: list[str]) -> list[str]:
+    """Enable/disable nucleus-modem73 to match reticulum.modem73_enabled; restart
+    it if its launch script changed.
+
+    Mirrors _reconcile_meshtastic/_reconcile_halow: enable-driven, not a plain
+    restart. The modem73 process opens the USB sound card + serial PTT; on a node
+    without the adapter it just fails and systemd retries (harmless), the same
+    posture as rnsd's RNode port. Returns the units touched.
+    """
+    want = cfg.reticulum.modem73_enabled
+    _set_service(MODEM73_UNIT, want)
+    if want and str(MODEM73_UP_SCRIPT) in changed:
+        _restart([MODEM73_UNIT])
+    return [MODEM73_UNIT]
+
+
 def _global_ipv4s() -> list[str]:
     """Every global-scope IPv4 on the box, read live (not from config).
 
@@ -448,6 +471,10 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # restart set so a group bounce doesn't start it against a stale conf or when
     # HaLow is disabled; _reconcile_halow owns its lifecycle.
     units_to_restart.discard(HALOW_UNIT)
+    # nucleus-modem73 is enable/disable-driven and restart-on-script-change via
+    # _reconcile_modem73 below. Its Target lists no units, so it should never be in
+    # this set, but discard defensively (same posture as rnsd/halow above).
+    units_to_restart.discard(MODEM73_UNIT)
 
     # When the mesh is disabled its units are stopped by _reconcile_rf below and
     # must NOT be (re)started by the network-group bounce, or a disabled mesh
@@ -505,6 +532,11 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # Push lora.tx_enabled to the radio when it differs from config ("off" =
     # receive-only). Best-effort; only acts on a delta so it stays idempotent.
     _reconcile_meshtastic_tx(cfg)
+
+    # modem73 soundmodem: reconcile its enabled-state (and restart on script
+    # change) BEFORE rnsd, so its KISS socket is up when the Reticulum
+    # TCPClientInterface attaches. Enable-driven; inert on nodes without the adapter.
+    result.units_restarted += _reconcile_modem73(cfg, result.changed)
 
     # Reticulum: ensure rnsd owns its config, reconcile enabled-state, and
     # restart it if its rendered config changed (and it's enabled).

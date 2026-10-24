@@ -118,6 +118,18 @@ reticulum:
   # node that should talk over this link; pick a frequency clear of the
   # Meshtastic channel.
   rnode_enabled: true      # enable an RNodeInterface on a USB LoRa radio
+  # modem73 soundmodem over KISS-on-TCP (on by default; harmless if modem73 isn't
+  # running — rnsd just retries 127.0.0.1:8001). Drives an analogue radio via a USB
+  # sound device + serial PTT (e.g. DigiRig). Uses RNS's built-in TCPClientInterface
+  # with KISS framing; host/port/mtu/bitrate are fixed in the schema.
+  modem73_enabled: true
+  # modem73 process settings (nucleus-modem73.service). Audio device is matched by
+  # NAME from 'modem73 --list-audio' (stable, not a card index); PTT keys the radio
+  # over the adapter's serial control line (DigiRig = rts) at /dev/nucleus/modem.
+  # modem73_audio_device: "USB Audio Device, USB Audio"
+  # modem73_ptt_line: rts        # rts | dtr | both | -rts | -dtr | -both
+  # modem73_callsign: N0CALL
+  # modem73_tx_level: 100        # 5-100 percent
   # rnode_frequency: 914875000   # Hz (150M-960M, SX1262 range)
   # rnode_bandwidth: 250000      # Hz — one step: 7800/10400/15600/20800/31250/41700/62500/125000/250000/500000
   # rnode_txpower: 22            # dBm (RAK4631 max 22)

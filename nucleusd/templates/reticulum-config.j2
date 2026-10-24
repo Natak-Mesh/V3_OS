@@ -70,3 +70,18 @@
     codingrate = {{ reti_rnode_codingrate }}
 
 {% endif %}
+{% if reti_modem73_enabled %}
+  [[MODEM73 Soundmodem]]
+    # KISS-on-TCP to the local modem73 soundmodem (aicodix OFDM over a USB sound
+    # device + serial PTT). kiss_framing is only safe here because this socket
+    # only ever talks to modem73, never to our own br-lan TCPServer. fixed_mtu /
+    # bitrate tell RNS this is a slow radio link so it frames/times correctly.
+    type = TCPClientInterface
+    enabled = Yes
+    kiss_framing = True
+    target_host = {{ reti_modem73_host }}
+    target_port = {{ reti_modem73_port }}
+    fixed_mtu = {{ reti_modem73_fixed_mtu }}
+    bitrate = {{ reti_modem73_bitrate }}
+
+{% endif %}

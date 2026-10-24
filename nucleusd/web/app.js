@@ -155,6 +155,10 @@ let RN = null;
 // /api/v1/config/schema so the RNode page reads its limits from the one contract
 // (schema.py) instead of hardcoding a second copy.
 let RN_SCHEMA = null;
+// Working copy of the modem73 soundmodem settings (reticulum.modem73_*), edited
+// on the RETICULUM > INTERFACES > CONFIGURE MODEM73 page. Shares RN_SCHEMA (both
+// live under ReticulumConfig), mirroring the RNode page.
+let MO = null;
 let MSG_DRAFT = "";
 // Live chat state: messages cache + WebSocket, populated by the messaging page.
 let MSG_CACHE = [];        // ordered oldest→newest, keyed by id
@@ -869,6 +873,7 @@ const PAGES = {
       h += `</div>`;
       items.push({ type: "content", html: h });
       items.push({ type: "nav", label: "» CONFIGURE RNODE (LoRa radio)", to: "rns_rnode" });
+      items.push({ type: "nav", label: "» CONFIGURE MODEM73 (soundmodem)", to: "rns_modem73" });
       return { items };
     },
   },
@@ -934,6 +939,61 @@ const PAGES = {
       items.push({ type: "button", label: "» Save (not applied)", onEnter: saveRnode });
       items.push({ type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) });
       items.push({ type: "button", label: "» Reload", onEnter: (S) => { RN = null; return S.reload(); } });
+      return { items };
+    },
+  },
+
+  // Reticulum modem73 soundmodem settings (reticulum.modem73_*). Mirrors the
+  // RNode page: field types/bounds/enums come from /api/v1/config/schema (the
+  // schema.py contract), values from /api/v1/config. Save is a read-modify-write
+  // PUT of only the modem73_* keys; Apply rewrites the rnsd + modem73 configs and
+  // restarts rnsd and nucleus-modem73.
+  rns_modem73: {
+    title: "modem73 Soundmodem",
+    async build() {
+      if (!RN_SCHEMA) {
+        const { ok, d } = await jget("/api/v1/config/schema");
+        if (!ok) return { items: [{ type: "content", html:
+          `<div class="content"><div class="off">could not load config schema</div></div>` }] };
+        RN_SCHEMA = ((d.$defs || {}).ReticulumConfig || {}).properties || {};
+      }
+      if (!MO) {
+        const { d: cfg } = await jget("/api/v1/config");
+        const r = cfg.reticulum || {};
+        MO = {
+          enabled: r.modem73_enabled !== false,
+          audio_device: r.modem73_audio_device,
+          ptt_line: r.modem73_ptt_line,
+          callsign: r.modem73_callsign,
+          tx_level: r.modem73_tx_level,
+        };
+      }
+      const P = RN_SCHEMA;
+      const items = [
+        { type: "content", html: `<div class="content"><div class="hint" ` +
+          `style="padding-left:0">USB soundcard TNC (e.g. DigiRig) for Reticulum. ` +
+          `Audio device name is from 'modem73 --list-audio'. Save, then Apply to ` +
+          `restart rnsd + modem73.</div></div>` },
+        { type: "fselect", label: "modem73", options: ["on", "off"],
+          value: MO.enabled ? "on" : "off", onChange: (v) => MO.enabled = (v === "on") },
+      ];
+      items.push({ type: "ftext", label: "Audio device",
+        value: MO.audio_device != null ? MO.audio_device : "",
+        onChange: (v) => MO.audio_device = v });
+      // PTT line: schema enum -> dropdown.
+      const pl = P.modem73_ptt_line || {};
+      items.push({ type: "fselect", label: "PTT line",
+        options: (pl.enum || ["rts", "dtr", "both", "-rts", "-dtr", "-both"]),
+        value: MO.ptt_line, onChange: (v) => MO.ptt_line = v });
+      items.push({ type: "ftext", label: "Callsign",
+        value: MO.callsign != null ? MO.callsign : "",
+        onChange: (v) => MO.callsign = v });
+      const tl = P.modem73_tx_level || {};
+      items.push({ type: "fnum", label: tl.title || "TX level (%)", value: MO.tx_level,
+        min: tl.minimum, max: tl.maximum, step: 1, onChange: (v) => MO.tx_level = v });
+      items.push({ type: "button", label: "» Save (not applied)", onEnter: saveModem73 });
+      items.push({ type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) });
+      items.push({ type: "button", label: "» Reload", onEnter: (S) => { MO = null; return S.reload(); } });
       return { items };
     },
   },
@@ -1790,6 +1850,22 @@ async function saveRnode(S) {
   cfg.reticulum.rnode_codingrate = parseInt(RN.codingrate, 10);
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("RNode saved — not yet applied; press Apply to restart rnsd");
+  else S.msg("validation failed: " + JSON.stringify(d.detail), false);
+}
+
+async function saveModem73(S) {
+  if (!MO) return S.msg("nothing to save", false);
+  // Read-modify-write the full node config so only the modem73_* keys change.
+  const { d: cfg } = await jget("/api/v1/config");
+  delete cfg._derived;
+  cfg.reticulum = cfg.reticulum || {};
+  cfg.reticulum.modem73_enabled = MO.enabled;
+  cfg.reticulum.modem73_audio_device = MO.audio_device;
+  cfg.reticulum.modem73_ptt_line = MO.ptt_line;
+  cfg.reticulum.modem73_callsign = MO.callsign;
+  cfg.reticulum.modem73_tx_level = parseInt(MO.tx_level, 10);
+  const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
+  if (ok) S.msg("modem73 saved — not yet applied; press Apply to restart rnsd + modem73");
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);
 }
 

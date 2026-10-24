@@ -1,0 +1,26 @@
+[Unit]
+Description=Nucleus modem73 soundmodem (aicodix OFDM KISS TNC)
+# Enable/disable-driven by reticulum.modem73_enabled via `nucleusctl apply`
+# (like meshtasticd/rnsd). Ordered before rnsd so the KISS socket is usually up
+# when the Reticulum TCPClientInterface attaches; ordering is soft — the RNS
+# interface retries, so a late start just means a brief reconnect.
+After=network-online.target
+Wants=network-online.target
+Before=rnsd.service
+
+[Service]
+Type=simple
+User=natak
+Group=natak
+# natak needs the audio group for the USB sound card and dialout for the CP210x
+# serial PTT line (/dev/nucleus/modem). Both are added by install.sh.
+SupplementaryGroups=audio dialout
+# Rendered from /etc/nucleus/config.yaml by `nucleusctl apply`.
+ExecStart=/opt/nucleus/bin/nucleus-modem73-up.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/modem73.log
+StandardError=append:/var/log/modem73.log
+
+[Install]
+WantedBy=multi-user.target
