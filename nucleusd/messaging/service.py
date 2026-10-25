@@ -440,6 +440,12 @@ class MessagingService:
             return self._rns_path(req.get("dest", ""))
         if cmd == "rns_request_path":
             return self._rns_request_path(req.get("dest", ""))
+        if cmd == "rns_heard":
+            return self._rns_heard_list()
+        if cmd == "rns_heard_add":
+            return self._rns_heard_add(req.get("dest", ""))
+        if cmd == "rns_heard_delete":
+            return self._rns_heard_delete(req.get("dest", ""))
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
 
     # ── Reticulum/LXMF lane helpers ──────────────────────────────
@@ -520,6 +526,46 @@ class MessagingService:
         if not (self.rns_enabled and self._rns_contacts):
             return {"ok": False, "error": "rns lane not available"}
         return {"ok": True, "removed": self._rns_contacts.remove(dest)}
+
+    def _rns_heard_list(self) -> dict:
+        """lxmf.delivery announces heard on-air (receive-only discovery aid)."""
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": True, "heard": []}
+        return {"ok": True, "heard": self._rns_lane.heard_announces()}
+
+    def _rns_heard_add(self, dest: str) -> dict:
+        """Promote a heard announce to a contact, then drop it from the buffer.
+
+        Uses the announce's recovered key (when present) so the contact is
+        immediately messageable; otherwise it is added keyless (like add-by-hash).
+        Transmits nothing.
+        """
+        if not (self.rns_enabled and self._rns_contacts and self._rns_lane):
+            return {"ok": False, "error": "rns lane not available"}
+        entry = next((h for h in self._rns_lane.heard_announces()
+                      if h.get("lxmf_hash") == str(dest or "").strip().lower()), None)
+        if entry is None:
+            return {"ok": False, "error": "no such heard announce"}
+        try:
+            contact = self._rns_contacts.add_hash(
+                entry["lxmf_hash"], name="")
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        pub = entry.get("pubkey") or ""
+        if pub:
+            self._rns_contacts.set_key(entry["lxmf_hash"], pub,
+                                       announced_name=entry.get("announced_name", ""))
+            if self._rns_lane.started:
+                self._rns_lane.remember_contact(entry["lxmf_hash"], pub)
+            contact = self._rns_contacts.get(entry["lxmf_hash"]) or contact
+        self._rns_lane.forget_heard(entry["lxmf_hash"])
+        return {"ok": True, "contact": contact}
+
+    def _rns_heard_delete(self, dest: str) -> dict:
+        """Dismiss a heard announce from the buffer."""
+        if not (self.rns_enabled and self._rns_lane):
+            return {"ok": False, "error": "rns lane not available"}
+        return {"ok": True, "removed": self._rns_lane.forget_heard(dest)}
 
     def _rns_announce(self) -> dict:
         """Emit our lxmf.delivery announce once (operator-triggered)."""

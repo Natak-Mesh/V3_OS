@@ -52,6 +52,10 @@ RNS_STATE_DIR = Path(os.environ.get("NUCLEUS_RNS_DIR", "/var/lib/nucleus/rns"))
 IDENTITY_PATH = RNS_STATE_DIR / "identity"
 LXMF_STORAGE = RNS_STATE_DIR / "lxmf"
 
+# Cap on the in-memory heard-announces buffer. Oldest entry (by last_heard) is
+# evicted past this so a chatty network can't grow it without bound.
+HEARD_MAX = 64
+
 
 def log(msg: str) -> None:
     print(f"[messaging.rns] {msg}", flush=True)
@@ -130,6 +134,13 @@ class RnsLane:
         self._stop = threading.Event()
         self._announce_thread: Optional[threading.Thread] = None
         self._started = False
+        # In-memory buffer of lxmf.delivery announces heard on any interface.
+        # Discovery stays out-of-band/contact-based; this only lets the operator
+        # *see* the announces peers send (incl. manual ones) and promote or
+        # dismiss them. Not persisted — cleared on restart, re-heard on re-announce.
+        self._heard: dict[str, dict] = {}
+        self._heard_lock = threading.Lock()
+        self._announce_handler = None
 
     # ── identity ────────────────────────────────────────────────
     def _load_or_create_identity(self):
@@ -184,6 +195,12 @@ class RnsLane:
         )
         self._delivery_hash = self._delivery.hash
         self._pubkey = self._identity.get_public_key()
+
+        # Listen for lxmf.delivery announces so the operator can see what the
+        # network advertises (incl. manual announces) and promote/dismiss them.
+        # Receive-only: registering a handler emits nothing.
+        self._announce_handler = _LxmfAnnounceHandler(self)
+        RNS.Transport.register_announce_handler(self._announce_handler)
 
         if self.propagation_node:
             try:
@@ -438,6 +455,69 @@ class RnsLane:
             pass
         return None
 
+    # ── heard announces (receive-only discovery aid) ─────────────
+    def _record_heard(self, dest_hash: bytes, announced_identity,
+                      app_data) -> None:
+        """Record one heard lxmf.delivery announce into the in-memory buffer.
+
+        Called from the announce handler. Pure bookkeeping — transmits nothing.
+        A repeat announce for the same hash bumps ``count``/``last_heard`` rather
+        than adding a row; past ``HEARD_MAX`` the oldest entry is evicted.
+        """
+        try:
+            lxmf_hash = dest_hash.hex()
+        except Exception:
+            return
+        import LXMF
+        name = ""
+        try:
+            if app_data:
+                name = LXMF.display_name_from_app_data(app_data) or ""
+        except Exception:
+            name = ""
+        pubkey = ""
+        try:
+            if announced_identity is not None:
+                pubkey = announced_identity.get_public_key().hex()
+        except Exception:
+            pubkey = ""
+        now = time.time()
+        with self._heard_lock:
+            existing = self._heard.get(lxmf_hash)
+            if existing:
+                existing["last_heard"] = now
+                existing["count"] = existing.get("count", 1) + 1
+                if name:
+                    existing["announced_name"] = name
+                if pubkey:
+                    existing["pubkey"] = pubkey
+            else:
+                self._heard[lxmf_hash] = {
+                    "lxmf_hash": lxmf_hash,
+                    "announced_name": name,
+                    "pubkey": pubkey,
+                    "first_heard": now,
+                    "last_heard": now,
+                    "count": 1,
+                }
+                if len(self._heard) > HEARD_MAX:
+                    oldest = min(self._heard.values(),
+                                 key=lambda e: e.get("last_heard", 0))
+                    self._heard.pop(oldest["lxmf_hash"], None)
+
+    def heard_announces(self) -> list[dict]:
+        """Heard lxmf.delivery announces, newest first. Reads only; emits nothing."""
+        with self._heard_lock:
+            items = [dict(e) for e in self._heard.values()]
+        items.sort(key=lambda e: e.get("last_heard", 0), reverse=True)
+        return items
+
+    def forget_heard(self, dest_hash_hex: str) -> bool:
+        """Drop one heard entry (operator dismiss). True if it existed."""
+        key = str(dest_hash_hex or "").strip().lower()
+        with self._heard_lock:
+            return self._heard.pop(key, None) is not None
+
     # ── outbound LXMF ────────────────────────────────────────────
     def send(self, dest_hash_hex: str, text: str) -> dict:
         """Send a direct LXMF message to a node's lxmf.delivery hash (hex).
@@ -487,3 +567,26 @@ class RnsLane:
         except Exception as e:
             return {"ok": False, "error": f"send failed: {e}"}
         return {"ok": True, "state": "outbound"}
+
+
+class _LxmfAnnounceHandler:
+    """RNS announce handler, filtered to the lxmf.delivery aspect.
+
+    RNS calls ``received_announce`` for every announce whose aspect matches
+    ``aspect_filter``. We only record it into the lane's heard-buffer — no reply,
+    no contact mutation, no transmission. ``aspect_filter`` must match the LXMF
+    delivery aspect ("lxmf.delivery") so we see peers' messaging announces.
+    """
+
+    aspect_filter = "lxmf.delivery"
+    # Ask RNS to hand us the announced identity instance too (3-arg callback).
+    receive_path_responses = False
+
+    def __init__(self, lane: "RnsLane"):
+        self._lane = lane
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        try:
+            self._lane._record_heard(destination_hash, announced_identity, app_data)
+        except Exception as e:
+            log(f"heard-announce record error: {e}")

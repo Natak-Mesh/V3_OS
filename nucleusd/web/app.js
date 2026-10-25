@@ -830,6 +830,11 @@ const PAGES = {
       const n = (r.ok && r.d.contacts) ? r.d.contacts.length : 0;
       items.push({ type: "nav", label: `» DIRECT MESSAGES (${n} contact${n === 1 ? "" : "s"})`, to: "rns_nodes" });
       items.push({ type: "nav", label: "» ADD CONTACTS (my card / mesh / link)", to: "rns_add" });
+      // Announces heard on-air (receive-only). Count shown so the operator sees
+      // at a glance whether peers' announces are arriving.
+      const hr = await jget("/api/v1/messaging/rns/heard");
+      const hn = (hr.ok && hr.d.heard) ? hr.d.heard.length : 0;
+      items.push({ type: "nav", label: `» HEARD ANNOUNCES (${hn})`, to: "rns_heard" });
       items.push({ type: "nav", label: "» INTERFACES", to: "rns_ifaces" });
 
       return { items };
@@ -1553,6 +1558,39 @@ const PAGES = {
     },
   },
 
+  // Heard Announces: lxmf.delivery announces this node has heard on-air
+  // (in-memory, cleared on daemon restart). Receive-only — discovery stays
+  // out-of-band/contact-based. Each row can be added to contacts or dismissed;
+  // neither transmits anything.
+  rns_heard: {
+    title: "Heard Announces",
+    dynamic: 5000,
+    async build() {
+      const items = [];
+      const r = await jget("/api/v1/messaging/rns/heard");
+      const heard = (r.ok && r.d.heard) ? r.d.heard : [];
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">Heard announces</div>` +
+        `<div class="hint" style="padding-left:0">lxmf.delivery announces heard on-air. ` +
+        `Not saved — cleared when the daemon restarts. Add one to contacts or dismiss it.</div>` +
+        (heard.length ? "" : `<div class="off">nothing heard yet</div>`) + `</div>` });
+      heard.forEach((h) => {
+        const who = (h.announced_name || "").trim() || (h.lxmf_hash || "").slice(0, 10);
+        const hash = (h.lxmf_hash || "").slice(0, 10);
+        const key = h.pubkey ? "" : "  ·  no key";
+        const seen = `${h.count || 1}×, ${ago(h.last_heard)} ago`;
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="kv"><span>${esc(who)}${esc(key)}</span>` +
+          `<span class="hint">${esc(hash)} · ${esc(seen)}</span></div></div>` });
+        items.push({ type: "button", label: `» Add ${who} to contacts`,
+          onEnter: (S) => rnsHeardAdd(S, h.lxmf_hash, who) });
+        items.push({ type: "button", label: `» Dismiss ${who}`,
+          onEnter: (S) => rnsHeardDelete(S, h.lxmf_hash, who) });
+      });
+      return { items };
+    },
+  },
+
   // Add Contacts: add any LXMF contact by its destination hash (the standard
   // Reticulum address every client shows), with an optional nickname; plus a
   // one-tap Add for Nucleus nodes found on the WiFi mesh. This node's own
@@ -1979,6 +2017,25 @@ async function rnsRemove(S, peer, who) {
     "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer));
   if (!ok) return S.msg("remove failed: " + (d.detail || "error"), false);
   S.msg("removed");
+  return S.reload();
+}
+
+// Promote a heard announce to a saved contact (keyed when the key was
+// recovered from the announce). Transmits nothing; drops it from the buffer.
+async function rnsHeardAdd(S, peer, who) {
+  const { ok, d } = await jsend("POST",
+    "/api/v1/messaging/rns/heard/" + encodeURIComponent(peer) + "/add", {});
+  if (!ok) return S.msg("add failed: " + (d.detail || "error"), false);
+  S.msg("added " + (who || "contact") + " to contacts");
+  return S.reload();
+}
+
+// Dismiss a heard announce from the buffer. Transmits nothing.
+async function rnsHeardDelete(S, peer, who) {
+  const { ok, d } = await jsend("DELETE",
+    "/api/v1/messaging/rns/heard/" + encodeURIComponent(peer));
+  if (!ok) return S.msg("dismiss failed: " + (d.detail || "error"), false);
+  S.msg("dismissed");
   return S.reload();
 }
 

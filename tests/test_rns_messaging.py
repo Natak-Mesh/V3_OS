@@ -464,3 +464,76 @@ def test_send_unknown_contact_does_not_request_path(monkeypatch):
     res = lane.send(FIXTURE_LXMF, "hi")
     assert res["ok"] is False
     assert _FakeTransport.requested == []
+
+
+# ── heard announces (receive-only discovery aid) ─────────────────
+# Real lxmf.delivery announce app_data as emitted by LXMF 1.x: a msgpack list
+# whose first element is the display-name bytes. Decoded live off 0054 on the
+# modem73 link, committed here so the handler is pinned to the real wire format.
+HEARD_APP_DATA = b"\x93\xc4\x0c0054-nucleus\xc0\x91\x00"
+
+
+class _FakeIdentity:
+    """Minimal stand-in for an RNS announced_identity: just the public key."""
+
+    def __init__(self, pub_hex):
+        self._pub = bytes.fromhex(pub_hex)
+
+    def get_public_key(self):
+        return self._pub
+
+
+def _heard_lane(monkeypatch):
+    """A lane with just the heard-buffer machinery usable (no RNS start).
+
+    _record_heard imports LXMF internally; the real installed LXMF decodes the
+    committed app_data fixture, so nothing is faked there.
+    """
+    from nucleusd.messaging import rns_lane
+    return rns_lane.RnsLane(display_name="0042-nucleus")
+
+
+def test_heard_announce_recorded_with_name_and_key(monkeypatch):
+    lane = _heard_lane(monkeypatch)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    heard = lane.heard_announces()
+    assert len(heard) == 1
+    e = heard[0]
+    assert e["lxmf_hash"] == USER_HASH
+    assert e["announced_name"] == "0054-nucleus"   # pinned to real LXMF decode
+    assert e["pubkey"] == USER_PUB
+    assert e["count"] == 1
+
+
+def test_heard_announce_duplicate_bumps_count_not_rows(monkeypatch):
+    lane = _heard_lane(monkeypatch)
+    for _ in range(3):
+        lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                           HEARD_APP_DATA)
+    heard = lane.heard_announces()
+    assert len(heard) == 1
+    assert heard[0]["count"] == 3
+
+
+def test_heard_announce_cap_evicts_oldest(monkeypatch):
+    from nucleusd.messaging import rns_lane
+    lane = _heard_lane(monkeypatch)
+    # One over the cap; the first-inserted (oldest last_heard) must be evicted.
+    for i in range(rns_lane.HEARD_MAX + 1):
+        h = f"{i:032x}"
+        lane._record_heard(bytes.fromhex(h), None, HEARD_APP_DATA)
+    heard = lane.heard_announces()
+    assert len(heard) == rns_lane.HEARD_MAX
+    hashes = {e["lxmf_hash"] for e in heard}
+    assert f"{0:032x}" not in hashes          # oldest gone
+    assert f"{rns_lane.HEARD_MAX:032x}" in hashes  # newest kept
+
+
+def test_forget_heard_removes_entry(monkeypatch):
+    lane = _heard_lane(monkeypatch)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    assert lane.forget_heard(USER_HASH) is True
+    assert lane.heard_announces() == []
+    assert lane.forget_heard(USER_HASH) is False   # already gone

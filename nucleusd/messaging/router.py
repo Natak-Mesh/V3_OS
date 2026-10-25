@@ -181,6 +181,32 @@ def rns_request_path(dest: str) -> dict:
     return res
 
 
+@router.get("/rns/heard")
+def rns_heard() -> dict:
+    """lxmf.delivery announces heard on-air (receive-only discovery aid).
+
+    In-memory, cleared on daemon restart. Each entry: lxmf_hash, announced_name,
+    pubkey, first_heard, last_heard, count. The operator can promote one to a
+    contact or dismiss it — neither transmits anything.
+    """
+    return _rpc({"cmd": "rns_heard"})
+
+
+@router.post("/rns/heard/{dest}/add")
+def rns_heard_add(dest: str) -> dict:
+    """Promote a heard announce to a contact (keyed when the key was recovered)."""
+    res = _rpc({"cmd": "rns_heard_add", "dest": dest})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "add failed"))
+    return res
+
+
+@router.delete("/rns/heard/{dest}")
+def rns_heard_delete(dest: str) -> dict:
+    """Dismiss a heard announce from the buffer."""
+    return _rpc({"cmd": "rns_heard_delete", "dest": dest})
+
+
 @router.get("/rns/messages")
 def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
     return _rpc({"cmd": "rns_history", "peer": peer, "since": since})
