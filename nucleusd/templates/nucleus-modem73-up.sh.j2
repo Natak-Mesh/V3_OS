@@ -10,6 +10,9 @@
 # stable udev symlink {{ modem73_ptt_device }}. The OFDM modulation/code-rate
 # flags come from the selected modem73_mode; the same registry entry sets the
 # RNS interface bitrate so the two sides always agree on the on-air rate.
+# CSMA is 'sync' (busy = a real modem signal only): radios run squelch-off, and
+# the default 'threshold' mode reads constant receiver hiss as a busy channel,
+# so the node never transmits.
 # ============================================================
 set -euo pipefail
 
@@ -25,4 +28,5 @@ exec /usr/bin/modem73 \
     --control-port {{ modem73_control_port }} \
     --ptt com \
     --com-port {{ modem73_ptt_device }} \
-    --com-line {{ modem73_ptt_line }}
+    --com-line {{ modem73_ptt_line }} \
+    --csma-mode sync

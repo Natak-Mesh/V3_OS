@@ -180,6 +180,15 @@ def test_modem73_launch_script_custom():
     assert "--tx-level 80" in r
 
 
+def test_modem73_csma_sync_mode():
+    """Regression: radios run squelch-off, so receiver hiss is always present.
+    modem73's default 'threshold' CSMA treated that hiss as a busy channel and
+    never transmitted; 'sync' only counts a real modem signal as busy."""
+    r = rendered()["/opt/nucleus/bin/nucleus-modem73-up.sh"]
+    assert "--csma-mode sync" in r
+    assert "threshold" not in r.split("exec /usr/bin/modem73", 1)[1]
+
+
 def test_usb_udev_rule():
     r = rendered()["/etc/udev/rules.d/60-nucleus-usb.rules"]
     # RAK4631 (tty kind) → /dev/nucleus/rnode, with ModemManager/mtp-probe left off.
