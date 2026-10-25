@@ -109,9 +109,6 @@ reticulum:
   entry_node: true         # uplink to a public-IP Reticulum entry node
   entry_node_host: 173.230.150.24
   entry_node_port: 4243
-  kiss_enabled: false      # optional KISS packet-radio TNC on a serial device
-  # kiss_port: /dev/rfcomm0
-  # kiss_speed: 115200
   # RNode LoRa radio over USB (on by default; harmless with no radio plugged in).
   # Only the RAK4631 is supported. The radio is bound to /dev/nucleus/rnode by a
   # generated udev rule, so no port is set here. Radio params must match on every

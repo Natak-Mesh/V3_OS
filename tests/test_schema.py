@@ -84,7 +84,6 @@ def test_reticulum_defaults():
     assert r.tcp_server_port == 4242
     assert r.entry_node_host == "173.230.150.24"
     assert r.entry_node_port == 4243
-    assert r.kiss_enabled is False
     # RNode on by default, with sane radio defaults.
     assert r.rnode_enabled is True
     assert r.rnode_frequency == 914875000

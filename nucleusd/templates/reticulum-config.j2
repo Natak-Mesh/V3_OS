@@ -45,22 +45,6 @@
 
 {% endif %}
 -#}
-{% if reti_kiss_enabled %}
-  [[KISS TNC]]
-    type = KISSInterface
-    enabled = Yes
-    port = {{ reti_kiss_port }}
-    speed = {{ reti_kiss_speed }}
-    databits = 8
-    parity = none
-    stopbits = 1
-    preamble = 150
-    txtail = 10
-    persistence = 200
-    slottime = 20
-    flow_control = false
-
-{% endif %}
 {% if reti_rnode_enabled %}
   [[RNode LoRa]]
     type = RNodeInterface

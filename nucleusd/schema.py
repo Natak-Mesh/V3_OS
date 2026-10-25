@@ -469,7 +469,6 @@ class ReticulumConfig(BaseModel):
       * TCPServer on br-lan — lets wired/AP-side clients attach over TCP.
       * TCPClient entry node — an optional uplink to a public-IP Reticulum node
         so the local mesh joins the wider network.
-      * KISS — optional packet-radio TNC on a serial device (off by default).
       * RNode — LoRa RNode radio attached over USB (on by default; harmless if
         no radio is plugged in — rnsd just retries the port).
     """
@@ -493,11 +492,6 @@ class ReticulumConfig(BaseModel):
     entry_node: bool = Field(True, description="Connect out to a public-IP Reticulum entry node over TCP.")
     entry_node_host: str = Field("173.230.150.24", description="Entry node hostname / IP.")
     entry_node_port: int = Field(4243, ge=1, le=65535, description="Entry node TCP port.")
-
-    # Optional KISS packet-radio TNC (off by default).
-    kiss_enabled: bool = Field(False, description="Enable a KISSInterface on a serial TNC.")
-    kiss_port: str = Field("/dev/rfcomm0", description="Serial device for the KISS TNC.")
-    kiss_speed: int = Field(115200, ge=1, description="KISS serial baud rate.")
 
     # modem73 soundmodem over KISS-on-TCP (on by default; harmless if modem73
     # isn't running — rnsd just retries 127.0.0.1:8001). modem73 is a KISS TNC
@@ -940,9 +934,6 @@ class NucleusConfig(BaseModel):
             "reti_entry_node": self.reticulum.entry_node,
             "reti_entry_node_host": self.reticulum.entry_node_host,
             "reti_entry_node_port": self.reticulum.entry_node_port,
-            "reti_kiss_enabled": self.reticulum.kiss_enabled,
-            "reti_kiss_port": self.reticulum.kiss_port,
-            "reti_kiss_speed": self.reticulum.kiss_speed,
             "reti_rnode_enabled": self.reticulum.rnode_enabled,
             "reti_rnode_port": RNODE_DEVICE_PATH,
             "reti_rnode_frequency": self.reticulum.rnode_frequency,

@@ -40,7 +40,7 @@ def test_reticulum_config_defaults():
     # Both local interfaces (AutoInterface + TCPServer) are internal so
     # announces are not flooded.
     assert r.count("mode = internal") == 2
-    # KISS off by default.
+    # The unused serial KISSInterface was removed; modem73 is the only KISS path.
     assert "KISSInterface" not in r
     # RNode on by default, bound to the stable udev symlink.
     assert "type = RNodeInterface" in r
@@ -69,8 +69,6 @@ def test_reticulum_config_minimal():
             "transport": False,
             "tcp_server": False,
             "entry_node": False,
-            "kiss_enabled": True,
-            "kiss_port": "/dev/ttyUSB0",
             "modem73_enabled": False,
         },
     })
@@ -79,8 +77,26 @@ def test_reticulum_config_minimal():
     assert "TCPServerInterface" not in r
     assert "TCPClientInterface" not in r
     assert "type = AutoInterface" in r          # still on by default
-    assert "type = KISSInterface" in r
-    assert "port = /dev/ttyUSB0" in r
+
+
+def test_reticulum_legacy_kiss_keys_ignored():
+    """Regression: the unused serial KISS TNC interface was removed. A live
+    config.yaml written before the removal still carries kiss_* keys; it must
+    still validate, and must not render a KISSInterface."""
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9},
+        "mesh": {"password": "52235223"},
+        "ap": {"password": "52235223"},
+        "reticulum": {
+            "kiss_enabled": False,
+            "kiss_port": "/dev/rfcomm0",
+            "kiss_speed": 115200,
+        },
+    })
+    assert not hasattr(cfg.reticulum, "kiss_enabled")
+    assert "kiss_enabled" not in cfg.model_dump()["reticulum"]
+    r = render_all(cfg)["/home/natak/.reticulum/config"]
+    assert "KISSInterface" not in r
 
 
 def test_reticulum_modem73_disabled():
