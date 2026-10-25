@@ -15,7 +15,10 @@
   [[Mesh AutoInterface]]
     type = AutoInterface
     enabled = Yes
-    mode = internal
+    # full (not internal): internal mode suppresses announce/path propagation,
+    # which is only correct for co-located shared-instance links. eth0/wlan1
+    # peers are real neighbours, so announces and paths must flow over them.
+    mode = full
     devices = {{ reti_auto_devices }}
 
 {% endif %}
