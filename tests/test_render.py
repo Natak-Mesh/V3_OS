@@ -186,6 +186,8 @@ def test_modem73_csma_sync_mode():
     never transmitted; 'sync' only counts a real modem signal as busy."""
     r = rendered()["/opt/nucleus/bin/nucleus-modem73-up.sh"]
     assert "--csma-mode sync" in r
+    # VHF/UHF FM radios: VHF CSMA timing profile, not modem73's 'hf' default.
+    assert "--csma-band vhf" in r
     assert "threshold" not in r.split("exec /usr/bin/modem73", 1)[1]
 
 

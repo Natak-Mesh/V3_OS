@@ -12,7 +12,8 @@
 # RNS interface bitrate so the two sides always agree on the on-air rate.
 # CSMA is 'sync' (busy = a real modem signal only): radios run squelch-off, and
 # the default 'threshold' mode reads constant receiver hiss as a busy channel,
-# so the node never transmits.
+# so the node never transmits. CSMA band is fixed to 'vhf' (VHF/UHF timing
+# profile) because current nodes run VHF/UHF FM radios; modem73 defaults to 'hf'.
 # ============================================================
 set -euo pipefail
 
@@ -29,4 +30,5 @@ exec /usr/bin/modem73 \
     --ptt com \
     --com-port {{ modem73_ptt_device }} \
     --com-line {{ modem73_ptt_line }} \
-    --csma-mode sync
+    --csma-mode sync \
+    --csma-band vhf
