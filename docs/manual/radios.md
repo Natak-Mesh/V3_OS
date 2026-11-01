@@ -29,6 +29,11 @@ appears only when the radio is plugged in.
   §4), driven by `POST /api/v1/rf/ap`. It is never written to `config.yaml`, so
   it always comes back ON at boot.
 
+While a radio is off, the [Monitor](monitor.md) page (MESH CONNECTIONS) shows
+an amber alert with a link back here, and the header's `mesh` indicator reads
+`RF OFF` instead of `DOWN` — so a switched-off radio isn't mistaken for a
+broken mesh.
+
 ### Turning the mesh back on
 
 Turning the mesh **on** is not just an rfkill unblock. Blocking the radio

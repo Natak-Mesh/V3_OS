@@ -4,12 +4,33 @@ Who this node can currently reach. Two tables (three when a HaLow radio is
 plugged in), auto-refreshed every 5s. Diagnostic detail (interface addresses,
 service states) lives on the [System](system.md) page.
 
+## Radio-off alerts
+
+A radio that has been deliberately switched off looks exactly like a broken
+mesh from this page (empty tables). So when a radio is off, amber alerts are
+shown at the top of the page, followed by a selectable
+**» OPEN RADIOS (RF ON/OFF)** link to the [Radios](radios.md) page where it is
+switched back on:
+
+| Alert | Shown when |
+|-------|------------|
+| Wi-Fi mesh radio is OFF | `mesh.enabled` is `false` (Radios page switch off). |
+| Wi-Fi mesh is enabled but the wlan1 radio is still switched off | Config says on, but the live radio disagrees (`radios.mesh.rf_mismatch`) — apply the config or reboot. |
+| Meshtastic is receive-only | `meshtastic.tx_enabled` is `false` — LoRa nodes are still heard, but this node does not transmit. |
+| HaLow radio is plugged in but turned off | The HaLow radio is present but `halow.enabled` is `false`. |
+
+The access point is not listed: it is live-only and always returns at boot. If
+the radio state can't be read, no alert is shown (no false alarms). The header's
+`mesh` indicator also reads **`RF OFF`** (amber) instead of `DOWN` while the
+Wi-Fi mesh is switched off.
+
 ## Wifi mesh nodes
 
 Every node reachable over the wlan1 wifi mesh (Babel routing). Only
 Babel-selected (installed) routes to node br-lan /24 prefixes are shown; backup
 routes and gateway/self prefixes are omitted. Empty means this node sees no other
-node over wlan1.
+node over wlan1. If the Wi-Fi mesh is switched off, the table is replaced by
+"Wi-Fi mesh is turned off" instead (see Radio-off alerts above).
 
 | Column | Meaning |
 |--------|---------|
@@ -46,7 +67,7 @@ menu entry, also shown only when the radio is plugged in).
 
 Meshtastic nodes heard over RF, from the CoT bridge. If cot-bridge is not
 running, LoRa visibility is unavailable. Nodes not heard in the last 15 min are
-dropped.
+dropped. When Meshtastic is receive-only, a note under the table says so.
 
 | Column | Meaning |
 |--------|---------|

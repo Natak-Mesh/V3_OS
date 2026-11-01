@@ -313,6 +313,18 @@ html, body {
   background: var(--bg-deep); border: 1px solid var(--border-color); border-radius: 0;
   padding: 10px; overflow: auto; font-size: calc(12px * var(--fscale)); white-space: pre-wrap; word-break: break-word;
 }
+/* Radio-off alert (MESH CONNECTIONS): amber callout so a deliberately disabled
+   radio isn't mistaken for a broken mesh. Theme variables only. */
+.content .rf-alert {
+  color: var(--warn);
+  background: var(--bg-card);
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  line-height: 1.5;
+  font-size: calc(13px * var(--fscale));
+}
 .content .kv { display: flex; gap: 10px; padding: 4px 0; }
 .content .kv .k { color: var(--text-secondary); min-width: 130px; }
 

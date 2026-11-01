@@ -58,6 +58,49 @@ def test_radios_reports_config_and_live_state(monkeypatch):
     assert r["ap"]["persistent"] is False
 
 
+def test_radios_mesh_off_and_blocked_is_not_a_mismatch(monkeypatch):
+    # mesh disabled in config + phy1 blocked = config and radio agree.
+    _wire(monkeypatch, cfg=_Cfg(),
+          phy_blocked={"phy1": True, "phy0": False}, hostapd="active")
+    assert status.radios()["mesh"]["rf_mismatch"] is False
+
+
+def test_radios_mesh_on_and_unblocked_is_not_a_mismatch(monkeypatch):
+    class _On(_Cfg):
+        mesh = type("M", (), {"enabled": True})()
+    _wire(monkeypatch, cfg=_On(),
+          phy_blocked={"phy1": False, "phy0": False}, hostapd="active")
+    r = status.radios()
+    assert r["mesh"]["on"] is True
+    assert r["mesh"]["rf_mismatch"] is False
+
+
+def test_radios_mesh_enabled_but_still_blocked_is_a_mismatch(monkeypatch):
+    # config says on, but phy1 is still soft-blocked (apply not run yet).
+    class _On(_Cfg):
+        mesh = type("M", (), {"enabled": True})()
+    _wire(monkeypatch, cfg=_On(),
+          phy_blocked={"phy1": True, "phy0": False}, hostapd="active")
+    r = status.radios()
+    assert r["mesh"]["on"] is True
+    assert r["mesh"]["rf_blocked"] is True
+    assert r["mesh"]["rf_mismatch"] is True
+
+
+def test_radios_mesh_disabled_but_unblocked_is_a_mismatch(monkeypatch):
+    # config says off, but phy1 is live (unblocked outside nucleusd).
+    _wire(monkeypatch, cfg=_Cfg(),
+          phy_blocked={"phy1": False, "phy0": False}, hostapd="active")
+    assert status.radios()["mesh"]["rf_mismatch"] is True
+
+
+def test_mesh_rf_mismatch_unknown_never_alarms():
+    # Either side unknown -> None, so the UI shows no warning.
+    assert status.mesh_rf_mismatch(None, True) is None
+    assert status.mesh_rf_mismatch(True, None) is None
+    assert status.mesh_rf_mismatch(None, None) is None
+
+
 def test_radios_ap_off_when_blocked(monkeypatch):
     _wire(monkeypatch, cfg=_Cfg(),
           phy_blocked={"phy1": False, "phy0": True}, hostapd="active")
@@ -81,5 +124,6 @@ def test_radios_degrades_when_config_unavailable(monkeypatch):
     assert r["mesh"]["on"] is None            # config unreadable -> unknown
     assert r["meshtastic"]["on"] is None
     assert r["mesh"]["rf_blocked"] is None     # no phy -> unknown
+    assert r["mesh"]["rf_mismatch"] is None    # unknown -> no false alarm
     assert r["ap"]["on"] is False              # hostapd inactive
     assert r["halow"]["on"] is None            # config unreadable -> unknown

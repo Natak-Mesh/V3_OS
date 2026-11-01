@@ -86,8 +86,14 @@ async function refreshHeader() {
     const nodes = st.neighbour_nodes || [];
     const n = nodes.length;
     const el = document.getElementById("h-mesh");
+    const meshRadio = (st.radios && st.radios.mesh) || {};
     let text, cls;
-    if (meshSvc !== "active") {
+    if (meshRadio.on === false) {
+      // Deliberately switched off (mesh.enabled: false) — say so, rather than
+      // "DOWN", which reads as a fault. See the MESH CONNECTIONS alert.
+      text = "RF OFF";
+      cls = "warn";
+    } else if (meshSvc !== "active") {
       text = "DOWN";
       cls = "down";
     } else if (n > 0) {
@@ -104,6 +110,37 @@ async function refreshHeader() {
     el.className = "v " + cls;
     document.getElementById("h-ip").textContent = ip;
   } catch (e) { /* header stays as-is on transient errors */ }
+}
+
+// ── Radio-off alerts (MESH CONNECTIONS) ────────────────────────
+// Map the status `radios` block to operator warnings. Pure field -> message
+// mapping only: the state itself (incl. mesh.rf_mismatch) is derived in
+// status.radios() server-side. Unknown (null/undefined) never alerts, so a
+// failed status read can't raise a false alarm. The AP is deliberately not
+// listed: it is live-only, resets ON at boot, and if it's off you are already
+// connected some other way.
+function radioOffAlerts(radios) {
+  const r = radios || {};
+  const mesh = r.mesh || {};
+  const mt = r.meshtastic || {};
+  const hl = r.halow || {};
+  const out = [];
+  if (mesh.on === false) {
+    out.push("<b>Wi-Fi mesh radio is OFF.</b> This node cannot see or reach " +
+      "other Wi-Fi mesh nodes. Turn it on under RADIOS (RF ON/OFF).");
+  } else if (mesh.rf_mismatch === true) {
+    out.push("<b>Wi-Fi mesh is enabled but the wlan1 radio is still " +
+      "switched off.</b> Apply the config or reboot the node.");
+  }
+  if (mt.receive_only === true) {
+    out.push("<b>Meshtastic is receive-only.</b> LoRa nodes are still heard, " +
+      "but this node will not transmit.");
+  }
+  if (hl.present === true && hl.enabled === false) {
+    out.push("<b>HaLow radio is plugged in but turned off.</b> Enable it on " +
+      "the HALOW page.");
+  }
+  return out;
 }
 
 async function refreshHeaderOnce() {
@@ -365,10 +402,24 @@ const PAGES = {
     async build() {
       const { d: st } = await jget("/api/v1/status");
       const meshNodes = st.mesh_nodes || [];
+      const radios = st.radios || {};
+      const meshOff = !!(radios.mesh && radios.mesh.on === false);
+      const loraRxOnly = !!(radios.meshtastic && radios.meshtastic.receive_only === true);
+      // Radio-off alerts lead the page, with a selectable jump to the RADIOS
+      // page where they are switched back on.
+      const items = [];
+      const alerts = radioOffAlerts(radios);
+      if (alerts.length) {
+        items.push({ type: "content", html: `<div class="content">` +
+          alerts.map((a) => `<div class="rf-alert">${a}</div>`).join("") + `</div>` });
+        items.push({ type: "nav", label: "» OPEN RADIOS (RF ON/OFF)", to: "radios" });
+      }
       let h = "";
 
       h += `<div class="content"><div class="page-title" style="padding-left:0">Wifi mesh nodes</div>`;
-      if (!meshNodes.length) {
+      if (meshOff) {
+        h += `<div class="warn">Wi-Fi mesh is turned off — no nodes can be seen over wlan1</div>`;
+      } else if (!meshNodes.length) {
         h += `<div class="off">no nodes — this node does not see any other node over wlan1</div>`;
       } else {
         h += `<table><tr><th>Node</th><th>Via</th><th>Cost</th><th>Seen</th></tr>`;
@@ -431,9 +482,14 @@ const PAGES = {
         });
         h += `</table>`;
       }
+      if (loraRxOnly) {
+        h += `<div class="hint" style="padding-left:0">receive-only — this node ` +
+          `hears LoRa nodes but does not transmit</div>`;
+      }
       h += `</div>`;
 
-      return { items: [{ type: "content", html: h }] };
+      items.push({ type: "content", html: h });
+      return { items };
     },
   },
 

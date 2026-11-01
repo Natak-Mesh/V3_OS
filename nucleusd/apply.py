@@ -41,7 +41,7 @@ CERT_KEY = CERT_DIR / "nucleus-web.key"
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from . import rf
-from .schema import NucleusConfig
+from .schema import HALOW_IFACE, NucleusConfig
 
 # Meshtastic daemon exposes its API on localhost; the CLI drives it the same way
 # radio_init does. Module-level so tests can monkeypatch subprocess.run.
@@ -250,16 +250,27 @@ def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
 def _reconcile_halow(cfg: NucleusConfig, changed: list[str]) -> list[str]:
     """Enable/disable nucleus-halow to match halow.enabled; restart on conf change.
 
-    Mirrors _reconcile_meshtastic: the service is bound to the halow0 device and
-    only actually runs while the radio is present, so enabling it on a radio-less
-    node is inert. If the supplicant conf or the up-script changed AND HaLow is
-    enabled, restart nucleus-halow so a live channel/bandwidth edit rejoins the
-    mesh without a reboot or module reload. Returns the units touched.
+    HaLow is an optional plug-in radio. The unit BindsTo/After the halow0 device,
+    so STARTING it while the radio is absent blocks on the device job until
+    systemd's timeout (~90 s), stalling every apply. So:
+
+      * enabled + halow0 present -> enable --now (and restart if the supplicant
+        conf or up-script changed, so a live channel/bandwidth edit rejoins the
+        mesh without a reboot or module reload).
+      * enabled + halow0 absent  -> enable only (no start). Plugging the radio in
+        later starts it via the udev SYSTEMD_WANTS rule, exactly as before.
+      * disabled                 -> disable --now (never blocks).
+
+    Returns the units touched.
     """
-    _set_service(HALOW_UNIT, cfg.halow.enabled)
-    if cfg.halow.enabled and (
-        str(HALOW_SUPPLICANT_CONF) in changed or str(HALOW_UP_SCRIPT) in changed
-    ):
+    if not cfg.halow.enabled:
+        _set_service(HALOW_UNIT, False)
+        return [HALOW_UNIT]
+    if not rf.iface_present(HALOW_IFACE):
+        subprocess.run(["systemctl", "enable", f"{HALOW_UNIT}.service"], check=False)
+        return [HALOW_UNIT]
+    _set_service(HALOW_UNIT, True)
+    if str(HALOW_SUPPLICANT_CONF) in changed or str(HALOW_UP_SCRIPT) in changed:
         _restart([HALOW_UNIT])
     return [HALOW_UNIT]
 
@@ -505,6 +516,12 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
         # Never start mesh units while the mesh is disabled (see the discard above).
         if not cfg.mesh.enabled:
             ordered = [u for u in ordered if u not in MESH_UNITS]
+        # Never (re)start nucleus-halow from the group bounce when HaLow is
+        # disabled or its radio isn't plugged in: restarting a device-bound unit
+        # with halow0 absent blocks on the device job until systemd's timeout.
+        # _reconcile_halow owns its lifecycle; udev starts it on plug-in.
+        if not (cfg.halow.enabled and rf.iface_present(HALOW_IFACE)):
+            ordered = [u for u in ordered if u != HALOW_UNIT]
         _restart(ordered)
         result.units_restarted = ordered
 

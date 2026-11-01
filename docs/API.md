@@ -120,12 +120,15 @@ curl -s http://localhost:8080/api/v1/status
 `radios` gives per-radio on/off state for the [Radios](manual/radios.md) page —
 the config source-of-truth combined with live rfkill/unit state. `on` is the
 operator-facing state; `rf_blocked` is the live rfkill soft-block (`null` =
-unknown). `mesh` and `meshtastic` are `persistent` (config-backed); `ap` is live
-only and resets ON at boot. All best-effort — `radios` is `null` if it can't be
-read.
+unknown). `mesh.rf_mismatch` is `true` when the live wlan1 radio disagrees with
+`mesh.enabled` (e.g. enabled in config but still rfkill-blocked — apply or
+reboot), `false` when they agree, `null` if either is unknown; the MESH
+CONNECTIONS page alerts on it. `mesh` and `meshtastic` are `persistent`
+(config-backed); `ap` is live only and resets ON at boot. All best-effort —
+`radios` is `null` if it can't be read.
 ```bash
 curl -s http://localhost:8080/api/v1/status | jq .radios
-# {"mesh":{"on":true,"rf_blocked":false,"persistent":true},
+# {"mesh":{"on":true,"rf_blocked":false,"rf_mismatch":false,"persistent":true},
 #  "meshtastic":{"on":true,"receive_only":false,"daemon":"active","persistent":true},
 #  "ap":{"on":true,"rf_blocked":false,"hostapd":"active","persistent":false}}
 ```

@@ -203,3 +203,44 @@ def test_peer_join_is_a_selectable_item():
     assert "peers-slot" not in app_js, "peer results injected into DOM instead of items"
     assert "...peerItems()" in app_js, "meshtastic page no longer renders peer items"
     assert "onEnter: (S) => joinPeer(S, p.ip)" in app_js, "Join button item lost"
+
+
+def test_mesh_connections_warns_when_a_radio_is_off():
+    """Regression: with mesh.enabled false the MESH CONNECTIONS page only said
+    "does not see any other node" and the header said DOWN — indistinguishable
+    from a broken mesh. The monitor page must surface radio-off alerts (driven
+    by the server-derived status.radios fields, not re-derived in JS) with a
+    selectable jump to the RADIOS page, and the header must say RF OFF.
+    Node isn't installed here, so pin the wiring in the static assets."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    cli_css = (web / "cli.css").read_text()
+
+    assert "function radioOffAlerts(radios)" in app_js, "radio-off alert mapper removed"
+    alerts_fn = app_js[app_js.index("function radioOffAlerts"):
+                       app_js.index("async function refreshHeaderOnce")]
+    # Field -> message mapping only, keyed on the status.radios contract.
+    assert "mesh.on === false" in alerts_fn, "no alert for mesh switched off"
+    assert "mesh.rf_mismatch === true" in alerts_fn, \
+        "mismatch alert must use the server-derived rf_mismatch field"
+    assert "mt.receive_only === true" in alerts_fn, "no alert for Meshtastic receive-only"
+    assert "hl.present === true && hl.enabled === false" in alerts_fn, \
+        "no alert for a plugged-in but disabled HaLow radio"
+    # AP is intentionally excluded (live-only, resets ON at boot).
+    assert "r.ap" not in alerts_fn, "AP must not raise a radio-off alert"
+
+    monitor = app_js[app_js.index("  monitor: {"):app_js.index("  system: {")]
+    assert "radioOffAlerts(radios)" in monitor, "monitor page no longer shows alerts"
+    assert 'to: "radios"' in monitor, "alert lost its selectable link to RADIOS"
+    assert 'class="rf-alert"' in monitor, "alert no longer uses the rf-alert style"
+    assert "Wi-Fi mesh is turned off" in monitor, \
+        "mesh-off empty state still reads like a broken mesh"
+
+    header = app_js[app_js.index("async function refreshHeader()"):
+                    app_js.index("function radioOffAlerts")]
+    assert '"RF OFF"' in header, "header no longer distinguishes RF OFF from DOWN"
+
+    assert ".content .rf-alert" in cli_css, "rf-alert style removed"
+    rf_css = cli_css[cli_css.index(".content .rf-alert"):]
+    rf_css = rf_css[:rf_css.index("}")]
+    assert "#" not in rf_css, "rf-alert must use theme variables, not literal colours"

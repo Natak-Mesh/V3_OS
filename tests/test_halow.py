@@ -152,11 +152,22 @@ def test_render_halow_stanzas_vanish_when_disabled():
 
 # ── apply: _reconcile_halow enable/disable + restart-on-change ──────────────
 
-def _capture(monkeypatch):
+def _capture(monkeypatch, present=True, runs=None):
+    """Record enable/disable calls and restarts; stub radio presence.
+
+    `present` stubs whether the halow0 radio is plugged in (rf.iface_present).
+    If `runs` is a list, raw subprocess.run argv (the enable-only path) is
+    appended to it.
+    """
     services, restarts = [], []
     monkeypatch.setattr(apply, "_set_service",
                         lambda unit, on: services.append((unit, on)))
     monkeypatch.setattr(apply, "_restart", lambda units: restarts.extend(units))
+    monkeypatch.setattr(apply.rf, "iface_present",
+                        lambda iface, **kw: present and iface == HALOW_IFACE)
+    sink = runs if runs is not None else []
+    monkeypatch.setattr(apply.subprocess, "run",
+                        lambda argv, **kw: sink.append(argv))
     return services, restarts
 
 
@@ -186,6 +197,73 @@ def test_reconcile_halow_disabled_stops_no_restart(monkeypatch):
     )
     assert ("nucleus-halow", False) in services
     assert restarts == []
+
+
+def test_reconcile_halow_enabled_radio_absent_enables_without_start(monkeypatch):
+    # Regression: with no radio plugged in, `enable --now` blocked on the halow0
+    # device job until systemd's ~90 s timeout, stalling every apply. Enabled +
+    # absent must only `enable` (no --now, no restart); udev starts it on plug-in.
+    runs = []
+    services, restarts = _capture(monkeypatch, present=False, runs=runs)
+    touched = apply._reconcile_halow(
+        cfg(halow={"enabled": True}),
+        changed=[str(apply.HALOW_SUPPLICANT_CONF)],  # conf change, still no start
+    )
+    assert services == []                     # no enable --now / disable --now
+    assert restarts == []                     # never restarted while absent
+    assert runs == [["systemctl", "enable", "nucleus-halow.service"]]
+    assert touched == ["nucleus-halow"]
+
+
+def test_reconcile_halow_disabled_radio_absent_still_disables(monkeypatch):
+    services, restarts = _capture(monkeypatch, present=False)
+    apply._reconcile_halow(cfg(halow={"enabled": False}), changed=[])
+    assert services == [("nucleus-halow", False)]
+    assert restarts == []
+
+
+def _apply_group_bounce(monkeypatch, tmp_path, *, halow_enabled, present):
+    """Run apply() with a network-group change; return the ordered restart list.
+
+    Only the group-bounce decision is under test: every write goes to tmp_path,
+    and all reconciles / systemctl / rfkill are stubbed out.
+    """
+    restarted = []
+    monkeypatch.setattr(apply, "TARGETS", [apply.Target(
+        "networkd/10-wlan1.network.j2", tmp_path / "10-wlan1.network",
+        ("systemd-networkd", "brlan-setup"))])
+    monkeypatch.setattr(apply, "_restart", lambda units: restarted.extend(units))
+    for name in ("_reconcile_rf", "_reconcile_halow", "_reconcile_meshtastic",
+                 "_reconcile_modem73", "_reconcile_reticulum"):
+        monkeypatch.setattr(apply, name, lambda *a, **k: [])
+    for name in ("_reconcile_meshtastic_tx", "_chown_reticulum", "_reload_nginx",
+                 "_reload_udev"):
+        monkeypatch.setattr(apply, name, lambda *a, **k: None)
+    monkeypatch.setattr(apply, "_ensure_web_cert", lambda *a, **k: False)
+    monkeypatch.setattr(apply, "NGINX_ENABLED", tmp_path / "nginx-enabled")
+    monkeypatch.setattr(apply, "NGINX_VHOST", tmp_path / "nginx-vhost")
+    monkeypatch.setattr(apply, "NGINX_DEFAULT", tmp_path / "nginx-default")
+    monkeypatch.setattr(apply.rf, "set_iface_blocked", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(apply.rf, "iface_present",
+                        lambda iface, **kw: present and iface == HALOW_IFACE)
+    apply.apply(cfg(halow={"enabled": halow_enabled}))
+    return restarted
+
+
+def test_group_bounce_skips_halow_when_radio_absent(monkeypatch, tmp_path):
+    order = _apply_group_bounce(monkeypatch, tmp_path, halow_enabled=True, present=False)
+    assert "nucleus-halow" not in order
+    assert "nucleus-mesh" in order and "babeld" in order   # rest of group intact
+
+
+def test_group_bounce_keeps_halow_when_radio_present(monkeypatch, tmp_path):
+    order = _apply_group_bounce(monkeypatch, tmp_path, halow_enabled=True, present=True)
+    assert order == apply.NET_GROUP_ORDER
+
+
+def test_group_bounce_skips_halow_when_disabled(monkeypatch, tmp_path):
+    order = _apply_group_bounce(monkeypatch, tmp_path, halow_enabled=False, present=True)
+    assert "nucleus-halow" not in order
 
 
 def test_halow_unit_in_network_group():

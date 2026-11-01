@@ -427,6 +427,13 @@ map to their units; `nucleus-morse.conf` → () (modprobe, no unit).
   `_restart(["nucleus-halow"])` so a channel/bandwidth edit rejoins live (no
   reboot, no module reload). Add `halow0` to `NETWORKD_LINKS` and append
   `nucleus-halow` into the network-group restart ordering after `nucleus-mesh`.
+- **Radio absent (the common case):** starting the unit with `halow0` missing
+  blocks on the device job until systemd's ~90 s timeout, stalling every apply.
+  So when HaLow is enabled but `rf.iface_present("halow0")` is false,
+  `_reconcile_halow` only runs `systemctl enable` (no `--now`, no restart), and
+  the network-group bounce drops `nucleus-halow`. Plugging the radio in still
+  starts it via the udev `SYSTEMD_WANTS`; with the radio present, behaviour is
+  unchanged. Tests: `tests/test_halow.py` (`*_radio_absent_*`, `group_bounce_*`).
 - **`install.sh` `systemctl enable` line:** add `nucleus-halow.service`.
 
 ### 10.5 Messaging + voice over both radios

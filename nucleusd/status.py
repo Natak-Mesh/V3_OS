@@ -409,6 +409,20 @@ def start_mesh_tracker() -> None:
     threading.Thread(target=_mesh_loop, name="mesh-tracker", daemon=True).start()
 
 
+def mesh_rf_mismatch(enabled: bool | None, blocked: bool | None) -> bool | None:
+    """True when the wlan1 radio's live rfkill state disagrees with mesh.enabled.
+
+    mesh.enabled is the source of truth and apply / nucleus-rf.service enforce it,
+    so normally enabled == (not blocked). A mismatch means the live radio drifted
+    from config (e.g. config flipped on but apply hasn't run yet, or the radio was
+    rfkill'd outside nucleusd) and the operator should apply or reboot. Returns
+    None when either side is unknown, so the UI never raises a false alarm.
+    """
+    if enabled is None or blocked is None:
+        return None
+    return enabled == blocked
+
+
 def radios() -> dict:
     """Per-radio on/off state for the Radios UI page (Phase 4/5).
 
@@ -418,7 +432,8 @@ def radios() -> dict:
       * ap (wlan0)   — live only (outside the pipeline): phy0 rfkill + hostapd unit.
 
     Each radio reports `on` as the operator-facing state. `rf_blocked` is the live
-    rfkill view (None = unknown, e.g. off-box or phy absent). All best-effort:
+    rfkill view (None = unknown, e.g. off-box or phy absent). `mesh.rf_mismatch`
+    flags the live wlan1 radio disagreeing with mesh.enabled. All best-effort:
     config-load or rfkill failures degrade to None rather than raising.
     """
     from . import rf
@@ -435,6 +450,7 @@ def radios() -> dict:
     units = unit_states(("meshtasticd", "hostapd", "nucleus-halow"))
     mesh_enabled = cfg.mesh.enabled if cfg else None
     tx_enabled = cfg.meshtastic.tx_enabled if cfg else None
+    mesh_blocked = _blocked(rf.MESH_IFACE)
     ap_blocked = _blocked(rf.AP_IFACE)
 
     # HaLow: operator-facing on = config halow.enabled AND the halow0 interface is
@@ -446,7 +462,9 @@ def radios() -> dict:
     return {
         "mesh": {
             "on": mesh_enabled,
-            "rf_blocked": _blocked(rf.MESH_IFACE),
+            "rf_blocked": mesh_blocked,
+            # Live radio disagrees with config (apply/reboot needed); None = unknown.
+            "rf_mismatch": mesh_rf_mismatch(mesh_enabled, mesh_blocked),
             "persistent": True,
         },
         "halow": {

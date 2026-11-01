@@ -22,6 +22,17 @@ NET_SYSFS = Path("/sys/class/net")
 RFKILL_SYSFS = Path("/sys/class/rfkill")
 
 
+def iface_present(iface: str, sysfs: Path | None = None) -> bool:
+    """Return True if a network interface currently exists (/sys/class/net/<iface>).
+
+    Used to gate starting device-bound units for optional plug-in radios (e.g.
+    HaLow's halow0): starting such a unit with the device absent blocks on the
+    device job until systemd's timeout, stalling apply.
+    """
+    root = sysfs or NET_SYSFS
+    return (root / iface).exists()
+
+
 def phy_for_iface(iface: str, sysfs: Path | None = None) -> str | None:
     """Return the phy name (e.g. 'phy1') backing a wireless interface, or None.
 
