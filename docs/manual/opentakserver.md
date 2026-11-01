@@ -56,6 +56,8 @@ The upstream installer assumes it owns nginx:
 | `ots_http` listens on **8080** | 8080 is `nucleusd`; nginx can't start → Nucleus UI on 80/443 down | Moved to **8082** |
 | `ots_https` UI listens on **443** | Nucleus owns 443 as `default_server`; OTS UI unreachable there | Moved to **8444** (incl. its `Host $host:443` headers) |
 | `ots_certificate_enrollment` `/oauth` sends `Host $host:443` | OTS would point clients at 443 (Nucleus UI) | Header changed to **8444** |
+| `ots_https` `/socket.io` sends `Host $host` (no port) | On 8444 OTS rejects the browser's Socket.IO connection (`400 "Not an accepted origin."`) — login page loads, dashboard never goes live | Adds `X-Forwarded-Host $host:8444` |
+| Installing OTS changes nothing in `config.yaml` | `nucleus-firewall.service` (which opens the OTS ports on eth0 only when `opentakserver.service` is enabled at run time) is not re-run → OTS unreachable over eth0 until a reboot | Restarts `nucleus-firewall.service` and checks 8444 is open on eth0 |
 
 Nothing is disabled — the ports are only moved. The script then runs
 `nginx -t` and restarts nginx. It checks every edit landed and stops **before**

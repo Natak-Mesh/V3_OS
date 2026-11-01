@@ -21,10 +21,16 @@
 # Fixes (nothing is disabled — ports are moved):
 #   1. ots_http : 8080 -> 8082   (OTS plain-HTTP UI + Marti API)
 #   2. ots_https: 443  -> 8444   (OTS web UI), incl. the `Host $host:443` headers
+#      ots_https /socket.io: add `X-Forwarded-Host $host:8444` — on a non-443
+#      port OTS's Socket.IO origin check otherwise rejects the browser
+#      ("Not an accepted origin.", 400) and the dashboard never goes live
 #      ots_certificate_enrollment: `Host $host:443` headers -> 8444
 #   3. `nucleusctl apply` re-creates the Nucleus nginx site link
 #   4. nginx -t, then restart nginx
-#   5. stage ~natak/ots/ca/truststore-root.p12 in /opt/nucleus/tak-certs
+#   5. restart nucleus-firewall.service — it opens the OTS ports on eth0 only
+#      when opentakserver.service is enabled at the time it runs, and a fresh
+#      OTS install does not re-trigger it (nothing in config.yaml changed)
+#   6. stage ~natak/ots/ca/truststore-root.p12 in /opt/nucleus/tak-certs
 #      (downloaded from the Nucleus web UI OPENTAKSERVER page)
 #
 # The upstream installer is also OTS's upgrade path and re-downloads the nginx
@@ -84,6 +90,20 @@ sed -i -E \
     -e "s/\\\$host:443;/\$host:${OTS_HTTPS_PORT};/g" \
     "$OTS_HTTPS"
 
+# ---- 2a. ots_https /socket.io: X-Forwarded-Host $host:8444 ------------------
+# The /socket.io block (UI server only) sends `Host $host` — no port. On 443
+# that matched the browser's Origin; on 8444 it doesn't, so OTS's Socket.IO
+# origin check returns 400 "Not an accepted origin." and the dashboard never
+# goes live. OTS honours X-Forwarded-Host, so pass the real host:port.
+# Idempotent: only inserted when the header is not already present.
+SIO_HDR="proxy_set_header X-Forwarded-Host \$host:${OTS_HTTPS_PORT};"
+if ! grep -qF "$SIO_HDR" "$OTS_HTTPS"; then
+    echo "==> ots_https: /socket.io X-Forwarded-Host \$host:$OTS_HTTPS_PORT"
+    # GNU sed one-line `a\`: text after the backslash is literal (leading
+    # indent kept, `$host` not expanded).
+    sed -i -E "/^[[:space:]]*location[[:space:]]+\/socket\.io[[:space:]]*\{/a\\                ${SIO_HDR}" "$OTS_HTTPS"
+fi
+
 # ---- 2b. ots_certificate_enrollment: Host $host:443 -> 8444 -----------------
 # Its /oauth block tells OTS the UI is on 443; point it at the moved UI port.
 # The 8446 listen line is untouched.
@@ -109,6 +129,9 @@ fi
 if ! grep -Eq "^[[:space:]]*listen[[:space:]]+(\[::\]:)?${OTS_HTTPS_PORT}([[:space:];])" "$OTS_HTTPS"; then
     echo "ERROR: $OTS_HTTPS has no listen $OTS_HTTPS_PORT (upstream file format changed?)" >&2; FAIL=1
 fi
+if ! grep -qF "$SIO_HDR" "$OTS_HTTPS"; then
+    echo "ERROR: $OTS_HTTPS has no /socket.io X-Forwarded-Host (upstream file format changed?)" >&2; FAIL=1
+fi
 if [ "$FAIL" -ne 0 ]; then
     echo "Port fixes did not apply cleanly — nginx NOT restarted. Inspect the files above." >&2
     exit 1
@@ -132,7 +155,25 @@ fi
 echo "==> restart nginx"
 systemctl restart nginx
 
-# ---- 5. Stage the truststore for web UI download ----------------------------
+# ---- 5. Re-run the host firewall ---------------------------------------------
+# nucleus-firewall.sh opens the OTS ports on eth0 (8444/8443/8446/8089/8883/
+# 8322/1936) only if opentakserver.service is enabled AT THE TIME IT RUNS. A
+# fresh OTS install changes nothing in config.yaml, so `nucleusctl apply` above
+# does not re-run it — without this the eth0 ports stay closed until a reboot.
+# The script rebuilds UFW from scratch (ssh-on-eth0 is re-added first).
+echo "==> restart nucleus-firewall (opens OTS ports on eth0)"
+systemctl restart nucleus-firewall.service
+if ufw status | grep -q '^Status: active'; then
+    if ! ufw status | grep -Eq "^${OTS_HTTPS_PORT}/tcp on eth0[[:space:]]+ALLOW"; then
+        echo "ERROR: firewall re-run but $OTS_HTTPS_PORT/tcp is not open on eth0" >&2
+        echo "  Is opentakserver.service enabled? (systemctl is-enabled opentakserver)" >&2
+        exit 1
+    fi
+else
+    echo "    (UFW inactive — firewall.enabled: false; nothing to open)"
+fi
+
+# ---- 6. Stage the truststore for web UI download ----------------------------
 # The Nucleus TAK page serves *.p12 from CERT_WEB_DIR. Only the public
 # truststore is copied — never ca-do-not-share.key.
 OTS_TRUSTSTORE=/home/natak/ots/ca/truststore-root.p12
