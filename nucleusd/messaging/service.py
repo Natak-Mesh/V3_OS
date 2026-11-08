@@ -174,6 +174,11 @@ class MessagingService:
         self._rns_lane = None
         self._rns_store = None
         self._rns_contacts = None
+        # Outbound delivery reports: lock serialises send+store against the
+        # LXMF callback thread; early_state parks a report that arrives before
+        # its message is stored (msg_id -> state).
+        self._rns_state_lock = threading.Lock()
+        self._rns_early_state: dict[str, str] = {}
         if self.rns_enabled:
             from .rns_store import ConversationStore
             from .rns_contacts import ContactStore
@@ -631,12 +636,32 @@ class MessagingService:
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
             return {"ok": False, "error": "rns lane not available"}
         res = self._rns_lane.send(dest, text)
-        if res.get("ok"):
+        if not res.get("ok"):
+            return res
+        msg_id = res.get("msg_id")
+        # A delivery/failure report can arrive (on an LXMF thread) before the
+        # message is stored; _on_rns_state parks it and it is applied here. The
+        # lock is NOT held across send(): LXMF may block on its own lock there
+        # while its worker thread waits on ours.
+        with self._rns_state_lock:
+            state = self._rns_early_state.pop(msg_id, None) or res.get("state", "outbound")
             msg = self._rns_store.add(dest, text.strip(), "out",
-                                      state=res.get("state", "outbound"))
-            self._notify_rns(msg)
-            res["id"] = f"{msg['peer']}:{msg['ts']}"
+                                      state=state, msg_id=msg_id)
+        self._notify_rns(msg)
+        res["id"] = f"{msg['peer']}:{msg['ts']}"
         return res
+
+    def _on_rns_state(self, msg_id: str, state: str) -> None:
+        """LXMF outbound report: set the stored message's state, push to UI."""
+        if not self._rns_store:
+            return
+        with self._rns_state_lock:
+            msg = self._rns_store.set_state(msg_id, state)
+            if msg is None:
+                # Report beat the store write in _rns_send; applied there.
+                self._rns_early_state[msg_id] = state
+                return
+        self._notify_rns(msg)
 
     def _on_rns_message(self, peer_hex: str, text: str, ts: float,
                         pubkey_hex: str | None = None) -> None:
@@ -677,6 +702,7 @@ class MessagingService:
             propagation_node=self.cfg.get("rns_propagation_node", False),
             contacts=self._rns_contacts,
             on_message=self._on_rns_message,
+            on_state=self._on_rns_state,
         )
         while not self._stop.is_set():
             if self._rns_lane.start():

@@ -576,3 +576,128 @@ def test_heard_does_not_create_contact():
                        HEARD_APP_DATA)
     assert cs.get(USER_HASH) is None
 
+
+
+# Regression: the State column stuck at "outbound" forever. send() never
+# registered LXMF's per-message delivery/failed callbacks and the store kept no
+# LXMF message id, so the receiver's proof could never update the message.
+# These use the REAL installed LXMF (LXMessage + LXMRouter.fail_message) so the
+# callbacks fire with the library's actual hash/state values.
+def _real_lxmf_lane(monkeypatch, on_state):
+    import RNS
+    import LXMF
+    from nucleusd.messaging import rns_lane
+
+    # Destinations register with Transport on construction; no stack here.
+    monkeypatch.setattr(RNS.Transport, "register_destination", staticmethod(lambda d: None))
+    monkeypatch.setattr(RNS.Transport, "has_path", staticmethod(lambda h: True))
+    peer_id = RNS.Identity()
+    monkeypatch.setattr(RNS.Identity, "recall", staticmethod(lambda h: peer_id))
+
+    class _Router:
+        """Stands in for LXMRouter.handle_outbound: packs (sets lxm.hash)."""
+        sent: list = []
+
+        def handle_outbound(self, lxm):
+            lxm.state = LXMF.LXMessage.OUTBOUND
+            lxm.pack()
+            _Router.sent.append(lxm)
+
+    lane = rns_lane.RnsLane(display_name="0042-nucleus", on_state=on_state)
+    lane._router = _Router()
+    lane._delivery = RNS.Destination(RNS.Identity(), RNS.Destination.IN,
+                                     RNS.Destination.SINGLE, "lxmf", "delivery")
+    lane._started = True
+    return lane, _Router.sent
+
+
+def test_send_reports_delivered_when_receiver_proves(monkeypatch):
+    got = []
+    lane, sent = _real_lxmf_lane(monkeypatch, lambda mid, st: got.append((mid, st)))
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is True and res["state"] == "outbound"
+    lxm = sent[0]
+    assert res["msg_id"] == lxm.hash.hex()
+    # What LXMF runs when the receiver's proof arrives.
+    lxm._LXMessage__mark_delivered()
+    assert got == [(res["msg_id"], "delivered")]
+
+
+def test_send_reports_failed_when_lxmf_gives_up(monkeypatch):
+    from LXMF.LXMRouter import LXMRouter
+    got = []
+    lane, sent = _real_lxmf_lane(monkeypatch, lambda mid, st: got.append((mid, st)))
+    res = lane.send(FIXTURE_LXMF, "hi")
+    router = LXMRouter.__new__(LXMRouter)   # only fail_message is exercised
+    router.pending_outbound = [sent[0]]
+    router.fail_message(sent[0])
+    assert got == [(res["msg_id"], "failed")]
+
+
+def test_conversation_store_set_state_persists(tmp_path):
+    p = str(tmp_path / "dm.jsonl")
+    cs = ConversationStore(history_limit=10, persist_path=p)
+    cs.add("peerA", "hi", "out", ts=1.0, state="outbound", msg_id="ab12")
+    cs.add("peerA", "yo", "in", ts=2.0)
+    m = cs.set_state("ab12", "delivered")
+    assert m["state"] == "delivered" and m["text"] == "hi"
+    assert cs.set_state("nope", "delivered") is None
+    cs2 = ConversationStore(history_limit=10, persist_path=p)
+    assert cs2.history("peerA")[0]["state"] == "delivered"
+
+
+def _rns_service():
+    import socket
+    import threading
+    from nucleusd.messaging.service import MessagingService
+    svc = MessagingService.__new__(MessagingService)
+    svc.rns_enabled = True
+    svc._rns_store = ConversationStore(history_limit=10)
+    svc._rns_state_lock = threading.Lock()
+    svc._rns_early_state = {}
+    svc._notify_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    svc._subs = {}
+    svc._subs_lock = threading.Lock()
+    return svc
+
+
+class _SendLane:
+    started = True
+
+    def __init__(self, svc=None, early=None):
+        self.svc, self.early = svc, early
+
+    def send(self, dest, text):
+        if self.early:   # proof lands on LXMF's thread before send() returns
+            self.svc._on_rns_state("ab12", self.early)
+        return {"ok": True, "state": "outbound", "msg_id": "ab12"}
+
+
+def test_service_state_report_updates_message_and_pushes():
+    import json
+    import socket
+    svc = _rns_service()
+    svc._rns_lane = _SendLane()
+    sub = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sub.bind(("127.0.0.1", 0))
+    sub.settimeout(2.0)
+    svc._subscribe(sub.getsockname())
+    svc._rns_send(FIXTURE_LXMF, "hi")
+    first = json.loads(sub.recvfrom(65535)[0])
+    assert first["message"]["state"] == "outbound"
+    svc._on_rns_state("ab12", "delivered")
+    upd = json.loads(sub.recvfrom(65535)[0])
+    assert upd["event"] == "rns_message"
+    assert upd["message"]["state"] == "delivered"
+    # Same peer/ts/direction/text as the original, so the UI replaces it in place.
+    for k in ("peer", "ts", "direction", "text"):
+        assert upd["message"][k] == first["message"][k]
+    sub.close()
+
+
+def test_service_state_report_before_store_is_not_lost():
+    svc = _rns_service()
+    svc._rns_lane = _SendLane(svc, early="delivered")
+    svc._rns_send(FIXTURE_LXMF, "hi")
+    assert svc._rns_store.history(FIXTURE_LXMF)[0]["state"] == "delivered"
+    assert svc._rns_early_state == {}

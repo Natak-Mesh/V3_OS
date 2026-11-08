@@ -32,11 +32,14 @@ class ConversationStore:
             self._load()
 
     def add(self, peer: str, text: str, direction: str,
-            ts: Optional[float] = None, state: str = "") -> dict:
+            ts: Optional[float] = None, state: str = "",
+            msg_id: Optional[str] = None) -> dict:
         """Append a message to ``peer``'s conversation and return it.
 
         ``direction`` is "in" or "out"; ``state`` tracks outbound delivery
         (e.g. "outbound", "delivered", "failed"). Inbound messages leave it "".
+        ``msg_id`` is the LXMF message hash (hex) for outbound messages, so a
+        later delivery/failure report can be matched back via ``set_state``.
         """
         now = ts if ts is not None else time.time()
         msg = {
@@ -46,6 +49,8 @@ class ConversationStore:
             "direction": direction,
             "state": state,
         }
+        if msg_id:
+            msg["msg_id"] = msg_id
         with self._lock:
             conv = self._convs.setdefault(peer, [])
             conv.append(msg)
@@ -54,6 +59,22 @@ class ConversationStore:
                 del conv[: len(conv) - self.history_limit]
             self._save()
         return dict(msg)
+
+    def set_state(self, msg_id: str, state: str) -> Optional[dict]:
+        """Set the delivery state of the message with ``msg_id``.
+
+        Returns the updated message, or None if no stored message has that id.
+        """
+        if not msg_id:
+            return None
+        with self._lock:
+            for conv in self._convs.values():
+                for m in conv:
+                    if m.get("msg_id") == msg_id:
+                        m["state"] = state
+                        self._save()
+                        return dict(m)
+        return None
 
     def history(self, peer: Optional[str] = None, since: float = 0.0) -> list[dict]:
         """Return messages for one peer, or all peers merged, after ``since``."""

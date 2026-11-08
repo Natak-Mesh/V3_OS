@@ -116,7 +116,8 @@ class RnsLane:
                  announce_interval_secs: int = 1800,
                  propagation_node: bool = False,
                  contacts=None,
-                 on_message: Optional[Callable[..., None]] = None):
+                 on_message: Optional[Callable[..., None]] = None,
+                 on_state: Optional[Callable[[str, str], None]] = None):
         self.display_name = display_name
         self.node_id = node_id
         self.announce_mode = announce_mode
@@ -124,6 +125,9 @@ class RnsLane:
         self.propagation_node = propagation_node
         self.contacts = contacts
         self.on_message = on_message
+        # on_state(msg_id_hex, state) fires when LXMF reports an outbound
+        # message delivered (receiver's proof arrived) or failed.
+        self.on_state = on_state
 
         self._rns = None
         self._identity = None
@@ -578,11 +582,38 @@ class RnsLane:
             dest, self._delivery, text,
             desired_method=LXMF.LXMessage.DIRECT,
         )
+        # The receiver's LXMF proves every message it accepts; LXMF then marks
+        # ours DELIVERED and calls the delivery callback. It calls the failed
+        # callback when delivery is given up, rejected or cancelled. Register
+        # both before handing off so no report can be missed.
+        lxm.register_delivery_callback(self._on_lxm_delivered)
+        lxm.register_failed_callback(self._on_lxm_failed)
         try:
             self._router.handle_outbound(lxm)
         except Exception as e:
             return {"ok": False, "error": f"send failed: {e}"}
-        return {"ok": True, "state": "outbound"}
+        # handle_outbound packs the message, which sets its LXMF hash (the ID
+        # the callbacks report back with).
+        msg_id = lxm.hash.hex() if getattr(lxm, "hash", None) else None
+        return {"ok": True, "state": "outbound", "msg_id": msg_id}
+
+    def _on_lxm_delivered(self, lxm) -> None:
+        import LXMF
+        # The same callback also fires for "sent to propagation node"; only a
+        # DELIVERED state means the recipient itself proved receipt.
+        state = "delivered" if lxm.state == LXMF.LXMessage.DELIVERED else "sent"
+        self._emit_state(lxm, state)
+
+    def _on_lxm_failed(self, lxm) -> None:
+        self._emit_state(lxm, "failed")
+
+    def _emit_state(self, lxm, state: str) -> None:
+        if not (self.on_state and getattr(lxm, "hash", None)):
+            return
+        try:
+            self.on_state(lxm.hash.hex(), state)
+        except Exception as e:
+            log(f"outbound state callback error: {e}")
 
 
 class _LxmfAnnounceHandler:
