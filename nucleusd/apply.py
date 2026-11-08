@@ -12,6 +12,7 @@ apply logic exists in exactly one place.
 from __future__ import annotations
 
 import pwd
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,6 +38,16 @@ HALOW_MODPROBE_CONF = Path("/etc/modprobe.d/nucleus-morse.conf")
 CERT_DIR = Path("/etc/nucleus/certs")
 CERT_CRT = CERT_DIR / "nucleus-web.crt"
 CERT_KEY = CERT_DIR / "nucleus-web.key"
+# eth0 handoff NetworkManager -> systemd-networkd (see _reconcile_eth0_nm).
+ETH0_NETWORK = Path("/etc/systemd/network/40-eth0.network")
+NM_ETH0_CONF = Path("/etc/NetworkManager/conf.d/nucleus-eth0.conf")
+NM_ETH0_CONF_CONTENT = (
+    "[device-nucleus-eth0]\n"
+    "match-device=interface-name:eth0\n"
+    "managed=0\n"
+)
+NETPLAN_DIR = Path("/etc/netplan")
+_NETPLAN_ETH0_RE = re.compile(r"^[ \t]+eth0:[ \t]*$", re.MULTILINE)
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -363,6 +374,39 @@ def _reconcile_modem73(cfg: NucleusConfig, changed: list[str]) -> list[str]:
     return [MODEM73_UNIT]
 
 
+def _reconcile_eth0_nm() -> list[str]:
+    """Hand eth0 from NetworkManager to systemd-networkd. Idempotent.
+
+    NetworkManager (netplan-eth0) and networkd (40-eth0.network) both running a
+    DHCP client on eth0 makes the address flap between two leases. Only acts once
+    networkd has its eth0 config AND systemd-resolved is active — resolved is what
+    carries networkd's DHCP DNS into /etc/resolv.conf; without it, taking NM off
+    eth0 leaves the node with no DNS. Otherwise NM keeps eth0 as before.
+
+    Writes a [device] NM conf marking eth0 unmanaged (a separate keyfile
+    unmanaged-devices= key would be overridden by unmanaged-devices.conf),
+    removes NM's netplan file for eth0 so it is not regenerated, and only when
+    something changed tells NM/networkd to apply it. Returns the paths changed.
+    """
+    if not ETH0_NETWORK.exists():
+        return []
+    if subprocess.run(["systemctl", "is-active", "--quiet", "systemd-resolved"],
+                      check=False).returncode != 0:
+        return []
+    changed: list[str] = []
+    if _write_if_changed(NM_ETH0_CONF, NM_ETH0_CONF_CONTENT, 0o644):
+        changed.append(str(NM_ETH0_CONF))
+    for f in sorted(NETPLAN_DIR.glob("90-NM-*.yaml")):
+        if _NETPLAN_ETH0_RE.search(f.read_text()):
+            f.unlink()
+            changed.append(str(f))
+    if changed:
+        subprocess.run(["nmcli", "general", "reload", "conf"], check=False)
+        subprocess.run(["nmcli", "device", "set", "eth0", "managed", "no"], check=False)
+        subprocess.run(["networkctl", "reconfigure", "eth0"], check=False)
+    return changed
+
+
 def _global_ipv4s() -> list[str]:
     """Every global-scope IPv4 on the box, read live (not from config).
 
@@ -524,6 +568,10 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
             ordered = [u for u in ordered if u != HALOW_UNIT]
         _restart(ordered)
         result.units_restarted = ordered
+
+    # Hand eth0 from NetworkManager to networkd once networkd has its config and
+    # systemd-resolved is up to carry DNS (no-op otherwise / when already done).
+    result.changed += _reconcile_eth0_nm()
 
     # Host firewall: restart it on its own whenever nucleus-firewall.sh changed.
     # It is intentionally outside NET_GROUP_ORDER (so it never rides the mesh

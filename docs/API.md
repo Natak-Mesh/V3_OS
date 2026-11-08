@@ -345,6 +345,19 @@ curl -s -X POST http://localhost:8080/api/v1/messaging/messages \
   -H 'Content-Type: application/json' -d '{"text":"hello mesh"}'
 ```
 
+### `GET /name` / `PUT /name`
+This node's name: the WiFi/LoRa chat sender and the Reticulum (LXMF) announce
+display name. `GET` → `{"ok":true,"name":"Alpha","display_name":"Alpha"|null,
+"hostname":"0042-nucleus"}`. `PUT` body `{"name":"..."}` (`""` resets to the
+hostname) saves `messaging.display_name` to `config.yaml` and updates the running
+daemon (`"live":true`; `false` if the daemon is down — it picks the name up on
+start). `422` on an invalid name (control characters, >32 chars). Transmits
+nothing; peers learn the new LXMF name on the next announce.
+```bash
+curl -s -X PUT http://localhost:8080/api/v1/messaging/name \
+  -H 'Content-Type: application/json' -d '{"name":"Alpha"}'
+```
+
 ### `WS /ws`
 WebSocket for live messages. On connect it sends one
 `{"event":"history","messages":[...]}`, then a `{"event":"message",...}` for
@@ -366,7 +379,7 @@ learned later (mesh pull, operator **req path**, or a signed inbound message) an
 persisted.
 
 - `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>",
-  "announce_mode":"manual"}`. `address` is this node's lxmf.delivery destination
+  "name":"<node name>","announce_mode":"manual"}`. `address` is this node's lxmf.delivery destination
   hash — the thing to share.
 - `GET /rns/contacts` — known contacts:
   `{"ok":true,"contacts":[{"lxmf_hash":"...","pubkey":"...","name":"","
@@ -405,6 +418,8 @@ persisted.
   **one** path request for the contact over every RNS interface; does not retry.
   Returns `{"ok":true,"requested":true,"path":{...}}`. With announces off this is
   the only way a contact becomes reachable. `400` if the lane is down.
+- `GET /rns/latest` — newest message per peer, for contact-list previews:
+  `{"ok":true,"latest":{"<hash>":{"peer":...,"text":...,"ts":...,"direction":"in"|"out","state":...}}}`.
 - `GET /rns/messages?peer=<hash>&since=<ts>` — conversation history (omit `peer`
   for all peers merged).
 - `POST /rns/messages` — send a DM. Body `{"dest":"<lxmf hash>","text":"..."}`.

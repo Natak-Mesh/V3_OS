@@ -128,7 +128,7 @@ def load_config() -> dict:
         "dedupe_window_secs": m.dedupe_window_secs,
         "history_limit": m.history_limit,
         "node_id": cfg.node.id,
-        "sender": cfg.node.hostname,
+        "sender": cfg.messaging_name,
         "mesh_ttl": cfg.mesh.mesh_802_ttl,
         "rns_enabled": m.rns.enabled,
         "rns_announce_mode": m.rns.announce_mode,
@@ -174,6 +174,11 @@ class MessagingService:
         self._rns_lane = None
         self._rns_store = None
         self._rns_contacts = None
+        # Outbound delivery reports: lock serialises send+store against the
+        # LXMF callback thread; early_state parks a report that arrives before
+        # its message is stored (msg_id -> state).
+        self._rns_state_lock = threading.Lock()
+        self._rns_early_state: dict[str, str] = {}
         if self.rns_enabled:
             from .rns_store import ConversationStore
             from .rns_contacts import ContactStore
@@ -418,11 +423,17 @@ class MessagingService:
                 "count": len(self.store.history()),
                 "rns": self._rns_status(),
             }
+        if cmd == "set_name":
+            return self._set_name(req.get("name", ""))
         # ── Reticulum/LXMF direct-message commands ───────────────
         if cmd == "rns_contacts":
             return self._rns_contacts_list()
         if cmd == "rns_history":
             return self._rns_history(req.get("peer"), float(req.get("since", 0) or 0))
+        if cmd == "rns_latest":
+            if not (self.rns_enabled and self._rns_store):
+                return {"ok": True, "latest": {}}
+            return {"ok": True, "latest": self._rns_store.latest()}
         if cmd == "rns_send":
             return self._rns_send(req.get("dest", ""), req.get("text", ""))
         if cmd == "rns_card":
@@ -448,6 +459,23 @@ class MessagingService:
             return self._rns_heard_delete(req.get("dest", ""))
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
 
+    def _set_name(self, name: str) -> dict:
+        """Live-rename this node (chat sender + LXMF display name).
+
+        The API persists messaging.display_name first; this only makes the
+        running daemon use it without a restart. The new LXMF name goes out on
+        the next announce. Transmits nothing itself.
+        """
+        name = str(name or "").strip()
+        if not name:
+            return {"ok": False, "error": "empty name"}
+        self.sender = name
+        self.cfg["sender"] = name
+        if self._rns_lane is not None:
+            self._rns_lane.set_display_name(name)
+        log(f"renamed to sender={name!r}")
+        return {"ok": True, "name": name}
+
     # ── Reticulum/LXMF lane helpers ──────────────────────────────
     def _rns_status(self) -> dict:
         if not self.rns_enabled:
@@ -457,6 +485,7 @@ class MessagingService:
             "enabled": True,
             "started": bool(lane and lane.started),
             "address": lane.delivery_hash_hex if lane else None,
+            "name": self.sender,
             "announce_mode": self.cfg.get("rns_announce_mode", "manual"),
         }
 
@@ -607,12 +636,32 @@ class MessagingService:
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
             return {"ok": False, "error": "rns lane not available"}
         res = self._rns_lane.send(dest, text)
-        if res.get("ok"):
+        if not res.get("ok"):
+            return res
+        msg_id = res.get("msg_id")
+        # A delivery/failure report can arrive (on an LXMF thread) before the
+        # message is stored; _on_rns_state parks it and it is applied here. The
+        # lock is NOT held across send(): LXMF may block on its own lock there
+        # while its worker thread waits on ours.
+        with self._rns_state_lock:
+            state = self._rns_early_state.pop(msg_id, None) or res.get("state", "outbound")
             msg = self._rns_store.add(dest, text.strip(), "out",
-                                      state=res.get("state", "outbound"))
-            self._notify_rns(msg)
-            res["id"] = f"{msg['peer']}:{msg['ts']}"
+                                      state=state, msg_id=msg_id)
+        self._notify_rns(msg)
+        res["id"] = f"{msg['peer']}:{msg['ts']}"
         return res
+
+    def _on_rns_state(self, msg_id: str, state: str) -> None:
+        """LXMF outbound report: set the stored message's state, push to UI."""
+        if not self._rns_store:
+            return
+        with self._rns_state_lock:
+            msg = self._rns_store.set_state(msg_id, state)
+            if msg is None:
+                # Report beat the store write in _rns_send; applied there.
+                self._rns_early_state[msg_id] = state
+                return
+        self._notify_rns(msg)
 
     def _on_rns_message(self, peer_hex: str, text: str, ts: float,
                         pubkey_hex: str | None = None) -> None:
@@ -653,6 +702,7 @@ class MessagingService:
             propagation_node=self.cfg.get("rns_propagation_node", False),
             contacts=self._rns_contacts,
             on_message=self._on_rns_message,
+            on_state=self._on_rns_state,
         )
         while not self._stop.is_set():
             if self._rns_lane.start():

@@ -26,8 +26,14 @@ apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip git curl gpg \
     build-essential python3-dev libcodec2-dev \
     babeld smcroute hostapd wpasupplicant iw \
-    nftables network-manager ufw \
+    nftables network-manager systemd-resolved ufw \
     nginx avahi-daemon avahi-utils openssl
+# systemd-resolved carries systemd-networkd's DHCP DNS into /etc/resolv.conf, so
+# DNS survives `nucleusctl apply` handing eth0 from NetworkManager to networkd.
+# Reload dbus first: its policy references the systemd-resolve user the package
+# just created, and without the reload resolved cannot claim its bus name.
+systemctl reload dbus
+systemctl enable --now systemd-resolved
 
 echo "==> meshtasticd (native, from the Meshtastic apt repo)"
 # Native meshtasticd replaces the V2 Docker container. The repo ships the

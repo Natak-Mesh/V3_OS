@@ -51,7 +51,7 @@ reticulum:
 ```
 
 Then `sudo nucleusctl apply`. The same settings are editable from the web UI at
-**RETICULUM → INTERFACES → CONFIGURE RNODE** (enable/disable, frequency,
+**RETICULUM → NODE STATUS & INTERFACES → CONFIGURE RNODE** (enable/disable, frequency,
 bandwidth, spreading factor, coding rate, TX power); **Save** writes them to
 `config.yaml` and **Apply** restarts `rnsd`. The page reads its field limits and
 the valid bandwidth list from the config schema, so they always match
@@ -70,7 +70,7 @@ are a MediumFast-equivalent profile (250 kHz / SF9 / CR4:5, ≈3.5 kbps on air).
 Pick a frequency clear of the node's Meshtastic channel.
 
 Verify: `rnstatus` shows `RNodeInterface[RNode LoRa]` as `Up` with an on-air
-rate; fire an announce (Reticulum page → **Announce now**) and watch TX/RX
+rate; fire an announce (Reticulum page → **ANNOUNCE**) and watch TX/RX
 counters grow on both nodes.
 
 ## modem73 soundmodem (analog radio)
@@ -199,18 +199,26 @@ announces across the mesh (transport is enabled on every node).
 
 ## Reticulum page
 
-The web UI has a **RETICULUM** page (main menu), refreshed every 5 s, that is
-the single hub for the subsystem:
+The web UI's **RETICULUM** page (main menu, refreshed every 5 s) opens on your
+contacts, NomadNet-style:
 
-- **Status:** rnsd up/down, uptime and the total number of known paths.
-- **My identity:** this node's own messaging address ("share this") and the
-  announce mode, with an **Announce now** button.
-- **Interfaces:** each configured interface with its mode (full/internal/…),
-  up/down state, RX/TX totals and attached-client count. The internal shared-
-  instance interface is hidden (it is not a real transport). A **CONFIGURE
-  RNODE** sub-page edits the RNode LoRa radio settings (see above).
-- **Links:** `DIRECT MESSAGES` (the saved contacts / conversations) and
-  `ADD CONTACTS` (my card / mesh / link).
+- **me: <name> · rename** — this node's name, its lxmf.delivery address (the
+  thing to share) and the announce mode. Tap the row to rename the node (see
+  [Node name](#node-name)); the inline **ANNOUNCE** button emits one
+  `lxmf.delivery` announce.
+- **Contacts** — saved contacts only, most recent conversation first. Each row
+  shows `●` for an unread incoming message, the path state, and a preview of
+  the last message, plus an inline **REQ PATH** button. Tap a row to open the
+  conversation.
+- **ADD CONTACT** — add by address, or one-tap from Nucleus nodes on the WiFi
+  mesh.
+- **NETWORK (n heard)** — LXMF announces heard on-air. They are kept off the
+  landing page on purpose, so a busy or internet-connected network can't flood
+  the contact list.
+- **NODE STATUS & INTERFACES** — rnsd up/down, uptime, total paths, and each
+  interface with its mode, up/down state, RX/TX totals and client count (the
+  internal shared-instance interface is hidden). Links to **CONFIGURE RNODE**
+  and **CONFIGURE MODEM73**.
 
 The interface and path data read straight from the running `rnsd` over its local
 control socket — the shared instance exposed by `share_instance = Yes` — so
@@ -228,7 +236,7 @@ destination hash** — the standard Reticulum/LXMF address (32 hex chars) that
 every LXMF client (Sideband, MeshChat, NomadNet, other Nucleus nodes) shows and
 accepts. Add one by:
 
-- **By destination hash (the normal way):** on the **Add Contacts** page, paste
+- **By destination hash (the normal way):** on the **Add Contact** page, paste
   the peer's lxmf.delivery address and an optional nickname, then **Add contact**.
   Entirely out-of-band — the hash can be dictated, written down or read off
   another screen, so the peer need not be on the mesh or reachable at all. The
@@ -236,16 +244,16 @@ accepts. Add one by:
   until the key is learned, which happens when you press **req path** (a path
   response carries the key) or the peer messages you. This works for any LXMF
   client, Nucleus or not.
-- **Over the WiFi mesh (Nucleus-to-Nucleus convenience):** the Add Contacts page
+- **Over the WiFi mesh (Nucleus-to-Nucleus convenience):** the Add Contact page
   lists Nucleus nodes found via Babel routes (same discovery as Meshtastic
-  channel sharing) and offers a one-tap **Add** that pulls the peer's card over
+  channel sharing) and offers a one-tap **+ add** that pulls the peer's card over
   the local HTTP API and verifies its address↔key. Because that carries the key,
   a mesh-added contact is immediately messageable. This is an internal pull, not
   a shareable format.
+- **From the Network page:** tap a heard announce to add it (keyed, since the
+  announce carries the key), or **IGNORE** to drop it from the list.
 
-This node's own address to hand out — its lxmf.delivery destination hash — is in
-the **Share me** section of the Add Contacts page (Reticulum → Add Contacts).
-Direct Messages holds only the saved contacts and conversations.
+This node's own address to hand out is at the top of the Reticulum page.
 
 Contacts are saved to `/var/lib/nucleus/rns/contacts.json`. Once a contact's
 public key is known (pulled over the mesh, carried in a path response after
@@ -255,22 +263,41 @@ stays messageable across restarts. An inbound message from an unknown sender
 auto-adds that sender as a contact.
 
 **Naming.** Hashes aren't human-readable, so each contact carries a local
-**nickname** (set when adding by hash, or later via **Rename** on the **Modify
-contacts** page) and an **announced name** (the peer's LXMF display name, learned
-with the key). The UI shows the nickname if set, otherwise the announced name,
-otherwise a short hash. **Remove** (with a confirm prompt) forgets a contact
-locally. Both live on the **Modify contacts** page (reached from the button at
-the bottom of the Direct Messages page), not in the per-contact message log.
+**nickname** (set when adding by hash, or later with **Rename**) and an
+**announced name** (the peer's LXMF display name, learned with the key). The UI
+shows the nickname if set, otherwise the announced name, otherwise a short hash.
 
-Each contact row on the Direct Messages page shows that contact's current path
-state inline — `path <hops>h, <age>` when rnsd knows a route (age is how long ago
-the path was recorded), or `no path` otherwise — with an inline **req path**
-button that emits a single path request for just that contact. Reading the state
-emits nothing; only the button does. Tap the rest of the row to open the
-conversation.
+**Conversation and contact pages.** A conversation is the message log, then a
+contact bar (`<name> · <path> · contact »`, with inline **REQ PATH**) above the
+compose box. Opening a conversation marks it read (per browser). Tap the contact
+bar for the **Contact** page: full address, nickname, announced name, key and
+path state, how it was added, last heard, and the actions **Message**,
+**Rename**, **Request path** and **Remove** (asks for confirmation). Rename and
+remove only change the local contact list; nothing is transmitted.
+
+Path state (`<iface> <hops>h <age>`, or `no path`) is read from rnsd's local
+path table and emits nothing. Only **req path** transmits: one path request
+for that contact.
+
+### Node name
+
+One name is used both as this node's sender name in WiFi/LoRa chat and as the
+display name in its LXMF announces (what Sideband, MeshChat and NomadNet show).
+Set it by tapping **me:** on the Reticulum page, or in `config.yaml`:
+
+```yaml
+messaging:
+  display_name: Alpha Base   # max 32 chars; blank/absent = hostname
+```
+
+A UI rename is saved to `config.yaml` and applied to the running messaging
+daemon right away; no restart is needed. Peers only learn the new name from
+the next announce, so press **ANNOUNCE** afterwards. If you edit `config.yaml`
+by hand, run `sudo systemctl restart nucleus-messaging` to pick it up
+(`nucleusctl apply` does not restart the messaging daemon).
 
 Announcing is **manual by default** (`messaging.rns.announce_mode: manual`):
-nothing is broadcast until you press **Announce now** on the main Reticulum page
+nothing is broadcast until you press **ANNOUNCE** on the Reticulum page
 (a send also announces once so the recipient can find a path back). Set
 `announce_mode: auto` to re-announce the `lxmf.delivery` destination every
 `announce_interval_secs`. See [messaging-internals.md](messaging-internals.md).

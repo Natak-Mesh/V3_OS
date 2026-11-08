@@ -75,6 +75,7 @@ messaging:
   lora: true               # also send/receive over Meshtastic LoRa (standard text)
   dedupe_window_secs: 60   # window to match the LoRa + WiFi copies of one message
   history_limit: 500       # max messages retained / returned to the UI
+  # display_name: Alpha    # this node's name in chat + Reticulum announces (blank = hostname)
   rns:                     # Reticulum/LXMF direct-message lane (per-node DMs via rnsd)
     enabled: true          # on by default; loads RNS/LXMF (~27 MB)
     announce_mode: manual  # manual = never auto-announce (share contact cards instead); auto = re-announce on a timer

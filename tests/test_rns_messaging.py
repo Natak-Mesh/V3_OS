@@ -537,3 +537,258 @@ def test_forget_heard_removes_entry(monkeypatch):
     assert lane.forget_heard(USER_HASH) is True
     assert lane.heard_announces() == []
     assert lane.forget_heard(USER_HASH) is False   # already gone
+
+
+# Regression: a contact auto-added from an inbound message (before any announce)
+# had no name and showed a hash slice. A later path-response/announce for that
+# hash must backfill announced_name (and key), never the local nickname.
+def _contact_lane(contacts):
+    from nucleusd.messaging import rns_lane
+    return rns_lane.RnsLane(display_name="0042-nucleus", contacts=contacts)
+
+
+def test_heard_backfills_nameless_inbound_contact():
+    cs = ContactStore()
+    cs.add_inbound(USER_HASH, None)
+    assert cs.get(USER_HASH)["announced_name"] == ""
+    lane = _contact_lane(cs)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    c = cs.get(USER_HASH)
+    assert c["announced_name"] == "0054-nucleus"
+    assert c["pubkey"] == USER_PUB
+
+
+def test_heard_backfill_keeps_nickname():
+    cs = ContactStore()
+    cs.add_inbound(USER_HASH, None)
+    cs.set_name(USER_HASH, "Bob")
+    lane = _contact_lane(cs)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    assert cs.get(USER_HASH)["name"] == "Bob"
+
+
+def test_heard_does_not_create_contact():
+    cs = ContactStore()
+    lane = _contact_lane(cs)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    assert cs.get(USER_HASH) is None
+
+
+
+# Regression: the State column stuck at "outbound" forever. send() never
+# registered LXMF's per-message delivery/failed callbacks and the store kept no
+# LXMF message id, so the receiver's proof could never update the message.
+# These use the REAL installed LXMF (LXMessage + LXMRouter.fail_message) so the
+# callbacks fire with the library's actual hash/state values.
+def _real_lxmf_lane(monkeypatch, on_state):
+    import RNS
+    import LXMF
+    from nucleusd.messaging import rns_lane
+
+    # Destinations register with Transport on construction; no stack here.
+    monkeypatch.setattr(RNS.Transport, "register_destination", staticmethod(lambda d: None))
+    monkeypatch.setattr(RNS.Transport, "has_path", staticmethod(lambda h: True))
+    monkeypatch.setattr(rns_lane.reti, "path_table",
+                        lambda *a, **k: [_rnsd_entry(FIXTURE_LXMF)])
+    peer_id = RNS.Identity()
+    monkeypatch.setattr(RNS.Identity, "recall", staticmethod(lambda h: peer_id))
+
+    class _Router:
+        """Stands in for LXMRouter.handle_outbound: packs (sets lxm.hash)."""
+        sent: list = []
+
+        def handle_outbound(self, lxm):
+            lxm.state = LXMF.LXMessage.OUTBOUND
+            lxm.pack()
+            _Router.sent.append(lxm)
+
+    lane = rns_lane.RnsLane(display_name="0042-nucleus", on_state=on_state)
+    lane._router = _Router()
+    lane._delivery = RNS.Destination(RNS.Identity(), RNS.Destination.IN,
+                                     RNS.Destination.SINGLE, "lxmf", "delivery")
+    lane._started = True
+    return lane, _Router.sent
+
+
+def test_send_reports_delivered_when_receiver_proves(monkeypatch):
+    got = []
+    lane, sent = _real_lxmf_lane(monkeypatch, lambda mid, st: got.append((mid, st)))
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is True and res["state"] == "outbound"
+    lxm = sent[0]
+    assert res["msg_id"] == lxm.hash.hex()
+    # What LXMF runs when the receiver's proof arrives.
+    lxm._LXMessage__mark_delivered()
+    assert got == [(res["msg_id"], "delivered")]
+
+
+def test_send_reports_failed_when_lxmf_gives_up(monkeypatch):
+    from LXMF.LXMRouter import LXMRouter
+    got = []
+    lane, sent = _real_lxmf_lane(monkeypatch, lambda mid, st: got.append((mid, st)))
+    res = lane.send(FIXTURE_LXMF, "hi")
+    router = LXMRouter.__new__(LXMRouter)   # only fail_message is exercised
+    router.pending_outbound = [sent[0]]
+    router.fail_message(sent[0])
+    assert got == [(res["msg_id"], "failed")]
+
+
+def test_conversation_store_set_state_persists(tmp_path):
+    p = str(tmp_path / "dm.jsonl")
+    cs = ConversationStore(history_limit=10, persist_path=p)
+    cs.add("peerA", "hi", "out", ts=1.0, state="outbound", msg_id="ab12")
+    cs.add("peerA", "yo", "in", ts=2.0)
+    m = cs.set_state("ab12", "delivered")
+    assert m["state"] == "delivered" and m["text"] == "hi"
+    assert cs.set_state("nope", "delivered") is None
+    cs2 = ConversationStore(history_limit=10, persist_path=p)
+    assert cs2.history("peerA")[0]["state"] == "delivered"
+
+
+def _rns_service():
+    import socket
+    import threading
+    from nucleusd.messaging.service import MessagingService
+    svc = MessagingService.__new__(MessagingService)
+    svc.rns_enabled = True
+    svc._rns_store = ConversationStore(history_limit=10)
+    svc._rns_state_lock = threading.Lock()
+    svc._rns_early_state = {}
+    svc._notify_tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    svc._subs = {}
+    svc._subs_lock = threading.Lock()
+    return svc
+
+
+class _SendLane:
+    started = True
+
+    def __init__(self, svc=None, early=None):
+        self.svc, self.early = svc, early
+
+    def send(self, dest, text):
+        if self.early:   # proof lands on LXMF's thread before send() returns
+            self.svc._on_rns_state("ab12", self.early)
+        return {"ok": True, "state": "outbound", "msg_id": "ab12"}
+
+
+def test_service_state_report_updates_message_and_pushes():
+    import json
+    import socket
+    svc = _rns_service()
+    svc._rns_lane = _SendLane()
+    sub = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sub.bind(("127.0.0.1", 0))
+    sub.settimeout(2.0)
+    svc._subscribe(sub.getsockname())
+    svc._rns_send(FIXTURE_LXMF, "hi")
+    first = json.loads(sub.recvfrom(65535)[0])
+    assert first["message"]["state"] == "outbound"
+    svc._on_rns_state("ab12", "delivered")
+    upd = json.loads(sub.recvfrom(65535)[0])
+    assert upd["event"] == "rns_message"
+    assert upd["message"]["state"] == "delivered"
+    # Same peer/ts/direction/text as the original, so the UI replaces it in place.
+    for k in ("peer", "ts", "direction", "text"):
+        assert upd["message"][k] == first["message"][k]
+    sub.close()
+
+
+def test_service_state_report_before_store_is_not_lost():
+    svc = _rns_service()
+    svc._rns_lane = _SendLane(svc, early="delivered")
+    svc._rns_send(FIXTURE_LXMF, "hi")
+    assert svc._rns_store.history(FIXTURE_LXMF)[0]["state"] == "delivered"
+    assert svc._rns_early_state == {}
+
+
+# Regression: after the messaging service restarted, sends were refused with
+# "no path to contact" while rnsd still held a valid path (and the UI showed
+# it). send() checked this process's own RNS path table, which is in-memory
+# only and starts empty on every restart, instead of rnsd's table.
+def _rnsd_entry(dest_hex):
+    """An rnsd path-table entry as returned by nucleusd.reticulum.path_table(),
+    captured live from rnsd on 0042 (2026-11-08) for the 0047 contact."""
+    return {"hash": dest_hex, "via": "34dd0a1dd2aae0d5c90c9b6a6879b458", "hops": 1,
+            "interface": "AutoInterfacePeer[eth0/fe80::8aa2:9eff:fee1:c8f2]",
+            "timestamp": 1794161462.152714, "expires": 1794766255.2788665}
+
+
+class _SentinelHandoff(Exception):
+    """Raised by the fake RNS.Destination so a test can stop send() at the point
+    it would build the outbound message, i.e. after every path check passed."""
+
+
+def _path_check_lane(monkeypatch, rnsd_entries, rnsd_hands_over=True):
+    from nucleusd.messaging import rns_lane
+    lane = _started_lane(monkeypatch)
+    monkeypatch.setattr(rns_lane.reti, "path_table", lambda *a, **k: rnsd_entries)
+    monkeypatch.setattr(rns_lane, "LOCAL_PATH_WAIT_SECS", 0.2)
+
+    def _request(dest_hash):
+        _FakeTransport.requested.append(dest_hash.hex())
+        # rnsd answering a local client from its own table fills our copy.
+        if rnsd_hands_over:
+            _FakeTransport.paths.add(dest_hash.hex())
+
+    monkeypatch.setattr(_FakeTransport, "request_path", staticmethod(_request))
+
+    class _Dest:
+        OUT = SINGLE = None
+
+        def __init__(self, *a, **k):
+            raise _SentinelHandoff()
+
+    sys.modules["RNS"].Destination = _Dest
+    return lane
+
+
+def test_send_after_restart_uses_rnsd_path(monkeypatch):
+    """Our copy empty (restart), rnsd has the path: send proceeds, after one
+    local request that rnsd answers."""
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(FIXTURE_LXMF)])
+    with pytest.raises(_SentinelHandoff):
+        lane.send(FIXTURE_LXMF, "hi")
+    assert _FakeTransport.requested == [FIXTURE_LXMF]
+
+
+def test_send_refuses_when_rnsd_has_no_path(monkeypatch):
+    """rnsd has no path: refuse, and emit no path request at all."""
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(USER_HASH)])
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False and "no path" in res["error"]
+    assert _FakeTransport.requested == []
+
+
+def test_send_refuses_if_rnsd_does_not_hand_over_path(monkeypatch):
+    """rnsd listed a path but our copy never filled (e.g. it expired between
+    the check and the request): refuse instead of handing off, so LXMF never
+    requests the path itself."""
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(FIXTURE_LXMF)],
+                            rnsd_hands_over=False)
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False and "try again" in res["error"]
+
+
+def test_send_with_both_paths_known_makes_no_request(monkeypatch):
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(FIXTURE_LXMF)])
+    _FakeTransport.paths.add(FIXTURE_LXMF)
+    with pytest.raises(_SentinelHandoff):
+        lane.send(FIXTURE_LXMF, "hi")
+    assert _FakeTransport.requested == []
+
+
+def test_send_refuses_when_rnsd_unreachable(monkeypatch):
+    from nucleusd.messaging import rns_lane
+    lane = _path_check_lane(monkeypatch, [])
+
+    def _boom(*a, **k):
+        raise rns_lane.reti.ReticulumError("socket down")
+
+    monkeypatch.setattr(rns_lane.reti, "path_table", _boom)
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False and "rnsd unreachable" in res["error"]
+    assert _FakeTransport.requested == []

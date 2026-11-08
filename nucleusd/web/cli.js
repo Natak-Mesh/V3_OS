@@ -37,6 +37,8 @@
     // Navigate to another page, optionally passing params (read as
     // state.params in the target page's build()).
     go(pageKey, params = null) { return go(pageKey, true, params); },
+    // Pop to the previous page (same as the Back control).
+    back() { return back(); },
   };
   window.__shell = S;
 

@@ -56,6 +56,11 @@ LXMF_STORAGE = RNS_STATE_DIR / "lxmf"
 # evicted past this so a chatty network can't grow it without bound.
 HEARD_MAX = 64
 
+# How long send() waits for rnsd to copy a path it already holds into this
+# process's own (client-side) RNS path table. rnsd answers a local client's path
+# request from its table over the local socket only; measured live at ~0.3 s.
+LOCAL_PATH_WAIT_SECS = 3.0
+
 
 def log(msg: str) -> None:
     print(f"[messaging.rns] {msg}", flush=True)
@@ -116,7 +121,8 @@ class RnsLane:
                  announce_interval_secs: int = 1800,
                  propagation_node: bool = False,
                  contacts=None,
-                 on_message: Optional[Callable[..., None]] = None):
+                 on_message: Optional[Callable[..., None]] = None,
+                 on_state: Optional[Callable[[str, str], None]] = None):
         self.display_name = display_name
         self.node_id = node_id
         self.announce_mode = announce_mode
@@ -124,6 +130,9 @@ class RnsLane:
         self.propagation_node = propagation_node
         self.contacts = contacts
         self.on_message = on_message
+        # on_state(msg_id_hex, state) fires when LXMF reports an outbound
+        # message delivered (receiver's proof arrived) or failed.
+        self.on_state = on_state
 
         self._rns = None
         self._identity = None
@@ -229,6 +238,17 @@ class RnsLane:
     @property
     def started(self) -> bool:
         return self._started
+
+    def set_display_name(self, name: str) -> None:
+        """Change the LXMF display name carried in our announces and card.
+
+        LXMF builds announce app_data from ``delivery_destination.display_name``
+        at announce time, so updating it here takes effect on the next announce
+        with no re-registration. Emits nothing.
+        """
+        self.display_name = name
+        if self._delivery is not None:
+            self._delivery.display_name = name
 
     @property
     def delivery_hash_hex(self) -> Optional[str]:
@@ -408,15 +428,24 @@ class RnsLane:
         # client-side RNS.Transport table in this process collapses everything to
         # the local shared-instance socket.
         try:
-            table = reti.path_table()
+            entry = self._rnsd_path(dest_hash_hex)
         except reti.ReticulumError:
             return unknown
-        entry = next((e for e in table if e.get("hash") == dest_hash_hex), None)
         if entry is None:
             return unknown
         return {"known": True, "hops": entry.get("hops"),
                 "interface": entry.get("interface"),
                 "updated": entry.get("timestamp")}
+
+    @staticmethod
+    def _rnsd_path(dest_hash_hex: str) -> Optional[dict]:
+        """rnsd's path-table entry for a destination, or None. Emits nothing.
+
+        rnsd's table is the authoritative one: it holds every path the node has
+        learned and survives restarts. Raises ReticulumError if rnsd's control
+        socket is unreachable.
+        """
+        return next((e for e in reti.path_table() if e.get("hash") == dest_hash_hex), None)
 
     def _announce_loop(self) -> None:
         # Auto mode only. First announce shortly after start, then on the interval.
@@ -504,6 +533,11 @@ class RnsLane:
                     oldest = min(self._heard.values(),
                                  key=lambda e: e.get("last_heard", 0))
                     self._heard.pop(oldest["lxmf_hash"], None)
+        # Backfill a known contact's name/key from this announce/path-response
+        # (e.g. a contact auto-added from an inbound message before any name was
+        # known). set_key only fills empty fields and never touches the nickname.
+        if self.contacts is not None and pubkey and self.contacts.get(lxmf_hash):
+            self.contacts.set_key(lxmf_hash, pubkey, name)
 
     def heard_announces(self) -> list[dict]:
         """Heard lxmf.delivery announces, newest first. Reads only; emits nothing."""
@@ -547,12 +581,32 @@ class RnsLane:
             return {"ok": False, "error": "unknown contact; no key on file — import its card"}
 
         # LPI: sending must never emit radio traffic the operator did not ask for.
-        # A send neither announces us nor requests a path. If no path is known we
-        # refuse rather than let LXMF emit its own path requests on delivery
-        # attempts (LXMRouter does this when Transport.has_path is false). The
-        # operator requests a path explicitly first (request_path / the button).
-        if not RNS.Transport.has_path(dest_hash):
+        # A send neither announces us nor requests a path from the network. If
+        # rnsd has no path we refuse; the operator requests one explicitly first
+        # (request_path / the button).
+        #
+        # The check reads rnsd's table, the same one the path display shows.
+        # This process's own RNS path table is separate: it is in-memory only and
+        # starts empty on every restart, so checking it refused sends while rnsd
+        # still held a valid path.
+        try:
+            rnsd_has_path = self._rnsd_path(dest_hash_hex) is not None
+        except reti.ReticulumError as e:
+            return {"ok": False, "error": f"rnsd unreachable: {e}"}
+        if not rnsd_has_path:
             return {"ok": False, "error": "no path to contact — request a path first"}
+
+        # LXMF sends through this process's table. If our copy is missing (e.g.
+        # after a restart), ask rnsd for it: rnsd answers a local client from its
+        # own table over the local socket, so nothing goes on the radio. Never
+        # hand off without it, or LXMF would request the path itself.
+        if not RNS.Transport.has_path(dest_hash):
+            RNS.Transport.request_path(dest_hash)
+            deadline = time.time() + LOCAL_PATH_WAIT_SECS
+            while not RNS.Transport.has_path(dest_hash) and time.time() < deadline:
+                time.sleep(0.05)
+            if not RNS.Transport.has_path(dest_hash):
+                return {"ok": False, "error": "rnsd did not hand over its path — try again"}
 
         dest = RNS.Destination(
             recipient_identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
@@ -562,11 +616,38 @@ class RnsLane:
             dest, self._delivery, text,
             desired_method=LXMF.LXMessage.DIRECT,
         )
+        # The receiver's LXMF proves every message it accepts; LXMF then marks
+        # ours DELIVERED and calls the delivery callback. It calls the failed
+        # callback when delivery is given up, rejected or cancelled. Register
+        # both before handing off so no report can be missed.
+        lxm.register_delivery_callback(self._on_lxm_delivered)
+        lxm.register_failed_callback(self._on_lxm_failed)
         try:
             self._router.handle_outbound(lxm)
         except Exception as e:
             return {"ok": False, "error": f"send failed: {e}"}
-        return {"ok": True, "state": "outbound"}
+        # handle_outbound packs the message, which sets its LXMF hash (the ID
+        # the callbacks report back with).
+        msg_id = lxm.hash.hex() if getattr(lxm, "hash", None) else None
+        return {"ok": True, "state": "outbound", "msg_id": msg_id}
+
+    def _on_lxm_delivered(self, lxm) -> None:
+        import LXMF
+        # The same callback also fires for "sent to propagation node"; only a
+        # DELIVERED state means the recipient itself proved receipt.
+        state = "delivered" if lxm.state == LXMF.LXMessage.DELIVERED else "sent"
+        self._emit_state(lxm, state)
+
+    def _on_lxm_failed(self, lxm) -> None:
+        self._emit_state(lxm, "failed")
+
+    def _emit_state(self, lxm, state: str) -> None:
+        if not (self.on_state and getattr(lxm, "hash", None)):
+            return
+        try:
+            self.on_state(lxm.hash.hex(), state)
+        except Exception as e:
+            log(f"outbound state callback error: {e}")
 
 
 class _LxmfAnnounceHandler:

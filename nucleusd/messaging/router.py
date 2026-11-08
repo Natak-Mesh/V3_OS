@@ -61,6 +61,48 @@ def status() -> dict:
     return _rpc({"cmd": "status"})
 
 
+class NameBody(BaseModel):
+    name: str = ""             # "" resets to the hostname
+
+
+def _name_view(cfg) -> dict:
+    return {"ok": True, "name": cfg.messaging_name,
+            "display_name": cfg.messaging.display_name,
+            "hostname": cfg.node.hostname}
+
+
+@router.get("/name")
+def get_name() -> dict:
+    """This node's chat / LXMF display name (display_name, else hostname)."""
+    from .. import config as cfgio
+    return _name_view(cfgio.load())
+
+
+@router.put("/name")
+def put_name(body: NameBody) -> dict:
+    """Set this node's name: persist messaging.display_name, then live-update
+    the daemon (WiFi/LoRa sender + LXMF display name). Transmits nothing; the
+    new LXMF name goes out on the next announce. Blank resets to the hostname.
+    """
+    from .. import config as cfgio
+    cfg = cfgio.load()
+    raw = cfg.model_dump(mode="json", exclude_none=True)
+    raw.setdefault("messaging", {})["display_name"] = body.name
+    try:
+        new = type(cfg).model_validate(raw)
+    except Exception as e:  # pydantic ValidationError -> 422
+        raise HTTPException(status_code=422, detail=str(e))
+    cfgio.save(new)
+    out = _name_view(new)
+    # Best-effort live update; if the daemon is down it reads the saved name
+    # on its next start, so the save above is what counts.
+    try:
+        out["live"] = bool(_rpc({"cmd": "set_name", "name": new.messaging_name}).get("ok"))
+    except HTTPException:
+        out["live"] = False
+    return out
+
+
 @router.get("/messages")
 def messages(since: float = 0.0) -> dict:
     return _rpc({"cmd": "history", "since": since})
@@ -207,6 +249,12 @@ def rns_heard_delete(dest: str) -> dict:
     return _rpc({"cmd": "rns_heard_delete", "dest": dest})
 
 
+@router.get("/rns/latest")
+def rns_latest() -> dict:
+    """Newest message per peer: ``{"ok":true,"latest":{<hash>: msg}}``."""
+    return _rpc({"cmd": "rns_latest"})
+
+
 @router.get("/rns/messages")
 def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
     return _rpc({"cmd": "rns_history", "peer": peer, "since": since})
@@ -214,7 +262,9 @@ def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
 
 @router.post("/rns/messages")
 def rns_send(body: RnsSendBody) -> dict:
-    res = _rpc({"cmd": "rns_send", "dest": body.dest, "text": body.text})
+    # The daemon may wait up to rns_lane.LOCAL_PATH_WAIT_SECS (3 s) for rnsd to
+    # hand its path to the lane, so allow longer than the default timeout.
+    res = _rpc({"cmd": "rns_send", "dest": body.dest, "text": body.text}, timeout=6.0)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error", "send failed"))
     return res
