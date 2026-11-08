@@ -262,7 +262,9 @@ def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
 
 @router.post("/rns/messages")
 def rns_send(body: RnsSendBody) -> dict:
-    res = _rpc({"cmd": "rns_send", "dest": body.dest, "text": body.text})
+    # The daemon may wait up to rns_lane.LOCAL_PATH_WAIT_SECS (3 s) for rnsd to
+    # hand its path to the lane, so allow longer than the default timeout.
+    res = _rpc({"cmd": "rns_send", "dest": body.dest, "text": body.text}, timeout=6.0)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail=res.get("error", "send failed"))
     return res

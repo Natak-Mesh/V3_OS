@@ -591,6 +591,8 @@ def _real_lxmf_lane(monkeypatch, on_state):
     # Destinations register with Transport on construction; no stack here.
     monkeypatch.setattr(RNS.Transport, "register_destination", staticmethod(lambda d: None))
     monkeypatch.setattr(RNS.Transport, "has_path", staticmethod(lambda h: True))
+    monkeypatch.setattr(rns_lane.reti, "path_table",
+                        lambda *a, **k: [_rnsd_entry(FIXTURE_LXMF)])
     peer_id = RNS.Identity()
     monkeypatch.setattr(RNS.Identity, "recall", staticmethod(lambda h: peer_id))
 
@@ -701,3 +703,92 @@ def test_service_state_report_before_store_is_not_lost():
     svc._rns_send(FIXTURE_LXMF, "hi")
     assert svc._rns_store.history(FIXTURE_LXMF)[0]["state"] == "delivered"
     assert svc._rns_early_state == {}
+
+
+# Regression: after the messaging service restarted, sends were refused with
+# "no path to contact" while rnsd still held a valid path (and the UI showed
+# it). send() checked this process's own RNS path table, which is in-memory
+# only and starts empty on every restart, instead of rnsd's table.
+def _rnsd_entry(dest_hex):
+    """An rnsd path-table entry as returned by nucleusd.reticulum.path_table(),
+    captured live from rnsd on 0042 (2026-11-08) for the 0047 contact."""
+    return {"hash": dest_hex, "via": "34dd0a1dd2aae0d5c90c9b6a6879b458", "hops": 1,
+            "interface": "AutoInterfacePeer[eth0/fe80::8aa2:9eff:fee1:c8f2]",
+            "timestamp": 1794161462.152714, "expires": 1794766255.2788665}
+
+
+class _SentinelHandoff(Exception):
+    """Raised by the fake RNS.Destination so a test can stop send() at the point
+    it would build the outbound message, i.e. after every path check passed."""
+
+
+def _path_check_lane(monkeypatch, rnsd_entries, rnsd_hands_over=True):
+    from nucleusd.messaging import rns_lane
+    lane = _started_lane(monkeypatch)
+    monkeypatch.setattr(rns_lane.reti, "path_table", lambda *a, **k: rnsd_entries)
+    monkeypatch.setattr(rns_lane, "LOCAL_PATH_WAIT_SECS", 0.2)
+
+    def _request(dest_hash):
+        _FakeTransport.requested.append(dest_hash.hex())
+        # rnsd answering a local client from its own table fills our copy.
+        if rnsd_hands_over:
+            _FakeTransport.paths.add(dest_hash.hex())
+
+    monkeypatch.setattr(_FakeTransport, "request_path", staticmethod(_request))
+
+    class _Dest:
+        OUT = SINGLE = None
+
+        def __init__(self, *a, **k):
+            raise _SentinelHandoff()
+
+    sys.modules["RNS"].Destination = _Dest
+    return lane
+
+
+def test_send_after_restart_uses_rnsd_path(monkeypatch):
+    """Our copy empty (restart), rnsd has the path: send proceeds, after one
+    local request that rnsd answers."""
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(FIXTURE_LXMF)])
+    with pytest.raises(_SentinelHandoff):
+        lane.send(FIXTURE_LXMF, "hi")
+    assert _FakeTransport.requested == [FIXTURE_LXMF]
+
+
+def test_send_refuses_when_rnsd_has_no_path(monkeypatch):
+    """rnsd has no path: refuse, and emit no path request at all."""
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(USER_HASH)])
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False and "no path" in res["error"]
+    assert _FakeTransport.requested == []
+
+
+def test_send_refuses_if_rnsd_does_not_hand_over_path(monkeypatch):
+    """rnsd listed a path but our copy never filled (e.g. it expired between
+    the check and the request): refuse instead of handing off, so LXMF never
+    requests the path itself."""
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(FIXTURE_LXMF)],
+                            rnsd_hands_over=False)
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False and "try again" in res["error"]
+
+
+def test_send_with_both_paths_known_makes_no_request(monkeypatch):
+    lane = _path_check_lane(monkeypatch, [_rnsd_entry(FIXTURE_LXMF)])
+    _FakeTransport.paths.add(FIXTURE_LXMF)
+    with pytest.raises(_SentinelHandoff):
+        lane.send(FIXTURE_LXMF, "hi")
+    assert _FakeTransport.requested == []
+
+
+def test_send_refuses_when_rnsd_unreachable(monkeypatch):
+    from nucleusd.messaging import rns_lane
+    lane = _path_check_lane(monkeypatch, [])
+
+    def _boom(*a, **k):
+        raise rns_lane.reti.ReticulumError("socket down")
+
+    monkeypatch.setattr(rns_lane.reti, "path_table", _boom)
+    res = lane.send(FIXTURE_LXMF, "hi")
+    assert res["ok"] is False and "rnsd unreachable" in res["error"]
+    assert _FakeTransport.requested == []

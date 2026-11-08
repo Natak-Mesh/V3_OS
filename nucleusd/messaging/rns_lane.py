@@ -56,6 +56,11 @@ LXMF_STORAGE = RNS_STATE_DIR / "lxmf"
 # evicted past this so a chatty network can't grow it without bound.
 HEARD_MAX = 64
 
+# How long send() waits for rnsd to copy a path it already holds into this
+# process's own (client-side) RNS path table. rnsd answers a local client's path
+# request from its table over the local socket only; measured live at ~0.3 s.
+LOCAL_PATH_WAIT_SECS = 3.0
+
 
 def log(msg: str) -> None:
     print(f"[messaging.rns] {msg}", flush=True)
@@ -423,15 +428,24 @@ class RnsLane:
         # client-side RNS.Transport table in this process collapses everything to
         # the local shared-instance socket.
         try:
-            table = reti.path_table()
+            entry = self._rnsd_path(dest_hash_hex)
         except reti.ReticulumError:
             return unknown
-        entry = next((e for e in table if e.get("hash") == dest_hash_hex), None)
         if entry is None:
             return unknown
         return {"known": True, "hops": entry.get("hops"),
                 "interface": entry.get("interface"),
                 "updated": entry.get("timestamp")}
+
+    @staticmethod
+    def _rnsd_path(dest_hash_hex: str) -> Optional[dict]:
+        """rnsd's path-table entry for a destination, or None. Emits nothing.
+
+        rnsd's table is the authoritative one: it holds every path the node has
+        learned and survives restarts. Raises ReticulumError if rnsd's control
+        socket is unreachable.
+        """
+        return next((e for e in reti.path_table() if e.get("hash") == dest_hash_hex), None)
 
     def _announce_loop(self) -> None:
         # Auto mode only. First announce shortly after start, then on the interval.
@@ -567,12 +581,32 @@ class RnsLane:
             return {"ok": False, "error": "unknown contact; no key on file — import its card"}
 
         # LPI: sending must never emit radio traffic the operator did not ask for.
-        # A send neither announces us nor requests a path. If no path is known we
-        # refuse rather than let LXMF emit its own path requests on delivery
-        # attempts (LXMRouter does this when Transport.has_path is false). The
-        # operator requests a path explicitly first (request_path / the button).
-        if not RNS.Transport.has_path(dest_hash):
+        # A send neither announces us nor requests a path from the network. If
+        # rnsd has no path we refuse; the operator requests one explicitly first
+        # (request_path / the button).
+        #
+        # The check reads rnsd's table, the same one the path display shows.
+        # This process's own RNS path table is separate: it is in-memory only and
+        # starts empty on every restart, so checking it refused sends while rnsd
+        # still held a valid path.
+        try:
+            rnsd_has_path = self._rnsd_path(dest_hash_hex) is not None
+        except reti.ReticulumError as e:
+            return {"ok": False, "error": f"rnsd unreachable: {e}"}
+        if not rnsd_has_path:
             return {"ok": False, "error": "no path to contact — request a path first"}
+
+        # LXMF sends through this process's table. If our copy is missing (e.g.
+        # after a restart), ask rnsd for it: rnsd answers a local client from its
+        # own table over the local socket, so nothing goes on the radio. Never
+        # hand off without it, or LXMF would request the path itself.
+        if not RNS.Transport.has_path(dest_hash):
+            RNS.Transport.request_path(dest_hash)
+            deadline = time.time() + LOCAL_PATH_WAIT_SECS
+            while not RNS.Transport.has_path(dest_hash) and time.time() < deadline:
+                time.sleep(0.05)
+            if not RNS.Transport.has_path(dest_hash):
+                return {"ok": False, "error": "rnsd did not hand over its path — try again"}
 
         dest = RNS.Destination(
             recipient_identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
