@@ -814,7 +814,7 @@ const PAGES = {
 
   // Reticulum landing page (NomadNet-style): who I am (name + address, with
   // rename + announce), then my SAVED contacts — newest conversation first, each
-  // with a new-message marker, last-message preview, path state and an inline
+  // with a new-message marker, path state and an inline
   // REQ PATH. Heard announces are NOT listed here (an internet-connected rnsd
   // could flood them); they live on the Network page. rnsd status + interfaces
   // are on the Node page.
@@ -875,15 +875,9 @@ const PAGES = {
         const l = latest[c.lxmf_hash];
         const unread = l && l.direction === "in" && l.ts > (read[c.lxmf_hash] || 0);
         const pstr = c.pubkey ? rnsPathStr(paths[i], c.lxmf_hash) : "no key yet";
-        let preview = "";
-        if (l) {
-          const t = String(l.text || "");
-          preview = `  ·  ${l.direction === "out" ? "me: " : ""}` +
-            (t.length > 32 ? t.slice(0, 32) + "…" : t) + ` (${ago(l.ts)})`;
-        }
         items.push({
           type: "nav",
-          label: `${unread ? "● " : ""}${who}  ·  ${pstr}${preview}`,
+          label: `${unread ? "● " : ""}${who}  ·  ${pstr}`,
           to: "rns_chat",
           onEnter: (S) => S.go("rns_chat", { hash: c.lxmf_hash, host: who }),
           action: { label: "req path", onRun: (S) => rnsRequestPath(S, c.lxmf_hash) },
