@@ -537,3 +537,42 @@ def test_forget_heard_removes_entry(monkeypatch):
     assert lane.forget_heard(USER_HASH) is True
     assert lane.heard_announces() == []
     assert lane.forget_heard(USER_HASH) is False   # already gone
+
+
+# Regression: a contact auto-added from an inbound message (before any announce)
+# had no name and showed a hash slice. A later path-response/announce for that
+# hash must backfill announced_name (and key), never the local nickname.
+def _contact_lane(contacts):
+    from nucleusd.messaging import rns_lane
+    return rns_lane.RnsLane(display_name="0042-nucleus", contacts=contacts)
+
+
+def test_heard_backfills_nameless_inbound_contact():
+    cs = ContactStore()
+    cs.add_inbound(USER_HASH, None)
+    assert cs.get(USER_HASH)["announced_name"] == ""
+    lane = _contact_lane(cs)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    c = cs.get(USER_HASH)
+    assert c["announced_name"] == "0054-nucleus"
+    assert c["pubkey"] == USER_PUB
+
+
+def test_heard_backfill_keeps_nickname():
+    cs = ContactStore()
+    cs.add_inbound(USER_HASH, None)
+    cs.set_name(USER_HASH, "Bob")
+    lane = _contact_lane(cs)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    assert cs.get(USER_HASH)["name"] == "Bob"
+
+
+def test_heard_does_not_create_contact():
+    cs = ContactStore()
+    lane = _contact_lane(cs)
+    lane._record_heard(bytes.fromhex(USER_HASH), _FakeIdentity(USER_PUB),
+                       HEARD_APP_DATA)
+    assert cs.get(USER_HASH) is None
+

@@ -515,6 +515,11 @@ class RnsLane:
                     oldest = min(self._heard.values(),
                                  key=lambda e: e.get("last_heard", 0))
                     self._heard.pop(oldest["lxmf_hash"], None)
+        # Backfill a known contact's name/key from this announce/path-response
+        # (e.g. a contact auto-added from an inbound message before any name was
+        # known). set_key only fills empty fields and never touches the nickname.
+        if self.contacts is not None and pubkey and self.contacts.get(lxmf_hash):
+            self.contacts.set_key(lxmf_hash, pubkey, name)
 
     def heard_announces(self) -> list[dict]:
         """Heard lxmf.delivery announces, newest first. Reads only; emits nothing."""
