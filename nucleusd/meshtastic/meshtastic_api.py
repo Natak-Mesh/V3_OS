@@ -27,6 +27,7 @@ import time
 from contextlib import contextmanager
 
 from . import lora_freq
+from . import meshchat
 
 MESH_CONF_PATH = os.environ.get("NUCLEUS_CONFIG", "/etc/nucleus/config.yaml")
 
@@ -879,6 +880,181 @@ class RadioBusy(Exception):
 
 class RadioNotReady(Exception):
     """404 — no cached config / channel URL yet."""
+
+
+# ── Meshtastic client (chats / nodes) ───────────────────────────
+# Reads the bridge's /run chat store + client node file; every radio action is
+# relayed to the bridge's client control socket (it owns the radio).
+CLIENT_CONTROL_ADDR = ("127.0.0.1", 5564)   # must match cot_bridge.py
+CLIENT_CONTROL_TIMEOUT = 5
+NODE_ACTIONS = ('traceroute', 'request_position', 'request_telemetry')
+ONLINE_SECS = 7200   # "online" in the status strip = heard in the last 2 h
+_prefs = None
+
+
+def _client_prefs():
+    global _prefs
+    if _prefs is None:
+        _prefs = meshchat.Prefs(meshchat.PREFS_PATH)
+    return _prefs
+
+
+def _client_rpc(req):
+    """One JSON request to the bridge's client control socket."""
+    if not _service_is_active():
+        raise RadioNotReady('cot-bridge is not running')
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(CLIENT_CONTROL_TIMEOUT)
+        sock.sendto(json.dumps(req).encode('utf-8'), CLIENT_CONTROL_ADDR)
+        try:
+            data, _ = sock.recvfrom(2048)
+        except socket.timeout:
+            raise RadioNotReady('cot-bridge did not respond')
+    finally:
+        sock.close()
+    reply = json.loads(data.decode('utf-8'))
+    if not reply.get('ok'):
+        raise RadioBadRequest(reply.get('error') or 'request failed')
+    return reply
+
+
+def _client_nodes_file():
+    try:
+        with open(meshchat.CLIENT_NODES_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _read_store(fn):
+    """Run fn(store) on a read-only chat store; None if it doesn't exist yet."""
+    try:
+        store = meshchat.ChatStore(meshchat.CHAT_DB_PATH, readonly=True)
+    except Exception:
+        return None
+    try:
+        return fn(store)
+    finally:
+        store.close()
+
+
+def _check_node_id(nid):
+    try:
+        meshchat.parse_node_id(nid)
+    except ValueError as e:
+        raise RadioBadRequest(str(e))
+
+
+def client_overview():
+    """Status strip + chat list (channels first, then DMs) with unread counts."""
+    nf = _client_nodes_file()
+    prefs = _client_prefs().data
+    ignored = [meshchat.parse_node_id(n) for n in prefs['ignored']]
+    nodes = nf.get('nodes', [])
+    names = {n['num']: n['long_name'] or n['short_name'] for n in nodes}
+    me = nf.get('me') or {}
+    now = time.time()
+    status = {
+        'bridge_running': _service_is_active(),
+        'updated': nf.get('timestamp'),
+        'my_id': me.get('id'),
+        'my_name': me.get('long_name'),
+        'tx_enabled': nf.get('tx_enabled', True),
+        'online': sum(1 for n in nodes if now - (n.get('last_heard') or 0) < ONLINE_SECS),
+        'channel_util': me.get('channel_util'),
+        'air_util_tx': me.get('air_util_tx'),
+    }
+
+    def build(store):
+        last = {c['chat']: c for c in store.chats()}
+        unread = {k: store.unread(k, prefs['read'].get(k, 0), ignored) for k in last}
+        return last, unread
+
+    last, unread = _read_store(build) or ({}, {})
+    ch_names = {f"ch{c['index']}": c['name'] for c in nf.get('channels', [])}
+    keys = list(ch_names) or ['ch0']
+    keys += sorted((k for k in last if not k.startswith('ch') and k not in prefs['ignored']),
+                   key=lambda k: -last[k]['last_ts'])
+    chats = []
+    for k in keys:
+        if k.startswith('ch'):
+            title = ch_names.get(k) or ('Primary' if k == 'ch0' else k)
+        else:
+            title = names.get(meshchat.parse_node_id(k)) or k
+        c = last.get(k, {})
+        chats.append({'chat': k, 'title': title, 'last_ts': c.get('last_ts'),
+                      'last_text': c.get('last_text', ''), 'unread': unread.get(k, 0)})
+    return {'status': status, 'chats': chats}
+
+
+def client_messages(chat):
+    """Messages of one chat (oldest first) with sender names; marks it read."""
+    try:
+        meshchat.chat_dest(chat)
+    except ValueError as e:
+        raise RadioBadRequest(str(e))
+    nf = _client_nodes_file()
+    names = {n['num']: n['short_name'] or n['id'] for n in nf.get('nodes', [])}
+    prefs = _client_prefs()
+    ignored = {meshchat.parse_node_id(n) for n in prefs.data['ignored']}
+    out = []
+    for m in _read_store(lambda s: s.messages(chat)) or []:
+        if not m['mine'] and m['sender'] in ignored:
+            continue
+        m['from'] = 'me' if m['mine'] else names.get(m['sender'], meshchat.node_id(m['sender']))
+        for r in m['reactions']:
+            r['from'] = 'me' if r['sender'] == nf.get('my_num') else names.get(r['sender'], '?')
+        out.append(m)
+    if out:
+        prefs.mark_read(chat, out[-1]['ts'])
+    return {'chat': chat, 'messages': out}
+
+
+def client_send(chat, text, reply_id=None):
+    return _client_rpc({'cmd': 'send', 'chat': chat, 'text': text,
+                        'reply_id': reply_id})
+
+
+def client_react(chat, reply_id, emoji):
+    return _client_rpc({'cmd': 'react', 'chat': chat, 'reply_id': reply_id,
+                        'emoji': emoji})
+
+
+def client_nodes():
+    """Every known node + favorite/ignored flags + distance/bearing from me."""
+    nf = _client_nodes_file()
+    prefs = _client_prefs().data
+    me = nf.get('me') or {}
+    mypos = me.get('position')
+    nodes = []
+    for n in nf.get('nodes', []):
+        n = dict(n)
+        n['favorite'] = n['id'] in prefs['favorites']
+        n['ignored'] = n['id'] in prefs['ignored']
+        n['distance_m'] = n['bearing'] = None
+        if mypos and n.get('position'):
+            d, b = meshchat.distance_bearing(mypos['lat'], mypos['lon'],
+                                             n['position']['lat'], n['position']['lon'])
+            n['distance_m'], n['bearing'] = round(d), round(b)
+        n['traceroute'] = (nf.get('traceroutes') or {}).get(n['id'])
+        nodes.append(n)
+    return {'me': me or None, 'nodes': nodes, 'updated': nf.get('timestamp'),
+            'bridge_running': _service_is_active()}
+
+
+def client_node_action(nid, action):
+    if action not in NODE_ACTIONS:
+        raise RadioBadRequest(f'unknown action: {action}')
+    _check_node_id(nid)
+    return _client_rpc({'cmd': action, 'node': nid})
+
+
+def client_node_flag(nid, kind, on):
+    """kind: 'favorites' | 'ignored'. Stored in the persistent prefs file."""
+    _check_node_id(nid)
+    _client_prefs().set_flag(kind, nid, bool(on))
+    return {'success': True}
 
 
 def freq_describe(region, preset, channel_name='', slot=0):

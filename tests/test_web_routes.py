@@ -254,3 +254,35 @@ def test_mesh_connections_warns_when_a_radio_is_off():
     rf_css = cli_css[cli_css.index(".content .rf-alert"):]
     rf_css = rf_css[:rf_css.index("}")]
     assert "#" not in rf_css, "rf-alert must use theme variables, not literal colours"
+
+
+def test_menus_show_new_message_dots():
+    """Main menu MESHTASTIC/RETICULUM and the Meshtastic CHATS entry carry a
+    `● ` marker when there are unread messages, live (dynamic refresh). The
+    helpers must swallow failures so the menu still renders. No Node here, so
+    pin the wiring in the static app.js."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+
+    mc_fn = app_js[app_js.index("async function mcHasUnread()"):
+                   app_js.index("async function rnsHasUnread()")]
+    assert "jget(MC)" in mc_fn and "c.unread > 0" in mc_fn
+    assert "catch (e) { return false; }" in mc_fn, "mcHasUnread can throw"
+    rns_fn = app_js[app_js.index("async function rnsHasUnread()"):]
+    rns_fn = rns_fn[:rns_fn.index("\n}\n")]
+    assert '"/api/v1/messaging/rns/latest"' in rns_fn and "rnsReadMap()" in rns_fn
+    assert 'l.direction === "in" && l.ts > (read[hash] || 0)' in rns_fn, \
+        "unread rule diverged from the contacts page"
+    assert "catch (e) { return false; }" in rns_fn, "rnsHasUnread can throw"
+
+    home = app_js[app_js.index("  home: {"):app_js.index("  monitor: {")]
+    assert "dynamic: 5000" in home, "main menu no longer refreshes live"
+    assert "mcHasUnread(), rnsHasUnread()" in home
+    assert '`${mcNew ? "● " : ""}MESHTASTIC`' in home
+    assert '`${rnsNew ? "● " : ""}RETICULUM`' in home
+
+    mt = app_js[app_js.index("  meshtastic: {"):app_js.index("  mc_chats: {")]
+    assert "dynamic: 5000" in mt, "Meshtastic menu no longer refreshes live"
+    assert "mcHasUnread()" in mt
+    assert '`${mcNew ? "● " : ""}CHATS`' in mt
+

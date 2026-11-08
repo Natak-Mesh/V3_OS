@@ -118,6 +118,7 @@ MESHTASTICD_PORT = 4403
 # (meshtastic.tx_min_interval_secs) each main-loop pass — see _apply_tx_min_interval().
 # The default lives solely in the schema so it can't drift.
 from nucleusd.schema import MeshtasticConfig, VoiceConfig  # noqa: E402
+from nucleusd.meshtastic import meshchat  # noqa: E402
 TX_MIN_INTERVAL = MeshtasticConfig.model_fields["tx_min_interval_secs"].default
 
 # Receive-only gate. True = radio may TX; False = RX-only (never transmit). The
@@ -389,7 +390,9 @@ def _text_relay_loop(sock):
         if not text:
             continue
         try:
-            iface.sendText(text, wantAck=False)
+            sent = iface.sendText(text, wantAck=False)
+            # Show messaging's LoRa sends in the client's primary channel too.
+            _chat_store_mine("ch0", text, getattr(sent, "id", None))
             stats["text_tx"] += 1
             logger.info(f"TEXT TX → LoRa | {len(text)} chars")
         except Exception as e:
@@ -789,6 +792,16 @@ def onReceive(packet, interface):
     sender = packet.get("from", "?")
     from_id = packet.get("fromId", "?")
 
+    # Routing ACK/NAK → delivery state of a client DM. Checked before the
+    # self-skip: a NAK (e.g. MAX_RETRANSMIT) comes from our own radio.
+    if _chat_store is not None and (packet.get("decoded") or {}).get("portnum") == "ROUTING_APP":
+        ack = meshchat.dm_ack(packet, my_node_num)
+        if ack:
+            try:
+                _chat_store.set_state(*ack)
+            except Exception as e:
+                logger.warning(f"Chat store ACK error: {e}")
+
     # Skip self-originated packets
     if sender == my_node_num:
         return
@@ -831,9 +844,16 @@ def onReceive(packet, interface):
                 logger.error(f"Voice RX forward error: {e}")
         return
 
-    # LoRa standard text message → forward to the messaging daemon. Covers
-    # messages from other Nucleus nodes AND from plain Meshtastic radios.
-    if text_fwd_sock is not None and portnum in ("TEXT_MESSAGE_APP", TEXT_MESSAGE_PORTNUM, str(TEXT_MESSAGE_PORTNUM)):
+    # LoRa standard text message → Meshtastic client chat store (every channel,
+    # DMs, reactions); only plain primary-channel broadcasts are also forwarded
+    # to the messaging daemon. Covers other Nucleus nodes AND plain radios.
+    if portnum in ("TEXT_MESSAGE_APP", TEXT_MESSAGE_PORTNUM, str(TEXT_MESSAGE_PORTNUM)):
+        rec = meshchat.parse_rx_text(packet, my_node_num)
+        if rec is None:
+            return
+        _chat_store_rx(rec)
+        if text_fwd_sock is None or not meshchat.forward_to_messaging(rec):
+            return
         payload = decoded.get("payload")
         if payload:
             # Resolve a human sender name from the node DB (falls back to id).
@@ -1205,6 +1225,228 @@ def _heartbeat_control_loop(sock):
     logger.info("Heartbeat control exiting")
 
 
+# ═══════════════════════════════════════════════════════════════
+#  MESHTASTIC CLIENT: chat store + node file + control socket
+#  The bridge is the only radio client (a 2nd TCP client knocks it off
+#  meshtasticd), so the web Meshtastic client works entirely through here.
+# ═══════════════════════════════════════════════════════════════
+
+CLIENT_CONTROL_LISTEN = ("127.0.0.1", 5564)
+
+_chat_store = None    # meshchat.ChatStore (None = /run dir unavailable)
+_traceroutes = {}     # dest node id -> {"ts", "route"|"error"|"pending"}
+
+
+def _chat_store_rx(rec):
+    """Store a parsed RX text (message or reaction)."""
+    if _chat_store is None:
+        return
+    try:
+        if rec["emoji"]:
+            if rec["reply_id"]:
+                _chat_store.react(rec["reply_id"], rec["sender"], rec["text"], rec["ts"])
+        else:
+            _chat_store.add(rec["chat"], rec["sender"], rec["text"], rec["ts"],
+                            rec["pkt_id"], reply_id=rec["reply_id"])
+    except Exception as e:
+        logger.warning(f"Chat store RX error: {e}")
+
+
+def _chat_store_mine(chat, text, pkt_id, reply_id=None, state=None):
+    """Store a message this node sent."""
+    if _chat_store is None:
+        return
+    try:
+        _chat_store.add(chat, my_node_num or 0, text, time.time(), pkt_id,
+                        mine=True, reply_id=reply_id, state=state)
+    except Exception as e:
+        logger.warning(f"Chat store TX error: {e}")
+
+
+def _client_send_packet(data, dest, portnum, channel=0, reply_id=None,
+                        emoji=False, want_ack=False, want_response=False,
+                        on_response=None):
+    """Build + send one MeshPacket. sendData() has no emoji field, so the
+    packet is built here the same way sendData() builds it."""
+    from meshtastic.protobuf import mesh_pb2
+    if getattr(data, "SerializeToString", None):
+        data = data.SerializeToString()
+    pkt = mesh_pb2.MeshPacket()
+    pkt.channel = channel
+    pkt.decoded.payload = data
+    pkt.decoded.portnum = portnum
+    pkt.decoded.want_response = want_response
+    if reply_id:
+        pkt.decoded.reply_id = reply_id
+    if emoji:
+        pkt.decoded.emoji = 1
+    pkt.id = iface._generatePacketId()
+    if on_response is not None:
+        iface._addResponseHandler(pkt.id, on_response)
+    iface._sendPacket(pkt, dest, wantAck=want_ack)
+    return pkt.id
+
+
+def _client_send(req):
+    from meshtastic.protobuf import portnums_pb2
+    dest, channel = meshchat.chat_dest(req.get("chat"))
+    text = str(req.get("text") or "").strip()
+    data = text.encode("utf-8")
+    if not data or len(data) > TEXT_MAX_BYTES:
+        return {"ok": False, "error": f"text must be 1-{TEXT_MAX_BYTES} bytes"}
+    reply_id = int(req.get("reply_id") or 0) or None
+    is_dm = dest != meshchat.BROADCAST_NUM
+    # DM delivery state is updated from ROUTING_APP packets in onReceive().
+    pkt_id = _client_send_packet(
+        data, dest, portnums_pb2.PortNum.TEXT_MESSAGE_APP, channel,
+        reply_id=reply_id, want_ack=is_dm)
+    _chat_store_mine(req["chat"], text, pkt_id, reply_id, "sending" if is_dm else None)
+    stats["text_tx"] += 1
+    return {"ok": True, "id": pkt_id}
+
+
+def _client_react(req):
+    from meshtastic.protobuf import portnums_pb2
+    dest, channel = meshchat.chat_dest(req.get("chat"))
+    reply_id = int(req.get("reply_id") or 0)
+    emoji = str(req.get("emoji") or "")[:8]
+    if not reply_id or not emoji:
+        return {"ok": False, "error": "reply_id and emoji required"}
+    _client_send_packet(emoji.encode("utf-8"), dest,
+                        portnums_pb2.PortNum.TEXT_MESSAGE_APP, channel,
+                        reply_id=reply_id, emoji=True)
+    if _chat_store is not None:
+        _chat_store.react(reply_id, my_node_num or 0, emoji, time.time())
+    return {"ok": True}
+
+
+def _client_traceroute(nid, dest):
+    from meshtastic.protobuf import mesh_pb2, portnums_pb2
+
+    def on_route(p):
+        d = p.get("decoded") or {}
+        if d.get("portnum") == "TRACEROUTE_APP":
+            res = {"route": meshchat.parse_traceroute(d, my_node_num or 0, dest)}
+        else:
+            res = {"error": (d.get("routing") or {}).get("errorReason", "failed")}
+        _traceroutes[nid] = dict(res, ts=int(time.time()))
+        _dump_client_nodes()
+
+    _traceroutes[nid] = {"ts": int(time.time()), "pending": True}
+    _client_send_packet(mesh_pb2.RouteDiscovery(), dest,
+                        portnums_pb2.PortNum.TRACEROUTE_APP,
+                        want_response=True, on_response=on_route)
+    return {"ok": True}
+
+
+def _client_request(cmd, dest):
+    """Ask a node for its position or device telemetry (reply lands in NodeDB)."""
+    from meshtastic.protobuf import mesh_pb2, portnums_pb2, telemetry_pb2
+    if cmd == "request_position":
+        _client_send_packet(mesh_pb2.Position(), dest,
+                            portnums_pb2.PortNum.POSITION_APP, want_response=True)
+    else:
+        t = telemetry_pb2.Telemetry()
+        t.device_metrics.CopyFrom(telemetry_pb2.DeviceMetrics())
+        _client_send_packet(t, dest, portnums_pb2.PortNum.TELEMETRY_APP,
+                            want_response=True)
+    return {"ok": True}
+
+
+def _client_handle(req):
+    """Execute one client control request; returns the JSON reply dict."""
+    cmd = req.get("cmd")
+    if cmd not in ("send", "react", "traceroute", "request_position",
+                   "request_telemetry"):
+        return {"ok": False, "error": "unknown command"}
+    if iface is None:
+        return {"ok": False, "error": "radio interface not connected"}
+    if not tx_allowed():
+        return {"ok": False, "error": "radio is receive-only"}
+    try:
+        if cmd == "send":
+            return _client_send(req)
+        if cmd == "react":
+            return _client_react(req)
+        nid = str(req.get("node") or "")
+        dest = meshchat.parse_node_id(nid)
+        if cmd == "traceroute":
+            return _client_traceroute(nid, dest)
+        return _client_request(cmd, dest)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.warning(f"Client {cmd} TX error, flagging radio disconnect: {e}")
+        _radio_disconnected.set()
+        return {"ok": False, "error": str(e)}
+
+
+def _dump_client_nodes():
+    """Write the client node file: me, channels, every known node, traceroutes.
+
+    Unlike _dump_nodes() (15-min heard list for the monitor page) this keeps
+    every node in the radio's NodeDB, like the Meshtastic app.
+    """
+    if iface is None or getattr(iface, "nodes", None) is None:
+        return
+    try:
+        seen = dict(_node_last_seen)
+        by_num = {n["num"]: n for n in dict(iface.nodes).values()
+                  if n.get("num") is not None}
+        me, nodes = None, []
+        for num in set(by_num) | set(seen):
+            node = by_num.get(num, {})
+            user = dict(node.get("user", {}))
+            names = _node_names.get(num) or {}
+            if names.get("short_name"):
+                user["shortName"] = names["short_name"]
+            if names.get("long_name"):
+                user["longName"] = names["long_name"]
+            user.setdefault("shortName", meshchat.node_id(num)[-4:])
+            user.setdefault("longName", f"Meshtastic {meshchat.node_id(num)[-4:]}")
+            heard = max(node.get("lastHeard") or 0, seen.get(num, 0))
+            entry = meshchat.node_entry(num, node, user, heard)
+            if num == my_node_num:
+                me = entry
+            else:
+                nodes.append(entry)
+        channels = []
+        local = getattr(iface, "localNode", None)
+        for ch in (getattr(local, "channels", None) or []):
+            if ch.role:  # 0 = DISABLED
+                channels.append({"index": ch.index, "name": ch.settings.name})
+        dump = {"timestamp": int(time.time()), "my_num": my_node_num, "me": me,
+                "channels": channels, "nodes": nodes,
+                "traceroutes": dict(_traceroutes), "tx_enabled": tx_allowed()}
+        tmp = meshchat.CLIENT_NODES_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(dump, f)
+        os.replace(tmp, meshchat.CLIENT_NODES_PATH)
+    except Exception as e:
+        logger.warning(f"Client node dump error: {e}")
+
+
+def _client_control_loop(sock):
+    """Thread loop: one JSON request datagram in, one JSON reply out."""
+    logger.info(f"Client control: listening on "
+                f"{CLIENT_CONTROL_LISTEN[0]}:{CLIENT_CONTROL_LISTEN[1]}")
+    while True:
+        try:
+            data, addr = sock.recvfrom(2048)
+        except OSError:
+            break
+        try:
+            req = json.loads(data.decode("utf-8")) if data else {}
+        except Exception:
+            req = {}
+        reply = _client_handle(req if isinstance(req, dict) else {})
+        try:
+            sock.sendto(json.dumps(reply).encode("utf-8"), addr)
+        except Exception:
+            pass
+    logger.info("Client control exiting")
+
+
 def _radio_is_alive():
     """Cheap, read-only liveness check for the meshtasticd connection.
 
@@ -1431,6 +1673,25 @@ def main():
         logger.error(f"Could not start heartbeat control: {e}")
         hb_control_sock = None
 
+    # ── Meshtastic client: chat store (/run) + control socket ─
+    global _chat_store
+    try:
+        _chat_store = meshchat.ChatStore(meshchat.CHAT_DB_PATH)
+    except Exception as e:
+        logger.error(f"Could not open chat store {meshchat.CHAT_DB_PATH}: {e}")
+        _chat_store = None
+    client_control_sock = None
+    try:
+        client_control_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client_control_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        client_control_sock.bind(CLIENT_CONTROL_LISTEN)
+        threading.Thread(
+            target=_client_control_loop, args=(client_control_sock,), daemon=True,
+        ).start()
+    except Exception as e:
+        logger.error(f"Could not start client control: {e}")
+        client_control_sock = None
+
     # ── LoRa voice stream relay (live Codec2) ────────────────
     stream_portnum, stream_hop_limit = _load_stream_config()
     stream_raw_sock = None
@@ -1489,6 +1750,11 @@ def main():
                 hb_control_sock.close()
             except Exception:
                 pass
+        if client_control_sock:
+            try:
+                client_control_sock.close()
+            except Exception:
+                pass
         if voice_relay_sock:
             try:
                 voice_relay_sock.close()
@@ -1541,6 +1807,7 @@ def main():
                 # Dump node database for web dashboard
                 if now - last_node_dump >= NODE_DUMP_INTERVAL:
                     _dump_nodes()
+                    _dump_client_nodes()
                     last_node_dump = now
 
                 # Presence heartbeat (re-read config each pass so a UI change

@@ -274,6 +274,56 @@ function rnsUpsert(m) {
   list.sort((a, b) => a.ts - b.ts);
 }
 
+// Meshtastic client state. MC = MB + "/client".
+const MC = MB + "/client";
+const MC_EMOJI = ["👍", "❤️", "😂", "😮", "😢", "✅"];
+let MC_DRAFT = "";
+let MC_CUR = null;         // open chat {chat, title} (Back drops page params)
+let MC_NODE = null;        // open node id on the node page
+let MC_REPLY = null;       // message being replied to: {chat, pkt_id, from, text}
+let MC_LAST = { chat: null, messages: [] };   // last fetched conversation
+let MC_FILTER = "";
+
+// Menu new-message dots. Never throw: any failure → false (no dot).
+async function mcHasUnread() {
+  try {
+    const { ok, d } = await jget(MC);
+    return ok && (d.chats || []).some((c) => c.unread > 0);
+  } catch (e) { return false; }
+}
+async function rnsHasUnread() {
+  try {
+    const { ok, d } = await jget("/api/v1/messaging/rns/latest");
+    if (!ok || !d.latest) return false;
+    const read = rnsReadMap();
+    return Object.entries(d.latest).some(([hash, l]) =>
+      l && l.direction === "in" && l.ts > (read[hash] || 0));
+  } catch (e) { return false; }
+}
+let MC_SORT = "heard";
+let MC_SHOW = "all";
+
+function mcDist(m) {
+  if (m == null) return "—";
+  return m < 1000 ? m + " m" : (m / 1000).toFixed(1) + " km";
+}
+function mcNodeName(n) {
+  return n.long_name || n.short_name || n.id;
+}
+// One-line status strip shared by the client pages.
+function mcStatusLine(s) {
+  if (!s.bridge_running) return `<div class="warn">cot-bridge not running — radio unavailable</div>`;
+  const parts = [
+    `${esc(s.my_name || "?")} ${esc(s.my_id || "")}`,
+    `online ${s.online}`,
+    `ch util ${s.channel_util != null ? s.channel_util.toFixed(1) + "%" : "—"}`,
+    `air tx ${s.air_util_tx != null ? s.air_util_tx.toFixed(1) + "%" : "—"}`,
+  ];
+  let h = `<div class="kv"><span>${parts.join(" · ")}</span></div>`;
+  if (s.tx_enabled === false) h += `<div class="warn">receive-only — sending is disabled</div>`;
+  return h;
+}
+
 // Voice state: channel list cache for the TUI voice page.
 let VOICE_CH = null;
 
@@ -386,26 +436,27 @@ const PAGES = {
   // Dashboard: a menu; live data lives in the persistent header.
   home: {
     title: "Main Menu",
+    dynamic: 5000,
     async build() {
+      const [{ ok: sok, d: st }, { ok, d: tak }, mcNew, rnsNew] = await Promise.all([
+        jget("/api/v1/status"), jget("/api/v1/tak/status"), mcHasUnread(), rnsHasUnread()]);
       const items = [
         { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
         { type: "nav", label: "MESSAGING", to: "messaging" },
         { type: "nav", label: "VOICE (PTT)", to: "voice" },
-        { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
+        { type: "nav", label: `${mcNew ? "● " : ""}MESHTASTIC`, to: "meshtastic" },
         { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
         { type: "nav", label: "RADIOS (RF ON/OFF)", to: "radios" },
-        { type: "nav", label: "RETICULUM", to: "reticulum" },
+        { type: "nav", label: `${rnsNew ? "● " : ""}RETICULUM`, to: "reticulum" },
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
       ];
       // HaLow is a plug-in USB radio: show its config entry only when the
       // halow0 interface is present (radios.halow.present from live status).
-      const { ok: sok, d: st } = await jget("/api/v1/status");
       if (sok && st.radios && st.radios.halow && st.radios.halow.present) {
         items.push({ type: "nav", label: "HALOW", to: "halow" });
       }
       // TAK Server is optional; show the menu entry only when it's installed.
-      const { ok, d: tak } = await jget("/api/v1/tak/status");
       if (ok && tak.installed) {
         const label = tak.variant === "opentakserver" ? "OPENTAKSERVER" : "TAK SERVER";
         items.push({ type: "nav", label, to: "tak" });
@@ -1143,8 +1194,9 @@ const PAGES = {
   // of several collapsible sections stacked on one screen.
   meshtastic: {
     title: "Meshtastic Radio",
+    dynamic: 5000,
     async build() {
-      const { d: s } = await jget(MB + "/status");
+      const [{ d: s }, mcNew] = await Promise.all([jget(MB + "/status"), mcHasUnread()]);
       const statusLine =
         `radio: ${s.radio_detected ? "detected" : "not detected"} · ` +
         `bridge: ${s.service_active ? "running" : "stopped"}` +
@@ -1153,12 +1205,238 @@ const PAGES = {
         items: [
           { type: "content", html: `<div class="content"><div class="kv">` +
             `<span>${esc(statusLine)}</span></div></div>` },
+          { type: "nav", label: `${mcNew ? "● " : ""}CHATS`, to: "mc_chats" },
+          { type: "nav", label: "NODES", to: "mc_nodes" },
+          { type: "nav", label: "POSITIONS", to: "mc_positions" },
           { type: "nav", label: "RADIO CONFIGURATION", to: "mt_radio" },
           { type: "nav", label: "SET CHANNEL", to: "mt_channel" },
           { type: "nav", label: "PRESENCE HEARTBEAT", to: "mt_heartbeat" },
           { type: "nav", label: "CoT TX RATE LIMIT", to: "mt_txrate" },
         ],
       };
+    },
+  },
+
+  // ── Meshtastic client ─────────────────────────────────────────
+  // Chat list: every channel, then DMs (newest first), with unread counts.
+  mc_chats: {
+    title: "Chats",
+    dynamic: 5000,
+    async build() {
+      const { ok, d } = await jget(MC);
+      const items = [{ type: "content", html: `<div class="content">` +
+        (ok ? mcStatusLine(d.status) : `<div class="warn">unavailable</div>`) + `</div>` }];
+      ((ok && d.chats) || []).forEach((c) => {
+        const dm = !c.chat.startsWith("ch");
+        const unread = c.unread ? `● ${c.unread}  ` : "";
+        const when = c.last_ts ? `  · ${ago(c.last_ts)}` : "";
+        items.push({ type: "nav", label: `${unread}${dm ? "@" : "#"}${c.title}${when}`,
+          onEnter: (S) => S.go("mc_chat", { chat: c.chat, title: c.title }) });
+      });
+      return { items };
+    },
+  },
+
+  // One conversation (channel or DM). Reply/react via » REPLY / REACT.
+  mc_chat: {
+    title: "Chat",
+    stickBottom: true,
+    dynamic: 3000,
+    async build(params) {
+      // The shell's Back drops params, so remember the open chat.
+      const p = MC_CUR = params || MC_CUR || {};
+      const { ok, d } = await jget(MC + "/messages?chat=" + encodeURIComponent(p.chat));
+      const msgs = (ok && d.messages) || [];
+      MC_LAST = { chat: p.chat, messages: msgs };
+      const dm = !String(p.chat).startsWith("ch");
+      const byId = {};
+      msgs.forEach((m) => { if (m.pkt_id != null) byId[m.pkt_id] = m; });
+      let h = `<div class="content"><div class="page-title" style="padding-left:0">` +
+        `${dm ? "@" : "#"}${esc(p.title || p.chat)}</div>`;
+      if (!ok) h += `<div class="warn">${esc(d.detail || "unavailable")}</div>`;
+      else if (!msgs.length) h += `<div class="off">no messages yet</div>`;
+      else {
+        h += `<table><tr><th>When</th><th>From</th><th>Message</th>${dm ? "<th>State</th>" : ""}</tr>`;
+        msgs.forEach((m) => {
+          const re = m.reply_id && byId[m.reply_id];
+          const quote = re ? `<span class="off">↪ ${esc(re.from)}: ${esc(re.text.slice(0, 40))}</span><br>` : "";
+          const reacts = (m.reactions || []).map((r) => `${esc(r.emoji)} ${esc(r.from)}`).join("  ");
+          h += `<tr><td>${ago(m.ts)}</td><td class="${m.mine ? "ok" : ""}">${esc(m.from)}</td>` +
+            `<td>${quote}${esc(m.text)}${reacts ? `<br><span class="off">${reacts}</span>` : ""}</td>` +
+            (dm ? `<td class="${m.state === "failed" ? "warn" : ""}">${esc(m.mine ? m.state || "" : "")}</td>` : "") +
+            `</tr>`;
+        });
+        h += `</table>`;
+      }
+      h += `</div>`;
+      const items = [{ type: "content", html: h }];
+      if (MC_REPLY && MC_REPLY.chat === p.chat) {
+        items.push({ type: "button", label: `✕ replying to ${MC_REPLY.from}: ${MC_REPLY.text.slice(0, 30)}`,
+          onEnter: (S) => { MC_REPLY = null; S.reload(); } });
+      }
+      items.push({ type: "nav", label: "» REPLY / REACT", onEnter: (S) => S.go("mc_pick") });
+      if (dm) items.push({ type: "nav", label: "» NODE INFO", onEnter: (S) => S.go("mc_node", { id: p.chat }) });
+      items.push({ type: "compose", key: "mc_text", value: MC_DRAFT, max: 200,
+        placeholder: "Type a message", sendLabel: "Send",
+        onChange: (v) => MC_DRAFT = v, onSubmit: (S, text) => mcSend(S, p.chat, text) });
+      return { items };
+    },
+  },
+
+  // Pick a message: Enter = reply to it, "react" = choose an emoji.
+  mc_pick: {
+    title: "Reply / React",
+    async build() {
+      const p = MC_CUR || {};   // the open chat (Back from React drops params)
+      const msgs = (MC_LAST.chat === p.chat ? MC_LAST.messages : [])
+        .filter((m) => m.pkt_id != null).slice(-30).reverse();
+      const items = [{ type: "content", html: `<div class="content"><div class="hint" ` +
+        `style="padding-left:0">Enter = reply · react = add an emoji</div>` +
+        (msgs.length ? "" : `<div class="off">no messages</div>`) + `</div>` }];
+      msgs.forEach((m) => items.push({ type: "button",
+        label: `${m.from}: ${m.text.slice(0, 60)}`,
+        onEnter: (S) => {
+          MC_REPLY = { chat: p.chat, pkt_id: m.pkt_id, from: m.from, text: m.text };
+          S.back();
+        },
+        action: { label: "react", onRun: (S) => S.go("mc_react", { chat: p.chat, m }) } }));
+      return { items };
+    },
+  },
+
+  mc_react: {
+    title: "React",
+    async build(params) {
+      const p = params || {};
+      const items = [{ type: "content", html: `<div class="content"><div class="kv">` +
+        `<span>${esc(p.m.from)}: ${esc(p.m.text.slice(0, 80))}</span></div></div>` }];
+      MC_EMOJI.forEach((e) => items.push({ type: "button", label: e,
+        onEnter: (S) => mcReact(S, p.chat, p.m.pkt_id, e) }));
+      return { items };
+    },
+  },
+
+  // Node list: filter (name/id), sort, show all / favorites / ignored.
+  mc_nodes: {
+    title: "Nodes",
+    dynamic: 10000,
+    async build() {
+      const { ok, d } = await jget(MC + "/nodes");
+      const all = (ok && d.nodes) || [];
+      const f = MC_FILTER.trim().toLowerCase();
+      const list = all.filter((n) =>
+        (MC_SHOW === "favorites" ? n.favorite : MC_SHOW === "ignored" ? n.ignored : !n.ignored) &&
+        (!f || mcNodeName(n).toLowerCase().includes(f) || n.short_name.toLowerCase().includes(f) ||
+         n.id.includes(f)));
+      const key = {
+        heard: (n) => -(n.last_heard || 0),
+        name: (n) => mcNodeName(n).toLowerCase(),
+        hops: (n) => n.hops_away ?? 99,
+        snr: (n) => -(n.snr ?? -99),
+        distance: (n) => n.distance_m ?? 1e12,
+      }[MC_SORT];
+      list.sort((a, b) => (a.favorite !== b.favorite ? (a.favorite ? -1 : 1) :
+        key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+      const items = [
+        { type: "ftext", key: "mc_filter", label: "Filter", value: MC_FILTER,
+          placeholder: "name or !id", max: 40,
+          // Rebuild after the edit commits (build is refused mid-edit).
+          onChange: (v) => { MC_FILTER = v; setTimeout(() => window.__shell.reload(), 0); } },
+        { type: "fselect", key: "mc_sort", label: "Sort", value: MC_SORT,
+          options: ["heard", "name", "hops", "snr", "distance"],
+          onChange: (v) => MC_SORT = v },
+        { type: "fselect", key: "mc_show", label: "Show", value: MC_SHOW,
+          options: ["all", "favorites", "ignored"], onChange: (v) => MC_SHOW = v },
+        { type: "content", html: `<div class="content">` +
+          (!ok || !d.bridge_running ? `<div class="warn">cot-bridge not running</div>` : "") +
+          `<div class="hint" style="padding-left:0">${list.length} of ${all.length} nodes</div></div>` },
+      ];
+      list.forEach((n) => {
+        const bits = [ago(n.last_heard),
+          n.hops_away != null ? n.hops_away + "h" : null,
+          n.snr != null ? n.snr + "dB" : null,
+          n.battery != null ? n.battery + "%" : null,
+          n.distance_m != null ? mcDist(n.distance_m) : null].filter(Boolean);
+        items.push({ type: "nav", label: `${n.favorite ? "★ " : ""}${mcNodeName(n)}  ·  ${bits.join(" · ")}`,
+          onEnter: (S) => S.go("mc_node", { id: n.id }) });
+      });
+      return { items };
+    },
+  },
+
+  // Node detail + actions.
+  mc_node: {
+    title: "Node",
+    dynamic: 5000,
+    async build(params) {
+      MC_NODE = (params && params.id) || MC_NODE;
+      const { ok, d } = await jget(MC + "/nodes");
+      const n = ((ok && d.nodes) || []).find((x) => x.id === MC_NODE);
+      if (!n) return { items: [{ type: "content", html:
+        `<div class="content"><div class="off">node ${esc(MC_NODE)} not in node list</div></div>` }] };
+      const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span>${esc(v ?? "—")}</span></div>`;
+      const pos = n.position;
+      let h = `<div class="content">` +
+        kv("Name", `${n.long_name} (${n.short_name})`) + kv("ID", n.id) +
+        kv("Hardware", n.hw_model) + kv("Role", n.role) +
+        kv("Last heard", ago(n.last_heard)) +
+        kv("Hops / SNR", `${n.hops_away ?? "—"} / ${n.snr ?? "—"} dB`) +
+        kv("Battery", n.battery != null ? `${n.battery}%` +
+          (n.voltage ? ` (${n.voltage.toFixed(2)} V)` : "") : null) +
+        kv("Ch util / air TX", n.channel_util != null ?
+          `${n.channel_util.toFixed(1)}% / ${(n.air_util_tx || 0).toFixed(1)}%` : null) +
+        kv("Uptime", n.uptime != null ? fmtDur(n.uptime) : null) +
+        kv("Position", pos ? `${pos.lat.toFixed(5)}, ${pos.lon.toFixed(5)}` +
+          (pos.alt != null ? ` · ${pos.alt} m` : "") : null) +
+        kv("Distance", n.distance_m != null ? `${mcDist(n.distance_m)} · ${n.bearing}°` : null);
+      const tr = n.traceroute;
+      if (tr) {
+        let t = tr.pending ? "waiting for reply…" : tr.error ? `failed: ${tr.error}` : "";
+        if (tr.route) {
+          const hop = (ids, snr) => ids.map((x, i) => (i ? `${snr[i - 1] ?? "?"}dB → ` : "") + x).join(" ");
+          t = hop(tr.route.towards, tr.route.snr_towards) +
+            (tr.route.back.length ? ` | back: ${hop(tr.route.back, tr.route.snr_back)}` : "");
+        }
+        h += kv(`Traceroute (${ago(tr.ts)})`, t);
+      }
+      h += `</div>`;
+      return { items: [
+        { type: "content", html: h },
+        { type: "nav", label: "» DIRECT MESSAGE",
+          onEnter: (S) => S.go("mc_chat", { chat: n.id, title: mcNodeName(n) }) },
+        { type: "button", label: "» TRACEROUTE", onEnter: (S) => mcAction(S, n.id, "traceroute") },
+        { type: "button", label: "» REQUEST POSITION", onEnter: (S) => mcAction(S, n.id, "request_position") },
+        { type: "button", label: "» REQUEST TELEMETRY", onEnter: (S) => mcAction(S, n.id, "request_telemetry") },
+        { type: "button", label: n.favorite ? "» UNFAVORITE" : "» FAVORITE",
+          onEnter: (S) => mcFlag(S, n.id, "favorite", !n.favorite) },
+        { type: "button", label: n.ignored ? "» UNIGNORE" : "» IGNORE",
+          onEnter: (S) => mcFlag(S, n.id, "ignored", !n.ignored) },
+      ] };
+    },
+  },
+
+  // Distance + bearing to every node with a position (nearest first).
+  mc_positions: {
+    title: "Positions",
+    dynamic: 10000,
+    async build() {
+      const { ok, d } = await jget(MC + "/nodes");
+      const me = ok ? d.me : null;
+      const list = ((ok && d.nodes) || []).filter((n) => n.position && !n.ignored)
+        .sort((a, b) => (a.distance_m ?? 1e12) - (b.distance_m ?? 1e12));
+      let h = `<div class="content">`;
+      h += me && me.position
+        ? `<div class="kv"><span>me: ${me.position.lat.toFixed(5)}, ${me.position.lon.toFixed(5)}</span></div>`
+        : `<div class="warn">this node has no position — distance/bearing unavailable</div>`;
+      if (!list.length) h += `<div class="off">no nodes with a position</div>`;
+      h += `</div>`;
+      const items = [{ type: "content", html: h }];
+      list.forEach((n) => items.push({ type: "nav",
+        label: `${mcNodeName(n)}  ·  ${mcDist(n.distance_m)}` +
+          (n.bearing != null ? ` · ${n.bearing}°` : "") +
+          `  ·  ${ago(n.position.time || n.last_heard)}`,
+        onEnter: (S) => S.go("mc_node", { id: n.id }) }));
+      return { items };
     },
   },
 
@@ -1991,6 +2269,36 @@ async function sendMessage(S, text) {
   MSG_DRAFT = "";
   S.msg("sent");
   // The WS push will echo our own message back; still reload for immediate view.
+  return S.reload();
+}
+
+// ── Meshtastic client actions (relayed to cot-bridge) ──────────
+async function mcSend(S, chat, text) {
+  const reply_id = MC_REPLY && MC_REPLY.chat === chat ? MC_REPLY.pkt_id : null;
+  const { ok, d } = await jsend("POST", MC + "/messages", { chat, text, reply_id });
+  if (!ok) return S.msg("send failed: " + (d.detail || "error"), false);
+  MC_DRAFT = "";
+  MC_REPLY = null;
+  S.msg("sent");
+  return S.reload();
+}
+
+async function mcReact(S, chat, reply_id, emoji) {
+  const { ok, d } = await jsend("POST", MC + "/react", { chat, reply_id, emoji });
+  if (!ok) return S.msg("react failed: " + (d.detail || "error"), false);
+  return S.back();
+}
+
+async function mcAction(S, id, action) {
+  const { ok, d } = await jsend("POST", `${MC}/nodes/${encodeURIComponent(id)}/${action}`);
+  if (!ok) return S.msg(action.replace("_", " ") + " failed: " + (d.detail || "error"), false);
+  S.msg(action.replace("_", " ") + " sent — the reply updates this page");
+  return S.reload();
+}
+
+async function mcFlag(S, id, kind, on) {
+  const { ok, d } = await jsend("PUT", `${MC}/nodes/${encodeURIComponent(id)}/${kind}`, { on });
+  if (!ok) return S.msg("failed: " + (d.detail || "error"), false);
   return S.reload();
 }
 

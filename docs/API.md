@@ -304,6 +304,37 @@ curl -s http://localhost:8080/api/v1/meshtastic/nodes
 #   "last_heard":1789858312,"snr":8.75,"hops_away":0}, ...],"bridge_running":true}
 ```
 
+### Meshtastic client (`/client...`)
+Chats/nodes for using the radio as a Meshtastic node. Reads the CoT bridge's
+`/run` chat store (cleared on boot); radio actions are relayed to the bridge
+(UDP 127.0.0.1:5564). `404` if the bridge isn't running · `400` bad input or
+receive-only. Chat keys: `ch<N>` = channel N, `!<hex>` = DM with that node.
+
+```bash
+curl -s http://localhost:8080/api/v1/meshtastic/client
+# {"status":{"bridge_running":true,"my_id":"!3007771f","my_name":"0042-nucleus",
+#   "tx_enabled":true,"online":3,"channel_util":3.5,"air_util_tx":0.4,...},
+#  "chats":[{"chat":"ch0","title":"Natak","last_ts":1791650050.0,
+#    "last_text":"ok","unread":2}, ...]}
+curl -s 'http://localhost:8080/api/v1/meshtastic/client/messages?chat=ch0'
+# {"chat":"ch0","messages":[{"pkt_id":1234568,"sender":567591628,"from":"0052",
+#   "text":"hello","ts":1791650001.0,"mine":0,"reply_id":null,"state":null,
+#   "reactions":[{"sender":805795615,"emoji":"👍","from":"me"}]}]}   # marks read
+curl -s -X POST http://localhost:8080/api/v1/meshtastic/client/messages \
+  -H 'Content-Type: application/json' -d '{"chat":"!21d4c2cc","text":"hi","reply_id":null}'
+curl -s -X POST http://localhost:8080/api/v1/meshtastic/client/react \
+  -H 'Content-Type: application/json' -d '{"chat":"ch0","reply_id":1234568,"emoji":"👍"}'
+curl -s http://localhost:8080/api/v1/meshtastic/client/nodes
+# {"me":{...},"nodes":[{"id":"!21d4c2cc","long_name":"0052-nucleus","hw_model":"...",
+#   "role":"TAK","last_heard":...,"snr":8.75,"hops_away":0,"position":{"lat":..,"lon":..},
+#   "battery":90,"distance_m":1112,"bearing":0,"favorite":false,"ignored":false,
+#   "traceroute":{"ts":..,"route":{"towards":[..],"snr_towards":[..],"back":[..],"snr_back":[..]}}}]}
+curl -s -X POST http://localhost:8080/api/v1/meshtastic/client/nodes/!21d4c2cc/traceroute
+#   also: request_position, request_telemetry (replies update /client/nodes)
+curl -s -X PUT http://localhost:8080/api/v1/meshtastic/client/nodes/!21d4c2cc/favorite \
+  -H 'Content-Type: application/json' -d '{"on":true}'          # also /ignored
+```
+
 ### `GET /peers`
 Known IP-linked peers (for bridge peering).
 

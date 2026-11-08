@@ -71,8 +71,8 @@ Everything flows one direction, from one file:
 | `status.py` | Read-only runtime status: interfaces, unit states, Babel neighbours/routes (local-port 33123), HaLow radio-link peers (`halow0` via `iw`/`ip`, joined to Babel), mesh-node last-seen (5 s poll, lost nodes kept 15 min, in memory). |
 | `api.py` | FastAPI app (`nucleusd`, :8080): REST API + web UI, mounts the routers below. |
 | `cli.py` | `nucleusctl` — thin wrapper over the same modules. |
-| `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon. |
-| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`), attaching to the shared `rnsd` as a client; off by default. Peers are explicit **contact cards** (imported over the mesh / link / QR), not flooded announces; the node announces only on operator request. |
+| `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon, Meshtastic client (`meshchat.py`: chats/nodes; the bridge stays the radio's only client, chat history in `/run`). |
+| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store, history in `/run`) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`), attaching to the shared `rnsd` as a client; off by default. Peers are explicit **contact cards** (imported over the mesh / link / QR), not flooded announces; the node announces only on operator request. |
 | `voice/` | PTT voice daemon (OpenVLM hardware + browser soft PTT) + router. |
 | `rf.py` | Per-radio RF control — the **only** module that touches rfkill/`/sys`. Resolves a phy from its interface, soft-blocks/unblocks it, and enforces persistent RF state at boot (`nucleus-rf.service`). Consumed by `apply.py`, `status.py` and the AP toggle. |
 | `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |

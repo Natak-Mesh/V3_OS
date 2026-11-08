@@ -109,6 +109,66 @@ def config_join_peer(body: JoinPeerBody) -> dict:
     return _handle(mx.config_join_peer, body.host)
 
 
+# ── Meshtastic client (chats / nodes) ────────────────────────────
+
+class ClientSendBody(BaseModel):
+    chat: str
+    text: str
+    reply_id: int | None = None
+
+
+class ClientReactBody(BaseModel):
+    chat: str
+    reply_id: int
+    emoji: str
+
+
+class ClientFlagBody(BaseModel):
+    on: bool
+
+
+@router.get("/client")
+def client_overview() -> dict:
+    """Status strip + chat list with unread counts."""
+    return mx.client_overview()
+
+
+@router.get("/client/messages")
+def client_messages(chat: str) -> dict:
+    return _handle(mx.client_messages, chat)
+
+
+@router.post("/client/messages")
+def client_send(body: ClientSendBody) -> dict:
+    return _handle(mx.client_send, body.chat, body.text, body.reply_id)
+
+
+@router.post("/client/react")
+def client_react(body: ClientReactBody) -> dict:
+    return _handle(mx.client_react, body.chat, body.reply_id, body.emoji)
+
+
+@router.get("/client/nodes")
+def client_nodes() -> dict:
+    return mx.client_nodes()
+
+
+@router.post("/client/nodes/{node_id}/{action}")
+def client_node_action(node_id: str, action: str) -> dict:
+    """action: traceroute | request_position | request_telemetry."""
+    return _handle(mx.client_node_action, node_id, action)
+
+
+@router.put("/client/nodes/{node_id}/favorite")
+def client_node_favorite(node_id: str, body: ClientFlagBody) -> dict:
+    return _handle(mx.client_node_flag, node_id, "favorites", body.on)
+
+
+@router.put("/client/nodes/{node_id}/ignored")
+def client_node_ignored(node_id: str, body: ClientFlagBody) -> dict:
+    return _handle(mx.client_node_flag, node_id, "ignored", body.on)
+
+
 @router.get("/config/qr")
 def config_qr() -> Response:
     svg = _handle(mx.config_qr_svg)

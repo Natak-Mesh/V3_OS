@@ -52,7 +52,9 @@ MCAST_IF = "wlan1"                    # WiFi transport egresses the mesh iface
 # back-compat / off-box tests.
 MESH_IFACES = [MCAST_IF]
 IFACE_RECHECK_SECS = 5               # re-pin TX / re-join RX as ifaces appear
-PERSIST_PATH = "/var/lib/nucleus/messages.jsonl"
+# WiFi+LoRa history: /run (RAM) -> cleared on every boot (RuntimeDirectory= in
+# nucleus-messaging.service).
+PERSIST_PATH = "/run/nucleus-messaging/messages.jsonl"
 RNS_PERSIST_PATH = "/var/lib/nucleus/rns_messages.jsonl"
 RNS_CONTACTS_PATH = "/var/lib/nucleus/rns/contacts.json"
 RNS_RETRY_SECS = 30                   # retry attaching to rnsd while it's down
@@ -189,6 +191,8 @@ class MessagingService:
             # Persistent contact book (replaces the old announce-driven peer
             # table). Loaded here so imports work even before the lane attaches.
             self._rns_contacts = ContactStore(persist_path=RNS_CONTACTS_PATH)
+            # History of removed contacts is not kept (older builds left it behind).
+            self._rns_store.prune(c["lxmf_hash"] for c in self._rns_contacts.as_list())
 
     # ── local push subscribers (for live UI over WS) ────────────
     SUB_TTL = 20.0  # a subscriber must re-subscribe within this window
@@ -554,7 +558,10 @@ class MessagingService:
     def _rns_remove(self, dest: str) -> dict:
         if not (self.rns_enabled and self._rns_contacts):
             return {"ok": False, "error": "rns lane not available"}
-        return {"ok": True, "removed": self._rns_contacts.remove(dest)}
+        removed = self._rns_contacts.remove(dest)
+        if removed and self._rns_store:
+            self._rns_store.drop(str(dest).lower())
+        return {"ok": True, "removed": removed}
 
     def _rns_heard_list(self) -> dict:
         """lxmf.delivery announces heard on-air (receive-only discovery aid)."""

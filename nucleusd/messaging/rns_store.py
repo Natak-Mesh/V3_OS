@@ -96,6 +96,25 @@ class ConversationStore:
         with self._lock:
             return list(self._convs.keys())
 
+    def drop(self, peer: str) -> bool:
+        """Delete ``peer``'s whole conversation. True if one existed."""
+        with self._lock:
+            if self._convs.pop(peer, None) is None:
+                return False
+            self._save()
+            return True
+
+    def prune(self, keep) -> list[str]:
+        """Delete every conversation whose peer is not in ``keep``; return them."""
+        keep = {str(k).lower() for k in keep}
+        with self._lock:
+            gone = [p for p in self._convs if p.lower() not in keep]
+            for p in gone:
+                del self._convs[p]
+            if gone:
+                self._save()
+        return gone
+
     # ── persistence (JSONL, one message per line) ────────────────
     def _load(self) -> None:
         try:

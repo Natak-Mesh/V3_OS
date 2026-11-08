@@ -20,7 +20,14 @@ LoRa (portnum 1)┘         ▲
   primary channel, relayed through the CoT bridge (which owns the radio). Because
   it is ordinary Meshtastic text with **no custom header**, plain Meshtastic
   radios/phones on the same channel interoperate: they see Nucleus messages and
-  their messages appear in the Nucleus chat.
+  their messages appear in the Nucleus chat. Only **plain primary-channel
+  broadcasts** are relayed in; DMs, secondary channels and emoji reactions go
+  only to the [Meshtastic client](meshtastic.md#meshtastic-client).
+
+## History
+
+The WiFi+LoRa log is saved to `/run/nucleus-messaging/messages.jsonl` (RAM): it
+survives a service restart but is **cleared on every boot**.
 
 ## Single store + de-duplication
 

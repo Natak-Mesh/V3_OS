@@ -264,6 +264,10 @@ systemctl restart nucleusd.service nucleus-messaging.service nucleus-voice.servi
 # left untouched and their enabled-state is still owned by apply.
 systemctl try-restart cot-bridge.service
 
+# WiFi+LoRa messaging history moved to /run (cleared every boot); drop the old
+# persistent copy.
+rm -f /var/lib/nucleus/messages.jsonl
+
 echo
 echo "Install complete. Next:"
 echo "  1. edit /etc/nucleus/config.yaml  (set node.id etc.)"
