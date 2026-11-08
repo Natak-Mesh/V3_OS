@@ -792,3 +792,48 @@ def test_send_refuses_when_rnsd_unreachable(monkeypatch):
     res = lane.send(FIXTURE_LXMF, "hi")
     assert res["ok"] is False and "rnsd unreachable" in res["error"]
     assert _FakeTransport.requested == []
+
+
+# Real on-disk line format from /var/lib/nucleus/rns_messages.jsonl.
+def _dm_line(peer, text, ts):
+    import json
+    return json.dumps({"peer": peer, "text": text, "ts": ts,
+                       "direction": "in", "state": ""}) + "\n"
+
+
+def test_conversation_store_drop_persists(tmp_path):
+    p = tmp_path / "rns_messages.jsonl"
+    p.write_text(_dm_line(USER_HASH, "still good", 1791672135.49)
+                 + _dm_line(FIXTURE_LXMF, "hi", 1794165677.41))
+    cs = ConversationStore(history_limit=10, persist_path=str(p))
+    assert cs.drop(USER_HASH) is True
+    assert cs.drop(USER_HASH) is False
+    cs2 = ConversationStore(history_limit=10, persist_path=str(p))
+    assert cs2.peers() == [FIXTURE_LXMF]
+
+
+def test_conversation_store_prune_drops_non_contacts(tmp_path):
+    """Regression: history of removed contacts lingered on disk, invisible in
+    the UI but still in /rns/latest (stuck unread dot). prune() keeps only
+    peers that are still contacts."""
+    p = tmp_path / "rns_messages.jsonl"
+    p.write_text(_dm_line(USER_HASH, "still good", 1791672135.49)
+                 + _dm_line(FIXTURE_LXMF, "hi", 1794165677.41))
+    cs = ConversationStore(history_limit=10, persist_path=str(p))
+    assert cs.prune([FIXTURE_LXMF.upper()]) == [USER_HASH]
+    assert cs.prune([FIXTURE_LXMF]) == []
+    cs2 = ConversationStore(history_limit=10, persist_path=str(p))
+    assert list(cs2.latest()) == [FIXTURE_LXMF]
+
+
+def test_service_remove_contact_drops_its_history(tmp_path):
+    svc = _rns_service()
+    svc._rns_contacts = ContactStore(persist_path=str(tmp_path / "contacts.json"))
+    svc._rns_contacts.add_inbound(USER_HASH, USER_PUB, ts=1.0)
+    svc._rns_contacts.add_inbound(FIXTURE_LXMF, FIXTURE_PUB, ts=1.0)
+    svc._rns_store.add(USER_HASH, "still good", "in", ts=2.0)
+    svc._rns_store.add(FIXTURE_LXMF, "hi", "in", ts=3.0)
+    assert svc._rns_remove(USER_HASH.upper()) == {"ok": True, "removed": True}
+    assert svc._rns_store.history(USER_HASH) == []
+    assert svc._rns_store.peers() == [FIXTURE_LXMF]
+
