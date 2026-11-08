@@ -230,6 +230,17 @@ class RnsLane:
     def started(self) -> bool:
         return self._started
 
+    def set_display_name(self, name: str) -> None:
+        """Change the LXMF display name carried in our announces and card.
+
+        LXMF builds announce app_data from ``delivery_destination.display_name``
+        at announce time, so updating it here takes effect on the next announce
+        with no re-registration. Emits nothing.
+        """
+        self.display_name = name
+        if self._delivery is not None:
+            self._delivery.display_name = name
+
     @property
     def delivery_hash_hex(self) -> Optional[str]:
         if self._delivery_hash is None:

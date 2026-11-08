@@ -110,6 +110,7 @@ def test_messaging_rns_routes_degrade_cleanly():
     assert client.patch("/api/v1/messaging/rns/contacts/abc",
                         json={"name": "x"}).status_code in (200, 400, 503)
     assert client.delete("/api/v1/messaging/rns/contacts/abc").status_code in (200, 400, 503)
+    assert client.get("/api/v1/messaging/rns/latest").status_code in (200, 503)
 
 
 def test_reticulum_nodes_route_removed():
@@ -141,56 +142,65 @@ def test_modem73_page_wires_ofdm_mode():
 
 
 def test_rns_direct_message_ui_wired():
-    """The Reticulum page links to the Direct Messages contact list, which opens
-    a per-peer conversation; pin that wiring in the static assets (no Node here)."""
+    """The Reticulum landing page IS the contact list (NomadNet-style): each saved
+    contact opens a per-peer conversation and carries an inline req-path button.
+    Pin that wiring in the static assets (no Node here)."""
     web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
     app_js = (web / "app.js").read_text()
     cli_js = (web / "cli.js").read_text()
-    # The Direct Messages link lives on the Reticulum page (not Messaging, whose
-    # stickBottom log auto-scrolls and makes the link hard to click).
-    reti_block = app_js[app_js.index("reticulum: {"):app_js.index("meshtastic: {")]
-    assert 'to: "rns_nodes"' in reti_block, "Reticulum page lost the Direct Messages link"
-    assert "rns_nodes:" in app_js and "rns_chat:" in app_js, "RNS pages missing"
-    assert 'S.go("rns_chat"' in app_js, "contact list no longer opens a conversation"
+    reti_block = app_js[app_js.index("  reticulum: {"):app_js.index("  rns_node: {")]
+    assert "/rns/contacts" in reti_block, "landing page no longer lists contacts"
+    assert 'S.go("rns_chat"' in reti_block, "contact row no longer opens a conversation"
+    # Explicit path discovery stays operator-triggered, inline on the row.
+    assert "onRun: (S) => rnsRequestPath(S, c.lxmf_hash)" in reti_block, \
+        "req-path button no longer inline on the contact row"
+    assert "rns_chat:" in app_js, "conversation page missing"
     assert "function rnsSend" in app_js, "RNS send handler removed"
-    assert "/rns/contacts" in app_js, "contact list not wired to the contacts API"
     assert "function rnsAddHash" in app_js, "add-by-destination-hash not wired"
-    assert "function rnsRename" in app_js and "function rnsRemove" in app_js, \
-        "contact rename/remove not wired"
-    assert 'obj.event === "rns_message"' in app_js, "WS no longer routes rns_message"
-    # Explicit path discovery: the per-contact path state + req-path button now
-    # live inline on the Direct Messages contact rows (an `action` with onRun),
-    # not on the chat page. Must stay operator-triggered (no auto path calls).
     assert "function rnsRequestPath" in app_js, "path request handler removed"
     assert '/path"' in app_js, "contact path endpoint not wired"
-    assert "onRun: (S) => rnsRequestPath(S, c.lxmf_hash)" in app_js, \
-        "req-path button no longer inline on the contact row"
+    assert 'obj.event === "rns_message"' in app_js, "WS no longer routes rns_message"
     # The shell must support param-passing navigation for the per-peer page.
     assert "go(pageKey, params = null)" in cli_js, "S.go param navigation removed"
 
 
-def test_rns_contact_admin_lives_on_modify_page():
-    """Rename/remove are contact admin, not messaging, so they must NOT clutter
-    the per-peer message log (rns_chat). They live on a dedicated Modify
-    Contacts page (rns_edit) reached from a button at the bottom of the Direct
-    Messages contact list. Pin the wiring in the static assets (no Node here)."""
+def test_rns_landing_shows_only_saved_contacts():
+    """Heard announces must NOT be listed on the landing page: an internet-
+    connected rnsd could flood it. Only a count + link to the Network page."""
     web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
     app_js = (web / "app.js").read_text()
+    reti_block = app_js[app_js.index("  reticulum: {"):app_js.index("  rns_node: {")]
+    assert "rnsHeardAdd" not in reti_block, "heard announces listed on the landing page"
+    assert "heard.forEach" not in reti_block, "heard announces listed on the landing page"
+    assert 'to: "rns_heard"' in reti_block, "no link to the Network page"
+    assert 'to: "rns_add"' in reti_block and 'to: "rns_node"' in reti_block
 
-    # The message log must be messaging-only: no rename/remove buttons on it.
-    chat_block = app_js[app_js.index("rns_chat: {"):app_js.index("voice: {")]
+
+def test_rns_landing_has_my_name_and_announce():
+    """My name (renamable) + announce live in the landing-page header."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    reti_block = app_js[app_js.index("  reticulum: {"):app_js.index("  rns_node: {")]
+    assert "rnsSetMyName(S, me)" in reti_block, "no rename-me on the landing page"
+    assert "onRun: rnsAnnounce" in reti_block, "no announce on the landing page"
+    assert '"/api/v1/messaging/name"' in app_js, "rename not wired to the name API"
+
+
+def test_rns_contact_admin_lives_on_contact_page():
+    """Rename/remove are contact admin, not messaging: they live on the
+    per-contact page (rns_contact), reached from the conversation, never on the
+    message log itself. The old Modify Contacts / Direct Messages pages are gone."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    chat_block = app_js[app_js.index("  rns_chat: {"):app_js.index("  rns_contact: {")]
     assert "rnsRename" not in chat_block, "rename button back on the message log"
     assert "rnsRemove" not in chat_block, "remove button back on the message log"
-
-    # The contact list links to the Modify Contacts page via one button.
-    nodes_block = app_js[app_js.index("rns_nodes: {"):app_js.index("rns_add: {")]
-    assert 'to: "rns_edit"' in nodes_block, "no Modify contacts link on the contact list"
-
-    # The Modify Contacts page exists and wires rename + remove per contact.
-    assert "rns_edit:" in app_js, "Modify Contacts page missing"
-    edit_block = app_js[app_js.index("rns_edit: {"):app_js.index("// ── Actions")]
-    assert "rnsRename(S, c.lxmf_hash" in edit_block, "rename not wired on Modify page"
-    assert "rnsRemove(S, c.lxmf_hash" in edit_block, "remove not wired on Modify page"
+    assert 'to: "rns_contact"' in chat_block, "conversation has no link to its contact page"
+    contact_block = app_js[app_js.index("  rns_contact: {"):app_js.index("  voice: {")]
+    assert "rnsRename(S, peer" in contact_block, "rename not on the contact page"
+    assert "rnsRemove(S, peer" in contact_block, "remove not on the contact page"
+    for gone in ("rns_nodes:", "rns_edit:", "rns_ifaces:"):
+        assert gone not in app_js, f"obsolete page {gone} still defined"
 
 
 def test_peer_join_is_a_selectable_item():

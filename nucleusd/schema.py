@@ -410,7 +410,26 @@ class MessagingConfig(BaseModel):
         500, ge=10, le=10000,
         description="Max messages retained in the store / returned to the UI.",
     )
+    display_name: Optional[str] = Field(
+        None, max_length=32,
+        description="This node's name in WiFi/LoRa chat and in its Reticulum (LXMF) "
+                    "announces. Blank = the hostname.",
+    )
     rns: "RnsMessagingConfig" = Field(default_factory=lambda: RnsMessagingConfig())
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _clean_display_name(cls, v):
+        # Blank means "use the hostname"; control chars would corrupt the WiFi
+        # frame / LXMF app_data and the UI, so reject them outright.
+        if v is None:
+            return None
+        v = str(v).strip()
+        if not v:
+            return None
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in v):
+            raise ValueError("display_name must not contain control characters")
+        return v
 
 
 class RnsMessagingConfig(BaseModel):
@@ -727,6 +746,11 @@ class NucleusConfig(BaseModel):
     def _node_null_to_default(cls, v):
         # `node:` with all keys commented parses as None; treat as defaults.
         return NodeConfig() if v is None else v
+
+    @property
+    def messaging_name(self) -> str:
+        """Name this node uses in chat + LXMF announces (display_name, else hostname)."""
+        return self.messaging.display_name or self.node.hostname
 
     # ---- Derived addressing (computed, never hand-entered) ----------------
     @property

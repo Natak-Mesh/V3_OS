@@ -206,6 +206,28 @@ function rnsName(c) {
   if (announced) return announced;
   return (c.lxmf_hash || "").slice(0, 10) || "?";
 }
+// Per-browser "read up to" marks for DM conversations (peer -> epoch of the
+// newest message seen). Drives the ● new-message marker on the contact list.
+function rnsReadMap() {
+  try { return JSON.parse(localStorage.getItem("nucleus-rns-read") || "{}") || {}; }
+  catch (e) { return {}; }
+}
+function rnsMarkRead(peer, ts) {
+  const m = rnsReadMap();
+  if ((m[peer] || 0) >= ts) return;
+  m[peer] = ts;
+  try { localStorage.setItem("nucleus-rns-read", JSON.stringify(m)); } catch (e) {}
+}
+// One-line path state from a /contacts/{hash}/path response. Read-only.
+function rnsPathStr(pr, peer) {
+  const path = (pr && pr.ok && pr.d.path) ? pr.d.path : { known: false };
+  if (path.known) {
+    const hops = path.hops != null ? `${path.hops}h` : "?h";
+    return `${rnsIface(path.interface)} ${hops}` + (path.updated ? ` ${ago(path.updated)}` : "");
+  }
+  const seen = RNS_PATH_SEEN[peer];
+  return seen ? `no path · req ${ago(seen)} ago` : "no path";
+}
 // Merge a DM into the per-peer cache (by peer+ts+direction; no server id).
 function rnsUpsert(m) {
   if (!m || !m.peer) return;
@@ -790,62 +812,99 @@ const PAGES = {
     },
   },
 
-  // Reticulum (rnsd) read-only monitor + hub: rnsd up/down, uptime and path
-  // count; this node's messaging address with manual announce; the configured
-  // interfaces (traffic + clients); and links to contacts and add-contacts.
-  // Data comes from the shared-instance control socket via /api/v1/reticulum
-  // and the messaging daemon via /api/v1/messaging/rns.
+  // Reticulum landing page (NomadNet-style): who I am (name + address, with
+  // rename + announce), then my SAVED contacts — newest conversation first, each
+  // with a new-message marker, last-message preview, path state and an inline
+  // REQ PATH. Heard announces are NOT listed here (an internet-connected rnsd
+  // could flood them); they live on the Network page. rnsd status + interfaces
+  // are on the Node page.
   reticulum: {
     title: "Reticulum",
     dynamic: 5000,
+    onEnter: (S) => msgWsOpen(S),
+    onLeave: () => msgWsClose(),
     async build() {
-      const { ok, d: s } = await jget("/api/v1/reticulum/status");
       const items = [];
-
-      if (!ok || !s.running) {
+      const [rs, ms] = await Promise.all([
+        jget("/api/v1/reticulum/status"), jget("/api/v1/messaging/rns/status")]);
+      const rnsdUp = rs.ok && rs.d.running;
+      const m = ms.ok ? ms.d : {};
+      if (!rnsdUp) {
         items.push({ type: "content", html: `<div class="content">` +
-          `<div class="off">rnsd is not running — no Reticulum status available</div></div>` });
+          `<div class="warn">rnsd is not running — messages can't be sent</div></div>` });
+      }
+      if (!m.enabled) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">Reticulum messaging is disabled</div>` +
+          `<div class="hint" style="padding-left:0">Enable messaging.rns.enabled ` +
+          `in the config, then apply.</div></div>` });
+        items.push({ type: "nav", label: "» NODE STATUS & INTERFACES", to: "rns_node" });
         return { items };
       }
 
-      // ── status ───────────────────────────────────────────────
-      const t = s.transport || {};
+      // ── me ───────────────────────────────────────────────────
+      const me = m.name || "—";
+      items.push({ type: "button", label: `me: ${me}  ·  rename`,
+        onEnter: (S) => rnsSetMyName(S, me),
+        action: { label: "announce", onRun: rnsAnnounce } });
       items.push({ type: "content", html: `<div class="content">` +
-        `<div class="kv"><span>rnsd <b class="ok">up</b></span>` +
-        `<span>uptime <b>${t.uptime != null ? fmtDur(t.uptime) : "—"}</b></span>` +
-        `<span>paths <b>${s.path_count}</b></span></div></div>` });
+        `<div class="hint" style="padding-left:0;word-break:break-all">` +
+        (m.address ? `address <b>${esc(m.address)}</b>` : `address not ready — lane starting`) +
+        ` · announce ${esc(m.announce_mode || "manual")}</div></div>` });
 
-      // ── my identity + announce ───────────────────────────────
-      const ms = await jget("/api/v1/messaging/rns/status");
-      const m = ms.ok ? ms.d : {};
-      if (m.enabled) {
-        let id = `<div class="content"><div class="page-title" style="padding-left:0">My identity</div>`;
-        id += `<div class="kv"><span>announce <b>${esc(m.announce_mode || "manual")}</b></span></div></div>`;
-        items.push({ type: "content", html: id });
-        items.push({ type: "button", label: "» Announce now (make me discoverable)", onEnter: rnsAnnounce });
-      }
+      // ── contacts ─────────────────────────────────────────────
+      const [cr, lr] = await Promise.all([
+        jget("/api/v1/messaging/rns/contacts"), jget("/api/v1/messaging/rns/latest")]);
+      const contacts = (cr.ok && cr.d.contacts) ? cr.d.contacts : [];
+      const latest = (lr.ok && lr.d.latest) ? lr.d.latest : {};
+      const act = (c) => {
+        const l = latest[c.lxmf_hash];
+        return (l && l.ts) || c.last_seen || c.added || 0;
+      };
+      contacts.sort((a, b) => act(b) - act(a));
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">Contacts</div>` +
+        (contacts.length ? "" : `<div class="off">no contacts yet — use Add contact below</div>`) +
+        `</div>` });
+      // Path reads are parallel and emit no RNS traffic; only REQ PATH transmits.
+      const paths = await Promise.all(contacts.map((c) =>
+        jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(c.lxmf_hash) + "/path")));
+      const read = rnsReadMap();
+      contacts.forEach((c, i) => {
+        const who = rnsName(c);
+        const l = latest[c.lxmf_hash];
+        const unread = l && l.direction === "in" && l.ts > (read[c.lxmf_hash] || 0);
+        const pstr = c.pubkey ? rnsPathStr(paths[i], c.lxmf_hash) : "no key yet";
+        let preview = "";
+        if (l) {
+          const t = String(l.text || "");
+          preview = `  ·  ${l.direction === "out" ? "me: " : ""}` +
+            (t.length > 32 ? t.slice(0, 32) + "…" : t) + ` (${ago(l.ts)})`;
+        }
+        items.push({
+          type: "nav",
+          label: `${unread ? "● " : ""}${who}  ·  ${pstr}${preview}`,
+          to: "rns_chat",
+          onEnter: (S) => S.go("rns_chat", { hash: c.lxmf_hash, host: who }),
+          action: { label: "req path", onRun: (S) => rnsRequestPath(S, c.lxmf_hash) },
+        });
+      });
 
-      // ── contacts / add links ─────────────────────────────────
-      const r = await jget("/api/v1/messaging/rns/contacts");
-      const n = (r.ok && r.d.contacts) ? r.d.contacts.length : 0;
-      items.push({ type: "nav", label: `» DIRECT MESSAGES (${n} contact${n === 1 ? "" : "s"})`, to: "rns_nodes" });
-      items.push({ type: "nav", label: "» ADD CONTACTS (my card / mesh / link)", to: "rns_add" });
-      // Announces heard on-air (receive-only). Count shown so the operator sees
-      // at a glance whether peers' announces are arriving.
+      // ── elsewhere ────────────────────────────────────────────
       const hr = await jget("/api/v1/messaging/rns/heard");
       const hn = (hr.ok && hr.d.heard) ? hr.d.heard.length : 0;
-      items.push({ type: "nav", label: `» HEARD ANNOUNCES (${hn})`, to: "rns_heard" });
-      items.push({ type: "nav", label: "» INTERFACES", to: "rns_ifaces" });
-
+      items.push({ type: "nav", label: "» ADD CONTACT", to: "rns_add" });
+      items.push({ type: "nav", label: `» NETWORK (${hn} heard)`, to: "rns_heard" });
+      items.push({ type: "nav", label: "» NODE STATUS & INTERFACES", to: "rns_node" });
       return { items };
     },
   },
 
-  // Reticulum interfaces (rnsd): per-interface traffic + client counts. Split
-  // off the main Reticulum page to keep that page focused on status/contacts.
-  // Data comes from the shared-instance control socket via /api/v1/reticulum.
-  rns_ifaces: {
-    title: "Interfaces",
+  // Reticulum node status: rnsd up/uptime/path count, per-interface traffic +
+  // client counts, and the radio config pages. Data from the shared-instance
+  // control socket via /api/v1/reticulum.
+  rns_node: {
+    title: "Reticulum Node",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
@@ -853,30 +912,35 @@ const PAGES = {
       if (!ok || !s.running) {
         items.push({ type: "content", html: `<div class="content">` +
           `<div class="off">rnsd is not running — no Reticulum status available</div></div>` });
-        return { items };
-      }
-      // Hide the internal Shared Instance row.
-      const ifaces = (s.interfaces || []).filter((i) =>
-        !(i.short_name || i.name || "").startsWith("Shared Instance"));
-      let h = `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div>`;
-      if (!ifaces.length) {
-        h += `<div class="off">no interfaces configured</div>`;
       } else {
-        h += `<table><tr><th>Interface</th><th>Mode</th><th>State</th>` +
-          `<th>RX</th><th>TX</th><th>Clients</th></tr>`;
-        ifaces.forEach((i) => {
-          const cls = i.up ? "ok" : "warn";
-          const clients = i.clients != null ? i.clients : "—";
-          h += `<tr><td>${esc(i.short_name || i.name)}</td>` +
-            `<td>${esc(i.mode)}</td>` +
-            `<td class="${cls}">${i.up ? "up" : "down"}</td>` +
-            `<td>${fmtBytes(i.rxb)}</td><td>${fmtBytes(i.txb)}</td>` +
-            `<td>${esc(clients)}</td></tr>`;
-        });
-        h += `</table>`;
+        const t = s.transport || {};
+        // Hide the internal Shared Instance row.
+        const ifaces = (s.interfaces || []).filter((i) =>
+          !(i.short_name || i.name || "").startsWith("Shared Instance"));
+        let h = `<div class="content">` +
+          `<div class="kv"><span>rnsd <b class="ok">up</b></span>` +
+          `<span>uptime <b>${t.uptime != null ? fmtDur(t.uptime) : "—"}</b></span>` +
+          `<span>paths <b>${s.path_count}</b></span></div>` +
+          `<div class="page-title" style="padding-left:0">Interfaces</div>`;
+        if (!ifaces.length) {
+          h += `<div class="off">no interfaces configured</div>`;
+        } else {
+          h += `<table><tr><th>Interface</th><th>Mode</th><th>State</th>` +
+            `<th>RX</th><th>TX</th><th>Clients</th></tr>`;
+          ifaces.forEach((i) => {
+            const cls = i.up ? "ok" : "warn";
+            const clients = i.clients != null ? i.clients : "—";
+            h += `<tr><td>${esc(i.short_name || i.name)}</td>` +
+              `<td>${esc(i.mode)}</td>` +
+              `<td class="${cls}">${i.up ? "up" : "down"}</td>` +
+              `<td>${fmtBytes(i.rxb)}</td><td>${fmtBytes(i.txb)}</td>` +
+              `<td>${esc(clients)}</td></tr>`;
+          });
+          h += `</table>`;
+        }
+        h += `</div>`;
+        items.push({ type: "content", html: h });
       }
-      h += `</div>`;
-      items.push({ type: "content", html: h });
       items.push({ type: "nav", label: "» CONFIGURE RNODE (LoRa radio)", to: "rns_rnode" });
       items.push({ type: "nav", label: "» CONFIGURE MODEM73 (soundmodem)", to: "rns_modem73" });
       return { items };
@@ -1463,180 +1527,65 @@ const PAGES = {
     },
   },
 
-  // Reticulum/LXMF Direct Messages: the saved contacts, each opening a
-  // conversation. Node status, this node's address and the Announce button are
-  // on the main Reticulum page; adding new contacts (my card, mesh nodes, paste
-  // link) lives on the Add Contacts page (rns_add), not here.
-  rns_nodes: {
-    title: "Direct Messages",
-    dynamic: 5000,
-    onEnter: (S) => msgWsOpen(S),
-    onLeave: () => msgWsClose(),
-    async build() {
-      const st = await jget("/api/v1/messaging/rns/status");
-      const items = [];
-      const s = st.ok ? st.d : {};
-      if (!s.enabled) {
-        items.push({ type: "content", html: `<div class="content">` +
-          `<div class="off">Reticulum messaging is disabled</div>` +
-          `<div class="hint" style="padding-left:0">Enable messaging.rns.enabled ` +
-          `in the config, then apply.</div></div>` });
-        return { items };
-      }
-
-      // ── saved contacts ──────────────────────────────────────
-      const r = await jget("/api/v1/messaging/rns/contacts");
-      const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
-      items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">Contacts</div>` +
-        (contacts.length ? "" : `<div class="off">no contacts yet — add one on the Add Contacts page</div>`) + `</div>` });
-      // Path state per contact (known/hops + age) is shown on the same row, with
-      // an inline REQ PATH button. Reads are parallel and emit no RNS traffic.
-      const paths = await Promise.all(contacts.map((c) =>
-        jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(c.lxmf_hash) + "/path")));
-      contacts.forEach((c, i) => {
-        const who = rnsName(c);
-        const key = c.pubkey ? "" : "  ·  no key yet";
-        const pr = paths[i];
-        const path = (pr && pr.ok && pr.d.path) ? pr.d.path : { known: false };
-        let pstr;
-        if (path.known) {
-          // Show the ACTUAL Reticulum interface the path was learned on (any
-          // transport — RNode, TCP, AutoInterface, …), not an assumed "mesh".
-          const via = rnsIface(path.interface);
-          const hops = path.hops != null
-            ? `${path.hops} hop${path.hops === 1 ? "" : "s"}` : "? hops";
-          const age = path.updated ? `, ${ago(path.updated)}` : "";
-          pstr = `${via} · ${hops}${age}`;
-        } else {
-          const seen = RNS_PATH_SEEN[c.lxmf_hash];
-          pstr = seen ? `no path · req ${ago(seen)} ago` : "no path";
-        }
-        items.push({
-          type: "nav",
-          label: `${who}${key}  ·  ${pstr}`,
-          to: "rns_chat",
-          onEnter: (S) => S.go("rns_chat", { hash: c.lxmf_hash, host: who }),
-          action: { label: "req path", onRun: (S) => rnsRequestPath(S, c.lxmf_hash) },
-        });
-      });
-
-      // Rename/remove live off the message log — they're contact admin, not
-      // messaging — so they sit behind one page reached from here.
-      if (contacts.length) {
-        items.push({ type: "nav", label: "» Modify contacts", to: "rns_edit" });
-      }
-
-      return { items };
-    },
-  },
-
-  // Modify Contacts: rename or remove any saved contact. Kept off the per-peer
-  // message log (rns_chat) so the log is messaging only. Both actions transmit
-  // nothing — they just edit/forget the local contact store.
-  rns_edit: {
-    title: "Modify Contacts",
-    async build() {
-      const items = [];
-      const r = await jget("/api/v1/messaging/rns/contacts");
-      const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
-      items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">Modify contacts</div>` +
-        `<div class="hint" style="padding-left:0">Rename or remove a saved contact.</div>` +
-        (contacts.length ? "" : `<div class="off">no contacts yet</div>`) + `</div>` });
-      contacts.forEach((c) => {
-        const who = rnsName(c);
-        const hash = (c.lxmf_hash || "").slice(0, 10);
-        items.push({ type: "content", html: `<div class="content">` +
-          `<div class="kv"><span>${esc(who)}</span><span class="hint">${esc(hash)}</span></div></div>` });
-        items.push({ type: "button", label: `» Rename ${who}`,
-          onEnter: (S) => rnsRename(S, c.lxmf_hash, who) });
-        items.push({ type: "button", label: `» Remove ${who}`,
-          onEnter: (S) => rnsRemove(S, c.lxmf_hash, who) });
-      });
-      return { items };
-    },
-  },
-
-  // Heard Announces: lxmf.delivery announces this node has heard on-air
-  // (in-memory, cleared on daemon restart). Receive-only — discovery stays
-  // out-of-band/contact-based. Each row can be added to contacts or dismissed;
-  // neither transmits anything.
+  // Network (NomadNet-style): lxmf.delivery announces this node has heard
+  // on-air (in-memory, cleared on daemon restart). Kept off the landing page so
+  // a busy/internet-connected network can't flood the contact list. Each row
+  // can be added to contacts or ignored; neither transmits anything.
   rns_heard: {
-    title: "Heard Announces",
+    title: "Network",
     dynamic: 5000,
     async build() {
       const items = [];
       const r = await jget("/api/v1/messaging/rns/heard");
       const heard = (r.ok && r.d.heard) ? r.d.heard : [];
       items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">Heard announces</div>` +
-        `<div class="hint" style="padding-left:0">lxmf.delivery announces heard on-air. ` +
-        `Not saved — cleared when the daemon restarts. Add one to contacts or dismiss it.</div>` +
+        `<div class="hint" style="padding-left:0">LXMF announces heard on-air, newest first. ` +
+        `Not saved — cleared when the daemon restarts. Tap to add as a contact.</div>` +
         (heard.length ? "" : `<div class="off">nothing heard yet</div>`) + `</div>` });
+      heard.sort((a, b) => (b.last_heard || 0) - (a.last_heard || 0));
       heard.forEach((h) => {
         const who = (h.announced_name || "").trim() || (h.lxmf_hash || "").slice(0, 10);
-        const hash = (h.lxmf_hash || "").slice(0, 10);
-        const key = h.pubkey ? "" : "  ·  no key";
-        const seen = `${h.count || 1}×, ${ago(h.last_heard)} ago`;
-        items.push({ type: "content", html: `<div class="content">` +
-          `<div class="kv"><span>${esc(who)}${esc(key)}</span>` +
-          `<span class="hint">${esc(hash)} · ${esc(seen)}</span></div></div>` });
-        items.push({ type: "button", label: `» Add ${who} to contacts`,
-          onEnter: (S) => rnsHeardAdd(S, h.lxmf_hash, who) });
-        items.push({ type: "button", label: `» Dismiss ${who}`,
-          onEnter: (S) => rnsHeardDelete(S, h.lxmf_hash, who) });
+        const key = h.pubkey ? "" : " · no key";
+        items.push({ type: "button",
+          label: `+ ${who}  ·  ${(h.lxmf_hash || "").slice(0, 10)}${key}  ·  ` +
+            `${h.count || 1}×, ${ago(h.last_heard)} ago`,
+          onEnter: (S) => rnsHeardAdd(S, h.lxmf_hash, who),
+          action: { label: "ignore", onRun: (S) => rnsHeardDelete(S, h.lxmf_hash, who) } });
       });
       return { items };
     },
   },
 
-  // Add Contacts: add any LXMF contact by its destination hash (the standard
-  // Reticulum address every client shows), with an optional nickname; plus a
-  // one-tap Add for Nucleus nodes found on the WiFi mesh. This node's own
-  // destination hash to share is in the "Share me" section at the top.
+  // Add Contact: by lxmf.delivery destination hash (the standard address any
+  // LXMF client shows) + optional nickname, or one-tap from Nucleus nodes found
+  // on the WiFi mesh. My own address is on the Reticulum landing page.
   rns_add: {
-    title: "Add Contacts",
+    title: "Add Contact",
     async build() {
       const st = await jget("/api/v1/messaging/rns/status");
       const items = [];
       const s = st.ok ? st.d : {};
       if (!s.enabled) {
         items.push({ type: "content", html: `<div class="content">` +
-          `<div class="off">Reticulum messaging is disabled</div>` +
-          `<div class="hint" style="padding-left:0">Enable messaging.rns.enabled ` +
-          `in the config, then apply.</div></div>` });
+          `<div class="off">Reticulum messaging is disabled</div></div>` });
         return { items };
       }
-      // ── share: my destination hash ───────────────────────────
-      let share = `<div class="content"><div class="page-title" style="padding-left:0">Share me</div>`;
-      share += `<div class="hint" style="padding-left:0">Give this to anyone who wants to ` +
-        `message you — it works in Sideband, MeshChat, NomadNet or another Nucleus node.</div>`;
-      if (s.address) {
-        share += `<div class="kv"><span>my lxmf.delivery destination hash</span></div>` +
-          `<div class="hint" style="padding-left:0;word-break:break-all"><b>${esc(s.address)}</b></div>`;
-      } else {
-        share += `<div class="off">destination hash not ready — rnsd/lane still starting</div>`;
-      }
-      share += `</div>`;
-      items.push({ type: "content", html: share });
-
       // ── add by destination hash (keyless, transmits nothing) ──
       items.push({ type: "content", html: `<div class="content">` +
-        `<div class="page-title" style="padding-left:0">Add a contact</div>` +
-        `<div class="hint" style="padding-left:0">Paste their lxmf.delivery destination hash ` +
-        `(32 hex chars) and an optional nickname. Saved with no key yet — press ` +
-        `<b>req path</b> on the contact to fetch its key. Nothing is sent.</div></div>` });
-      items.push({ type: "ftext", label: "Destination hash", value: RNS_ADD_HASH, max: 64,
+        `<div class="page-title" style="padding-left:0">By address</div>` +
+        `<div class="hint" style="padding-left:0">Their lxmf.delivery address (32 hex) from ` +
+        `Sideband, MeshChat, NomadNet or another node. Saved with no key yet — ` +
+        `<b>req path</b> fetches it. Nothing is sent.</div></div>` });
+      items.push({ type: "ftext", label: "Address", value: RNS_ADD_HASH, max: 64,
         onChange: (v) => RNS_ADD_HASH = v });
       items.push({ type: "ftext", label: "Nickname", value: RNS_ADD_NAME, max: 40,
-        onChange: (v) => RNS_ADD_NAME = v });
+        placeholder: "optional", onChange: (v) => RNS_ADD_NAME = v });
       items.push({ type: "button", label: "» Add contact", onEnter: rnsAddHash });
 
       // ── Nucleus nodes on the WiFi mesh (pull their cards) ────
-      const r = await jget("/api/v1/messaging/rns/contacts");
+      const [r, mp] = await Promise.all([
+        jget("/api/v1/messaging/rns/contacts"), jget("/api/v1/messaging/rns/mesh-peers")]);
       const contacts = (r.ok && r.d.contacts) ? r.d.contacts : [];
-      const mp = await jget("/api/v1/messaging/rns/mesh-peers");
       const mesh = (mp.ok && mp.d.peers) ? mp.d.peers : [];
       const known = new Set(contacts.map((c) => c.lxmf_hash));
       const addable = mesh.filter((p) => p.card && !known.has(p.card.lxmf_hash));
@@ -1645,14 +1594,17 @@ const PAGES = {
         (addable.length ? "" : `<div class="off">no new nodes found on the mesh</div>`) + `</div>` });
       addable.forEach((p) => {
         const who = p.card.name || String(p.card.id || p.ip);
-        items.push({ type: "button", label: `» Add ${who} (${p.ip})`,
+        items.push({ type: "button", label: `+ ${who} (${p.ip})`,
           onEnter: (S) => rnsAddMesh(S, p.card) });
       });
       return { items };
     },
   },
 
-  // Reticulum/LXMF per-peer conversation. params: {hash, host}.
+  // Reticulum/LXMF conversation. params: {hash, host}. The log, then a contact
+  // bar (name · path · REQ PATH) pinned just above the compose box; tapping the
+  // bar opens the contact page (rename / remove / full address). Opening the
+  // conversation marks it read.
   rns_chat: {
     title: "DM",
     stickBottom: true,
@@ -1668,9 +1620,12 @@ const PAGES = {
           `<div class="warn">no peer selected</div></div>` });
         return { items };
       }
-      const r = await jget("/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer));
+      const [r, pr] = await Promise.all([
+        jget("/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer)),
+        jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer) + "/path")]);
       if (r.ok) (r.d.messages || []).forEach(rnsUpsert);
       const list = RNS_CACHE[peer] || [];
+      if (list.length) rnsMarkRead(peer, list[list.length - 1].ts);
       let h = `<div class="content">`;
       if (!r.ok) h += `<div class="warn">messaging service unavailable</div>`;
       else if (!list.length) h += `<div class="off">no messages yet</div>`;
@@ -1686,10 +1641,59 @@ const PAGES = {
       }
       h += `</div>`;
       items.push({ type: "content", html: h });
+      items.push({ type: "nav",
+        label: `${p.host || peer.slice(0, 10)}  ·  ${rnsPathStr(pr, peer)}  ·  contact »`,
+        to: "rns_contact",
+        onEnter: (S) => S.go("rns_contact", { hash: peer }),
+        action: { label: "req path", onRun: (S) => rnsRequestPath(S, peer) } });
       items.push({ type: "compose", key: "rns_text", value: RNS_DRAFT, max: 200,
         placeholder: "Type a message",
         sendLabel: "Send", onChange: (v) => RNS_DRAFT = v,
         onSubmit: (S, text) => rnsSend(S, peer, text) });
+      return { items };
+    },
+  },
+
+  // Contact page: everything about one saved contact — full address, names,
+  // key/path state — and its admin actions (rename, req path, remove). Rename
+  // and remove transmit nothing; req path emits one path request.
+  rns_contact: {
+    title: "Contact",
+    dynamic: 5000,
+    async build(params) {
+      const peer = (params || {}).hash;
+      const items = [];
+      const [cr, pr] = await Promise.all([
+        jget("/api/v1/messaging/rns/contacts"),
+        jget("/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer || "") + "/path")]);
+      const c = ((cr.ok && cr.d.contacts) || []).find((x) => x.lxmf_hash === peer);
+      if (!c) {
+        items.push({ type: "content", html: `<div class="content">` +
+          `<div class="off">contact not found (removed?)</div></div>` });
+        return { items };
+      }
+      const who = rnsName(c);
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="page-title" style="padding-left:0">${esc(who)}</div>` +
+        `<div class="kv"><span class="k">address</span><span style="word-break:break-all">` +
+        `<b>${esc(c.lxmf_hash)}</b></span></div>` +
+        `<div class="kv"><span class="k">nickname</span><span>${esc(c.name || "—")}</span></div>` +
+        `<div class="kv"><span class="k">announced name</span><span>${esc(c.announced_name || "—")}</span></div>` +
+        `<div class="kv"><span class="k">key</span><span class="${c.pubkey ? "ok" : "warn"}">` +
+        `${c.pubkey ? "known" : "not yet — req path"}</span></div>` +
+        `<div class="kv"><span class="k">path</span><span>${esc(rnsPathStr(pr, peer))}</span></div>` +
+        `<div class="kv"><span class="k">added via</span><span>${esc(c.source || "—")}` +
+        `${c.added ? ", " + ago(c.added) + " ago" : ""}</span></div>` +
+        `<div class="kv"><span class="k">last heard</span><span>` +
+        `${c.last_seen ? ago(c.last_seen) + " ago" : "never"}</span></div></div>` });
+      items.push({ type: "button", label: "» Message",
+        onEnter: (S) => S.go("rns_chat", { hash: peer, host: who }) });
+      items.push({ type: "button", label: "» Rename (nickname)",
+        onEnter: (S) => rnsRename(S, peer, c.name || "") });
+      items.push({ type: "button", label: "» Request path",
+        onEnter: (S) => rnsRequestPath(S, peer) });
+      items.push({ type: "button", label: "» Remove contact",
+        onEnter: (S) => rnsRemove(S, peer, who) });
       return { items };
     },
   },
@@ -2016,7 +2020,21 @@ async function rnsRemove(S, peer, who) {
   const { ok, d } = await jsend("DELETE",
     "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer));
   if (!ok) return S.msg("remove failed: " + (d.detail || "error"), false);
+  // The contact page no longer has anything to show — leave it.
   S.msg("removed");
+  return S.back();
+}
+
+// Set this node's name (WiFi/LoRa chat sender + LXMF announce display name).
+// Persists messaging.display_name and live-updates the daemon; blank resets to
+// the hostname. Transmits nothing — peers see it on the next announce.
+async function rnsSetMyName(S, cur) {
+  const name = (typeof prompt === "function")
+    ? prompt("This node's name (chat + Reticulum announces). Blank = hostname:", cur || "") : null;
+  if (name === null) return;
+  const { ok, d } = await jsend("PUT", "/api/v1/messaging/name", { name: name.trim() });
+  if (!ok) return S.msg("rename failed: " + (d.detail || "error"), false);
+  S.msg(`name set to ${d.name} — announce to publish it` + (d.live ? "" : " (daemon not running)"));
   return S.reload();
 }
 

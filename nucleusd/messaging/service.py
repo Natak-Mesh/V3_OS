@@ -128,7 +128,7 @@ def load_config() -> dict:
         "dedupe_window_secs": m.dedupe_window_secs,
         "history_limit": m.history_limit,
         "node_id": cfg.node.id,
-        "sender": cfg.node.hostname,
+        "sender": cfg.messaging_name,
         "mesh_ttl": cfg.mesh.mesh_802_ttl,
         "rns_enabled": m.rns.enabled,
         "rns_announce_mode": m.rns.announce_mode,
@@ -418,11 +418,17 @@ class MessagingService:
                 "count": len(self.store.history()),
                 "rns": self._rns_status(),
             }
+        if cmd == "set_name":
+            return self._set_name(req.get("name", ""))
         # ── Reticulum/LXMF direct-message commands ───────────────
         if cmd == "rns_contacts":
             return self._rns_contacts_list()
         if cmd == "rns_history":
             return self._rns_history(req.get("peer"), float(req.get("since", 0) or 0))
+        if cmd == "rns_latest":
+            if not (self.rns_enabled and self._rns_store):
+                return {"ok": True, "latest": {}}
+            return {"ok": True, "latest": self._rns_store.latest()}
         if cmd == "rns_send":
             return self._rns_send(req.get("dest", ""), req.get("text", ""))
         if cmd == "rns_card":
@@ -448,6 +454,23 @@ class MessagingService:
             return self._rns_heard_delete(req.get("dest", ""))
         return {"ok": False, "error": f"unknown cmd {cmd!r}"}
 
+    def _set_name(self, name: str) -> dict:
+        """Live-rename this node (chat sender + LXMF display name).
+
+        The API persists messaging.display_name first; this only makes the
+        running daemon use it without a restart. The new LXMF name goes out on
+        the next announce. Transmits nothing itself.
+        """
+        name = str(name or "").strip()
+        if not name:
+            return {"ok": False, "error": "empty name"}
+        self.sender = name
+        self.cfg["sender"] = name
+        if self._rns_lane is not None:
+            self._rns_lane.set_display_name(name)
+        log(f"renamed to sender={name!r}")
+        return {"ok": True, "name": name}
+
     # ── Reticulum/LXMF lane helpers ──────────────────────────────
     def _rns_status(self) -> dict:
         if not self.rns_enabled:
@@ -457,6 +480,7 @@ class MessagingService:
             "enabled": True,
             "started": bool(lane and lane.started),
             "address": lane.delivery_hash_hex if lane else None,
+            "name": self.sender,
             "announce_mode": self.cfg.get("rns_announce_mode", "manual"),
         }
 

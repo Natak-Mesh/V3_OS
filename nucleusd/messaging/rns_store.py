@@ -66,6 +66,11 @@ class ConversationStore:
             out.sort(key=lambda m: m["ts"])
             return out
 
+    def latest(self) -> dict[str, dict]:
+        """Newest message per peer ({peer: msg}) for the contact-list preview."""
+        with self._lock:
+            return {p: dict(conv[-1]) for p, conv in self._convs.items() if conv}
+
     def peers(self) -> list[str]:
         with self._lock:
             return list(self._convs.keys())
