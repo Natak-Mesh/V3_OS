@@ -283,6 +283,23 @@ let MC_NODE = null;        // open node id on the node page
 let MC_REPLY = null;       // message being replied to: {chat, pkt_id, from, text}
 let MC_LAST = { chat: null, messages: [] };   // last fetched conversation
 let MC_FILTER = "";
+
+// Menu new-message dots. Never throw: any failure → false (no dot).
+async function mcHasUnread() {
+  try {
+    const { ok, d } = await jget(MC);
+    return ok && (d.chats || []).some((c) => c.unread > 0);
+  } catch (e) { return false; }
+}
+async function rnsHasUnread() {
+  try {
+    const { ok, d } = await jget("/api/v1/messaging/rns/latest");
+    if (!ok || !d.latest) return false;
+    const read = rnsReadMap();
+    return Object.entries(d.latest).some(([hash, l]) =>
+      l && l.direction === "in" && l.ts > (read[hash] || 0));
+  } catch (e) { return false; }
+}
 let MC_SORT = "heard";
 let MC_SHOW = "all";
 
@@ -419,26 +436,27 @@ const PAGES = {
   // Dashboard: a menu; live data lives in the persistent header.
   home: {
     title: "Main Menu",
+    dynamic: 5000,
     async build() {
+      const [{ ok: sok, d: st }, { ok, d: tak }, mcNew, rnsNew] = await Promise.all([
+        jget("/api/v1/status"), jget("/api/v1/tak/status"), mcHasUnread(), rnsHasUnread()]);
       const items = [
         { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
         { type: "nav", label: "MESSAGING", to: "messaging" },
         { type: "nav", label: "VOICE (PTT)", to: "voice" },
-        { type: "nav", label: "MESHTASTIC", to: "meshtastic" },
+        { type: "nav", label: `${mcNew ? "● " : ""}MESHTASTIC`, to: "meshtastic" },
         { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
         { type: "nav", label: "RADIOS (RF ON/OFF)", to: "radios" },
-        { type: "nav", label: "RETICULUM", to: "reticulum" },
+        { type: "nav", label: `${rnsNew ? "● " : ""}RETICULUM`, to: "reticulum" },
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
       ];
       // HaLow is a plug-in USB radio: show its config entry only when the
       // halow0 interface is present (radios.halow.present from live status).
-      const { ok: sok, d: st } = await jget("/api/v1/status");
       if (sok && st.radios && st.radios.halow && st.radios.halow.present) {
         items.push({ type: "nav", label: "HALOW", to: "halow" });
       }
       // TAK Server is optional; show the menu entry only when it's installed.
-      const { ok, d: tak } = await jget("/api/v1/tak/status");
       if (ok && tak.installed) {
         const label = tak.variant === "opentakserver" ? "OPENTAKSERVER" : "TAK SERVER";
         items.push({ type: "nav", label, to: "tak" });
@@ -1176,8 +1194,9 @@ const PAGES = {
   // of several collapsible sections stacked on one screen.
   meshtastic: {
     title: "Meshtastic Radio",
+    dynamic: 5000,
     async build() {
-      const { d: s } = await jget(MB + "/status");
+      const [{ d: s }, mcNew] = await Promise.all([jget(MB + "/status"), mcHasUnread()]);
       const statusLine =
         `radio: ${s.radio_detected ? "detected" : "not detected"} · ` +
         `bridge: ${s.service_active ? "running" : "stopped"}` +
@@ -1186,7 +1205,7 @@ const PAGES = {
         items: [
           { type: "content", html: `<div class="content"><div class="kv">` +
             `<span>${esc(statusLine)}</span></div></div>` },
-          { type: "nav", label: "CHATS", to: "mc_chats" },
+          { type: "nav", label: `${mcNew ? "● " : ""}CHATS`, to: "mc_chats" },
           { type: "nav", label: "NODES", to: "mc_nodes" },
           { type: "nav", label: "POSITIONS", to: "mc_positions" },
           { type: "nav", label: "RADIO CONFIGURATION", to: "mt_radio" },
