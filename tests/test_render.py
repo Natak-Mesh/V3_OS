@@ -37,9 +37,9 @@ def test_reticulum_config_defaults():
     assert "mode = boundary" not in r
     assert "Entry Node" not in r
     assert "target_host = 173.230.150.24" not in r
-    # Both local interfaces (AutoInterface + TCPServer) are internal so
-    # announces are not flooded.
-    assert r.count("mode = internal") == 2
+    # AutoInterface is full; TCPServer is internal so announces are not flooded.
+    assert r.count("mode = internal") == 1
+    assert "mode = full" in r
     # The unused serial KISSInterface was removed; modem73 is the only KISS path.
     assert "KISSInterface" not in r
     # RNode on by default, bound to the stable udev symlink.
