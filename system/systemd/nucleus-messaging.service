@@ -15,6 +15,10 @@ User=natak
 Group=natak
 Environment=PYTHONUNBUFFERED=1
 StateDirectory=nucleus
+# WiFi+LoRa message history lives in RAM (/run): cleared on every boot, kept
+# across service restarts.
+RuntimeDirectory=nucleus-messaging
+RuntimeDirectoryPreserve=yes
 ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.messaging.service
 Restart=on-failure
 RestartSec=10

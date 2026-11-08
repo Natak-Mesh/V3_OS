@@ -11,6 +11,10 @@ User=natak
 Group=natak
 AmbientCapabilities=CAP_NET_RAW
 Environment=PYTHONUNBUFFERED=1
+# Meshtastic client chat store + node file: RAM (/run), so cleared on every
+# boot; kept across bridge restarts.
+RuntimeDirectory=nucleus-meshchat
+RuntimeDirectoryPreserve=yes
 # Run the bridge module out of the installed nucleusd venv.
 ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.meshtastic.cot_bridge
 Restart=on-failure

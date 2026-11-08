@@ -1,6 +1,38 @@
 # Meshtastic Radio page
 
-Configure the local Meshtastic LoRa radio and align its channel with peers.
+Configure the local Meshtastic LoRa radio and align its channel with peers, and
+use it as a regular Meshtastic node (CHATS / NODES / POSITIONS).
+
+## Meshtastic client
+
+For use without ATAK — what the Meshtastic phone app does, minus radio config
+(that stays on the pages below / `config.yaml`). Everything goes through the CoT
+bridge, which stays the radio's only client, so CoT, voice, heartbeat and
+messaging are unaffected. Requires the CoT bridge to be running; sending is
+refused while the radio is receive-only.
+
+- **CHATS** — status strip (this node, nodes online in the last 2 h, channel
+  utilisation, airtime TX) and one entry per channel (`#`) and DM (`@`), with
+  `● n` unread counts. In a chat:
+  - type + **Send**; DMs show delivery state (`sending` / `delivered` / `failed`).
+  - **» REPLY / REACT** — pick a message: Enter replies to it, **react** sends an
+    emoji reaction. Replies show `↪ sender: text`; reactions show under the message.
+- **NODES** — every node in the radio's node DB. **Filter** (name or `!id`),
+  **Sort** (heard / name / hops / snr / distance), **Show** (all / favorites /
+  ignored). Favorites are listed first. Open a node for hardware, role, battery,
+  channel util, uptime, position, distance/bearing and:
+  **DIRECT MESSAGE**, **TRACEROUTE** (result shown on the page with per-hop SNR),
+  **REQUEST POSITION**, **REQUEST TELEMETRY**, **FAVORITE**, **IGNORE**
+  (hides the node's messages and DM chat).
+- **POSITIONS** — distance and bearing from this node to every node with a
+  position, nearest first. Needs this node's own position.
+
+Chat history is RAM-only (`/run/nucleus-meshchat/`, max 500 messages per chat):
+kept across bridge restarts, **cleared on every boot**. Favorites, ignored nodes
+and read marks persist in `/var/lib/nucleus/meshclient.json`.
+
+Plain primary-channel broadcasts also appear in [Messaging](messaging.md); DMs,
+secondary channels and reactions appear only here.
 
 ## Status
 
