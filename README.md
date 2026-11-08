@@ -104,7 +104,10 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
 (rendered shell script) work:
 
 1. **systemd-networkd** — `br-lan` bridge, static addresses on `wlan1`/`br-lan`,
-   `eth0` wiring (WAN DHCP client or LAN).
+   `eth0` wiring (WAN DHCP client or LAN). networkd owns eth0 alone: once
+   `40-eth0.network` exists and systemd-resolved is active, `apply` marks eth0
+   unmanaged in NetworkManager and removes NM's netplan eth0 file (two DHCP
+   clients on eth0 made the address flap). DNS comes via systemd-resolved.
 2. **`nucleus-mesh.service`** runs `nucleus-mesh-up.sh`:
    - `wlan1` into 802.11s mesh mode, SAE/WPA3 join (`wpa_supplicant-mesh.conf`),
    - **HWMP off** (`mesh_fwding=0`) — Babel owns all L3 routing,

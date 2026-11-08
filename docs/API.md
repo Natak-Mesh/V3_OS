@@ -478,7 +478,7 @@ curl -s http://localhost:8080/api/v1/reticulum/status
 #  "transport":{"transport_id":"5fdaeff7...","uptime":2220.5,
 #    "rxb":385411,"txb":777338,"rxs":0.0,"txs":0.0},
 #  "interfaces":[{"name":"AutoInterface[Mesh AutoInterface]",
-#    "short_name":"Mesh AutoInterface","up":true,"mode":"internal",
+#    "short_name":"Mesh AutoInterface","up":true,"mode":"full",
 #    "bitrate":10000000,"rxb":0,"txb":0,"rxs":0.0,"txs":0.0,
 #    "announces_in":0.0,"announces_out":0.0,"clients":null}, ...],
 #  "path_count":2810}

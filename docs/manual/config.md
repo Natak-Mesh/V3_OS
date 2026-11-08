@@ -64,6 +64,11 @@ link-local (`LinkLocalAddressing=ipv6`, `IPv6AcceptRA=no`) so Reticulum's
 AutoInterface can peer over eth0 with no router/RA present. The `wan` branch is
 unchanged (it owns the DHCP/DNS path).
 
+eth0 is owned by systemd-networkd only. On apply, once the eth0 network config
+exists and systemd-resolved is active, NetworkManager is taken off eth0 (marked
+unmanaged, its netplan eth0 file removed) so only one DHCP client runs there.
+DNS learned on eth0 reaches `/etc/resolv.conf` through systemd-resolved.
+
 ## Meshtastic Radio
 
 | Field | Notes |
