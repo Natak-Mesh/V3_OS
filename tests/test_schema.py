@@ -240,7 +240,7 @@ def test_subnet_collision_rejected():
 
 
 def test_tx_min_interval_default():
-    assert cfg().meshtastic.tx_min_interval_secs == 30
+    assert cfg().meshtastic.tx_min_interval_secs == 2
 
 
 def test_tx_min_interval_bounds_accepted():

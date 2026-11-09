@@ -1588,7 +1588,7 @@ const PAGES = {
       if (TXR === null) {
         const { d: cfg } = await jget("/api/v1/config");
         const mt = cfg.meshtastic || {};
-        TXR = mt.tx_min_interval_secs ?? 30;
+        TXR = mt.tx_min_interval_secs ?? 2;
       }
       return {
         items: [
