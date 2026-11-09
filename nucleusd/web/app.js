@@ -8,7 +8,7 @@ const MB = "/api/v1/meshtastic";
 // Pure client-side preference (no backend/config): the palette, font and base
 // size are driven by [data-theme] on <html> (see cli.css). "classic" is the
 // implicit default — no attribute, matching the pre-paint loader in index.html.
-const THEMES = ["classic", "htop"];
+const THEMES = ["classic", "htop", "day", "dark", "night"];
 function getTheme() {
   try { return localStorage.getItem("nucleus-theme") || "classic"; }
   catch (e) { return "classic"; }
@@ -1790,8 +1790,10 @@ const PAGES = {
             value: getTheme(), onChange: (v) => setTheme(v) },
           { type: "content", html: `<div class="content"><div class="hint" ` +
             `style="padding-left:0">Classic: neon green terminal. htop: muted ` +
-            `ANSI colours and the Terminus console font. Saved in this browser ` +
-            `only.</div></div>` },
+            `ANSI colours and the Terminus console font. Day: dark on light ` +
+            `for sunlight. Dark: low-glare grey. Night: red on black, turn ` +
+            `brightness down. Day/dark/night use the Atkinson Hyperlegible ` +
+            `font. Saved in this browser only.</div></div>` },
           { type: "content", html: `<div class="content"><div class="page-title" ` +
             `style="padding-left:0">Power</div></div>` },
           { type: "content", html: `<div class="content"><div class="kv">` +

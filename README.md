@@ -81,7 +81,7 @@ Everything flows one direction, from one file:
 | `power.py` | Imperative node power control (reboot / power off) via `systemctl`; the router/API only relays to it. |
 | `meshtastic/lora_freq.py` | Pure LoRa frequency math — region/preset/channel → slot + band edges (MHz); drives the radio-config page's frequency readout. |
 | `templates/` | Jinja2 templates, named after their destination. |
-| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum pages (contacts landing, conversation, contact, network, node status) are in `app.js`. Selectable display theme (classic / htop) with a bundled Terminus font. |
+| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum pages (contacts landing, conversation, contact, network, node status) are in `app.js`. Selectable display theme (classic / htop / day / dark / night) with bundled Terminus and Atkinson Hyperlegible Mono fonts. |
 | `mesh_peers.py` | Shared mesh-neighbour discovery helper: Babel neighbours (monitor on `[::1]:33123`) → per-node HTTP pulls. Used to fetch peers' contact cards for one-tap add. |
 
 Routers are thin HTTP layers: logic stays in the module/daemon they wrap.

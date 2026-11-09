@@ -9,7 +9,8 @@
    localStorage, applied by index.html before first paint. No backend/config. */
 
 /* Terminus console font, bundled so mesh clients with no internet still get it.
-   Regular + bold only; the htop theme uses it, classic keeps DejaVu Sans Mono. */
+   Regular + bold only; the htop theme uses it, classic keeps DejaVu Sans Mono,
+   day/dark/night use Atkinson Hyperlegible Mono (below). */
 @font-face {
   font-family: "Terminus";
   font-style: normal;
@@ -23,6 +24,24 @@
   font-weight: 700;
   font-display: swap;
   src: url("terminus-bold.woff2") format("woff2");
+}
+
+/* Atkinson Hyperlegible Mono (Braille Institute, OFL), bundled like Terminus.
+   Built for low-vision legibility: 0/O, 1/l/I, 5/S, 8/B are all distinct.
+   Used by the readability themes (day / dark / night). */
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("atkinson-mono.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("atkinson-mono-bold.woff2") format("woff2");
 }
 
 :root {
@@ -72,6 +91,77 @@
   /* Terminus renders smaller per px; bump all text so it reads larger than
      classic. Drives every calc()-wrapped font-size in this file. */
   --fscale: 1.4;
+}
+
+/* ── Readability themes (day / dark / night) ───────────────────
+   Field-use palettes for critical text: Atkinson Hyperlegible Mono, base text
+   >= 16px (15px * 1.1), and every text/status colour >= 7:1 (WCAG AAA) against
+   the background — except night, which is capped by pure-red luminance and
+   holds >= 4.5:1 (AA). Status colours keep the same semantic slots in every
+   theme; status text always carries a label, never colour alone.
+   Contrast floors are pinned in tests/test_theme.py. */
+
+/* day: sunlight-readable dark-on-light (dark themes wash out in direct sun). */
+[data-theme="day"] {
+  --bg-primary: #ffffff;
+  --bg-card: #f0f0f0;
+  --bg-deep: #ececec;
+  --bg-edit: #fff0c0;       /* pale amber edit field */
+  --border-color: #c8c8c8;
+  --scroll-thumb: #b0b0b0;
+  --text-primary: #111111;
+  --text-secondary: #454545;
+  --ok: #005a26;
+  --off: #a0000a;
+  --warn: #704600;
+  --accent: #0040a8;
+  --on-accent: #ffffff;
+  --on-voice: #ffffff;
+  --font: "Atkinson Hyperlegible Mono", "DejaVu Sans Mono", monospace;
+  --fscale: 1.1;
+}
+
+/* dark: Material-style #121212 + off-white (no pure white on pure black, which
+   halates), desaturated status colours instead of neon. */
+[data-theme="dark"] {
+  --bg-primary: #121212;
+  --bg-card: #1e1e1e;
+  --bg-deep: #0c0c0c;
+  --bg-edit: #1d2f45;
+  --border-color: #333333;
+  --scroll-thumb: #444444;
+  --text-primary: #dedede;
+  --text-secondary: #b0b0b0;
+  --ok: #81c995;
+  --off: #f49c94;
+  --warn: #fdd663;
+  --accent: #8ab4f8;
+  --on-accent: #121212;
+  --on-voice: #121212;
+  --font: "Atkinson Hyperlegible Mono", "DejaVu Sans Mono", monospace;
+  --fscale: 1.1;
+}
+
+/* night: red/amber on black only (red channel dominant everywhere) to preserve
+   dark adaptation and minimise light signature. Status colours are deliberately
+   close — read the label. Run with the screen brightness turned down. */
+[data-theme="night"] {
+  --bg-primary: #000000;
+  --bg-card: #140000;
+  --bg-deep: #000000;
+  --bg-edit: #2a0000;
+  --border-color: #3a0000;
+  --scroll-thumb: #3a0000;
+  --text-primary: #ff3a20;
+  --text-secondary: #e8261a;
+  --ok: #ff3a20;
+  --off: #ff6a30;
+  --warn: #ff8c3a;
+  --accent: #ff3a20;
+  --on-accent: #000000;
+  --on-voice: #000000;
+  --font: "Atkinson Hyperlegible Mono", "DejaVu Sans Mono", monospace;
+  --fscale: 1.1;
 }
 
 * { box-sizing: border-box; }
@@ -344,6 +434,9 @@ html, body {
 
 .qr { background: #fff; display: inline-block; padding: 8px; border-radius: 0; margin: 8px 14px; }
 .qr svg { width: 200px; height: 200px; }
+/* Night: the QR's white card is the only literal colour; dim it (contrast, and
+   so scannability, is preserved) rather than flash a white panel. */
+[data-theme="night"] .qr { filter: brightness(.45); }
 
 /* ── Fixed control bar (always present, same place) ─────────── */
 #ctrl {
