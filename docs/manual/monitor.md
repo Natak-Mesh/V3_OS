@@ -63,7 +63,7 @@ Empty means the radio is present but sees no other node over halow0. HaLow
 channel/bandwidth and on/off live on the [HaLow Mesh](halow.md) page (the `HALOW MESH`
 menu entry, also shown only when the radio is plugged in).
 
-## LoRa nodes
+## Meshtastic Nodes
 
 Meshtastic nodes heard over RF, from the CoT bridge. If cot-bridge is not
 running, LoRa visibility is unavailable. Nodes not heard in the last 15 min are

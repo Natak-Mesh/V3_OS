@@ -606,7 +606,7 @@ const PAGES = {
       // LoRa (Meshtastic) nodes heard over RF.
       const { d: md } = await jget(MB + "/nodes");
       const nodes = md.nodes || [];
-      h += `<div class="content"><div class="page-title" style="padding-left:0">LoRa nodes</div>`;
+      h += `<div class="content"><div class="page-title" style="padding-left:0">Meshtastic Nodes</div>`;
       if (!md.bridge_running) {
         h += `<div class="warn">cot-bridge not running — LoRa visibility unavailable</div>`;
       } else if (!nodes.length) {
