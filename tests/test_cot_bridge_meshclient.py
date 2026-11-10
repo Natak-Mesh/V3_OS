@@ -116,3 +116,27 @@ def test_control_bad_node_id(bridge):
     sock = _CtlSock({"cmd": "traceroute", "node": "bogus"})
     cot_bridge._client_control_loop(sock)
     assert sock.sent[0]["ok"] is False and "bad node id" in sock.sent[0]["error"]
+
+
+def test_traceroute_records_round_trip_time(bridge, monkeypatch):
+    """Link test: a traceroute reply stores the request->reply time (rtt_s)."""
+    from tests.meshtastic_fixtures import PEER, TRACEROUTE
+    # meshtastic isn't in the dev venv: stub the two protobuf names it imports.
+    pb = types.ModuleType("meshtastic.protobuf")
+    pb.mesh_pb2 = types.SimpleNamespace(RouteDiscovery=lambda: b"")
+    pb.portnums_pb2 = types.SimpleNamespace(
+        PortNum=types.SimpleNamespace(TRACEROUTE_APP=70))
+    monkeypatch.setitem(sys.modules, "meshtastic", types.ModuleType("meshtastic"))
+    monkeypatch.setitem(sys.modules, "meshtastic.protobuf", pb)
+    sent = {}
+    monkeypatch.setattr(cot_bridge, "_client_send_packet",
+                        lambda *a, on_response=None, **k: sent.update(cb=on_response))
+    monkeypatch.setattr(cot_bridge, "_dump_client_nodes", lambda: None)
+    clock = iter([1000.0, 1000.0, 1007.25, 1007.25])
+    monkeypatch.setattr(cot_bridge.time, "time", lambda: next(clock))
+    cot_bridge._client_traceroute("!21d4c2cc", PEER)
+    assert cot_bridge._traceroutes["!21d4c2cc"]["pending"] is True
+    sent["cb"]({"from": PEER, "decoded": dict(TRACEROUTE)})
+    tr = cot_bridge._traceroutes["!21d4c2cc"]
+    assert tr["rtt_s"] == 7.25
+    assert tr["route"]["towards"][-1] == "!21d4c2cc"

@@ -310,6 +310,71 @@ function mcDist(m) {
 function mcNodeName(n) {
   return n.long_name || n.short_name || n.id;
 }
+
+// ── Link test page state ─────────────────────────────────────────
+// Selected link + per-link target (fselect labels) and the last result HTML.
+const LT_LINKS = {
+  wifi: "Wi-Fi mesh (wlan1): ping + iperf3. The peer starts iperf3 only for the test.",
+  halow: "HaLow mesh (halow0): ping + iperf3. The peer starts iperf3 only for the test.",
+  lora: "Meshtastic LoRa: traceroute — hops, per-hop SNR and round-trip time. Uses airtime.",
+  reticulum: "Reticulum: rnprobe to a contact over whichever interface rnsd routes it " +
+    "(RNode LoRa, mesh, eth0). Shows RTT, hops and RNode RSSI/SNR. Can take ~40 s.",
+};
+let LT = { link: "wifi", mesh: "", lora: "", rns: "", result: "", busy: false };
+
+// Mesh peers by node id ("0047" -> 47) from Babel routes, neighbours and HaLow
+// radio peers. Every address is 10.20.1.<id> on wlan1, so the id is the host part.
+function ltMeshPeers(st) {
+  const ids = new Set();
+  const add = (ip) => { const m = /^10\.20\.1\.(\d+)$/.exec(ip || ""); if (m) ids.add(+m[1]); };
+  (st.mesh_nodes || []).forEach((n) => add(n.node));
+  (st.neighbour_nodes || []).forEach((n) => add(n.node));
+  (st.halow_peers || []).forEach((p) => add(p.ipv4));
+  const out = {};
+  [...ids].sort((a, b) => a - b).forEach((id) => { out[String(id).padStart(4, "0")] = id; });
+  return out;
+}
+
+function ltTraceHtml(tr) {
+  const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span>${esc(v)}</span></div>`;
+  if (tr.pending) return kv(`Traceroute (${ago(tr.ts)})`, "waiting for reply…");
+  if (tr.error) return kv(`Traceroute (${ago(tr.ts)})`, `failed: ${tr.error}`);
+  const hop = (ids, snr) => ids.map((x, i) => (i ? `${snr[i - 1] ?? "?"}dB → ` : "") + x).join(" ");
+  const r = tr.route;
+  return kv(`Traceroute (${ago(tr.ts)})`, hop(r.towards, r.snr_towards)) +
+    (r.back.length ? kv("Back", hop(r.back, r.snr_back)) : "") +
+    kv("Hops", `${r.towards.length - 2} towards` + (r.back.length ? ` / ${r.back.length - 2} back` : "")) +
+    (tr.rtt_s != null ? kv("Round trip", `${tr.rtt_s} s`) : "");
+}
+
+function ltResultHtml(kind, r) {
+  const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span>${esc(v ?? "—")}</span></div>`;
+  const lossCls = (p) => (p === 0 ? "ok" : "warn");
+  if (kind === "ping") {
+    const rtt = r.rtt_ms;
+    return kv("Ping", `${r.dev} → ${r.peer_ip}`) +
+      `<div class="kv"><span class="k">Received</span><span class="${lossCls(r.loss_pct)}">` +
+      `${r.received}/${r.sent} (loss ${r.loss_pct}%)</span></div>` +
+      kv("RTT min/avg/max", rtt ? `${rtt.min} / ${rtt.avg} / ${rtt.max} ms` : null);
+  }
+  if (kind === "iperf") {
+    return kv("Throughput", `${r.direction === "send" ? "send" : "receive"} ` +
+        `${r.dev} ${r.direction === "send" ? "→" : "←"} ${r.peer_ip}`) +
+      `<div class="kv"><span class="k">Rate</span><span class="ok">${r.mbps} Mbit/s</span></div>` +
+      kv("Transferred", `${fmtBytes(r.bytes)} in ${r.seconds} s`) +
+      kv("Retransmits", r.retransmits);
+  }
+  // rnprobe
+  if (r.error && !r.sent) return `<div class="warn">${esc(r.error)}</div>`;
+  const phy = [r.rssi_dbm != null ? `RSSI ${r.rssi_dbm} dBm` : null,
+    r.snr_db != null ? `SNR ${r.snr_db} dB` : null,
+    r.quality_pct != null ? `quality ${r.quality_pct}%` : null].filter(Boolean).join(" · ");
+  return kv("Probe", `<${r.dest}>`) +
+    `<div class="kv"><span class="k">Received</span><span class="${lossCls(r.loss_pct)}">` +
+    `${r.received}/${r.sent} (loss ${r.loss_pct}%)</span></div>` +
+    kv("RTT avg", r.rtt_avg_ms != null ? `${r.rtt_avg_ms} ms` : null) +
+    kv("Hops", r.hops) + kv("Interface", r.interface) + kv("Signal", phy || null);
+}
 // One-line status strip shared by the client pages.
 function mcStatusLine(s) {
   if (!s.bridge_running) return `<div class="warn">cot-bridge not running — radio unavailable</div>`;
@@ -564,6 +629,63 @@ const PAGES = {
       h += `</div>`;
 
       items.push({ type: "content", html: h });
+      items.push({ type: "nav", label: "» LINK TEST (ping / throughput)", to: "linktest" });
+      return { items };
+    },
+  },
+
+  // On-demand link tests to one peer: ping + iperf3 over wlan1/halow0,
+  // traceroute over Meshtastic LoRa, rnprobe over Reticulum. Nothing runs until
+  // a test button is pressed (see nucleusd/linktest.py).
+  linktest: {
+    title: "Link Test",
+    dynamic: 5000,
+    async build() {
+      const [{ d: st }, mc, rc] = await Promise.all([
+        jget("/api/v1/status"), jget(MC + "/nodes"),
+        jget("/api/v1/messaging/rns/contacts")]);
+      const items = [{ type: "fselect", label: "Link", value: LT.link,
+        options: Object.keys(LT_LINKS), onChange: (v) => { LT.link = v;
+          setTimeout(() => window.__shell.reload(), 0); } }];
+      const pick = (label, opts, key) => {
+        const names = Object.keys(opts);
+        if (!names.includes(LT[key])) LT[key] = names[0] || "";
+        if (!names.length) return items.push({ type: "content", html:
+          `<div class="content"><div class="off">no ${label.toLowerCase()}s known</div></div>` });
+        items.push({ type: "fselect", label, value: LT[key], options: names,
+          onChange: (v) => LT[key] = v });
+      };
+      if (LT.link === "wifi" || LT.link === "halow") {
+        pick("Peer", ltMeshPeers(st), "mesh");
+        items.push({ type: "button", label: "» PING", onEnter: (S) => ltRun(S, "ping") });
+        items.push({ type: "button", label: "» THROUGHPUT SEND (this node → peer)",
+          onEnter: (S) => ltRun(S, "iperf", false) });
+        items.push({ type: "button", label: "» THROUGHPUT RECEIVE (peer → this node)",
+          onEnter: (S) => ltRun(S, "iperf", true) });
+      } else if (LT.link === "lora") {
+        const nodes = (mc.ok && mc.d.nodes) || [];
+        const opts = {};
+        nodes.forEach((n) => { opts[`${mcNodeName(n)} ${n.id}`] = n; });
+        pick("Node", opts, "lora");
+        items.push({ type: "button", label: "» TRACEROUTE",
+          onEnter: (S) => ltRun(S, "traceroute", opts[LT.lora]) });
+        const n = opts[LT.lora];
+        if (n && n.traceroute) items.push({ type: "content", html:
+          `<div class="content">${ltTraceHtml(n.traceroute)}</div>` });
+      } else {
+        const opts = {};
+        ((rc.ok && rc.d.contacts) || []).forEach((c) => {
+          opts[`${rnsName(c)} <${c.lxmf_hash.slice(0, 8)}>`] = c.lxmf_hash; });
+        pick("Contact", opts, "rns");
+        items.push({ type: "button", label: "» PROBE (3 packets)",
+          onEnter: (S) => ltRun(S, "rnprobe", opts[LT.rns]) });
+      }
+      items.push({ type: "content", html: `<div class="content">` +
+        `<div class="hint" style="padding-left:0">${LT_LINKS[LT.link]}</div>` +
+        // The 5 s refresh clears the shell message; keep "running" visible here.
+        (LT.busy ? `<div class="warn">test running…</div>` : "") +
+        (LT.result ? `<div class="page-title" style="padding-left:0">Last result</div>` +
+          LT.result : "") + `</div>` });
       return { items };
     },
   },
@@ -2297,6 +2419,46 @@ async function mcAction(S, id, action) {
   const { ok, d } = await jsend("POST", `${MC}/nodes/${encodeURIComponent(id)}/${action}`);
   if (!ok) return S.msg(action.replace("_", " ") + " failed: " + (d.detail || "error"), false);
   S.msg(action.replace("_", " ") + " sent — the reply updates this page");
+  return S.reload();
+}
+
+// Run one link test from the LINK TEST page; the result lands in LT.result.
+async function ltRun(S, kind, arg) {
+  if (LT.busy) return S.msg("a test is already running", false);
+  let url, body, label;
+  if (kind === "ping" || kind === "iperf") {
+    const peer = ltMeshPeers((await jget("/api/v1/status")).d || {})[LT.mesh];
+    if (!peer) return S.msg("pick a peer", false);
+    if (kind === "ping") {
+      url = "/api/v1/linktest/ping"; body = { link: LT.link, peer_id: peer, count: 5 };
+      label = "ping";
+    } else {
+      url = "/api/v1/linktest/iperf";
+      body = { link: LT.link, peer_id: peer, secs: 5, reverse: !!arg };
+      label = "throughput test (5 s)";
+    }
+  } else if (kind === "traceroute") {
+    if (!arg) return S.msg("pick a node", false);
+    return mcAction(S, arg.id, "traceroute");
+  } else {
+    if (!arg) return S.msg("pick a contact", false);
+    url = "/api/v1/linktest/rnprobe"; body = { dest: arg }; label = "rnprobe";
+  }
+  LT.busy = true;
+  S.msg(label + " running…");
+  try {
+    const { ok, d } = await jsend("POST", url, body);
+    if (!ok) {
+      LT.result = `<div class="warn">${esc(label)} failed: ` +
+        `${esc(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail || "error"))}</div>`;
+      S.msg(label + " failed", false);
+    } else {
+      LT.result = ltResultHtml(kind, d);
+      S.msg(label + " done");
+    }
+  } finally {
+    LT.busy = false;
+  }
   return S.reload();
 }
 

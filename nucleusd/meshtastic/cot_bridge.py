@@ -1322,11 +1322,14 @@ def _client_react(req):
 
 def _client_traceroute(nid, dest):
     from meshtastic.protobuf import mesh_pb2, portnums_pb2
+    sent = time.time()
 
     def on_route(p):
         d = p.get("decoded") or {}
         if d.get("portnum") == "TRACEROUTE_APP":
-            res = {"route": meshchat.parse_traceroute(d, my_node_num or 0, dest)}
+            # Round trip request -> reply: the LoRa "ping" time for this node.
+            res = {"route": meshchat.parse_traceroute(d, my_node_num or 0, dest),
+                   "rtt_s": round(time.time() - sent, 2)}
         else:
             res = {"error": (d.get("routing") or {}).get("errorReason", "failed")}
         _traceroutes[nid] = dict(res, ts=int(time.time()))

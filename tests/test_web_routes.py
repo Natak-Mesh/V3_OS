@@ -286,3 +286,22 @@ def test_menus_show_new_message_dots():
     assert "mcHasUnread()" in mt
     assert '`${mcNew ? "● " : ""}CHATS`' in mt
 
+
+
+def test_link_test_page_wiring():
+    """MESH CONNECTIONS links to LINK TEST; the page calls the linktest API and
+    the Meshtastic traceroute, never anything that leaves a process running."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    monitor = app_js[app_js.index("  monitor: {"):app_js.index("  linktest: {")]
+    assert 'to: "linktest"' in monitor, "monitor lost its LINK TEST entry"
+    page = app_js[app_js.index("  linktest: {"):app_js.index("  system: {")]
+    for link in ("wifi", "halow", "lora"):
+        assert f'LT.link === "{link}"' in page
+    run = app_js[app_js.index("async function ltRun("):app_js.index("async function mcFlag(")]
+    for path in ('"/api/v1/linktest/ping"', '"/api/v1/linktest/iperf"',
+                 '"/api/v1/linktest/rnprobe"'):
+        assert path in run, f"ltRun no longer calls {path}"
+    assert 'mcAction(S, arg.id, "traceroute")' in run
+    # The peer-side server endpoint is node-to-node only, never called by the UI.
+    assert "iperf-server" not in app_js
