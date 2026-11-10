@@ -534,6 +534,59 @@ curl -s http://localhost:8080/api/v1/reticulum/paths
 
 ---
 
+## Link tests (`/api/v1/linktest`)
+
+On-demand connectivity/throughput tests from this node to one peer. Nothing runs
+until requested: iperf3 is never a service — the peer spawns a one-shot
+`iperf3 -s -1` (killed by `timeout` after `secs + 15` s) for each test. One test
+at a time per node: `409` if busy · `400` peer is this node · `503` tool/peer
+failure (detail says why) · `422` bad input. `link` is `wifi` (wlan1,
+10.20.1.<id>) or `halow` (halow0, 10.30.1.<id>); both ends are bound to that
+radio, so the result is for that radio even when Babel routes the node via the
+other.
+
+### `POST /ping`
+```bash
+curl -s -X POST http://localhost:8080/api/v1/linktest/ping \
+  -H 'Content-Type: application/json' -d '{"link":"halow","peer_id":47,"count":5}'
+# {"link":"halow","dev":"halow0","peer_ip":"10.30.1.47","sent":5,"received":5,
+#  "loss_pct":0.0,"rtt_ms":{"min":4.7,"avg":5.0,"max":5.7,"mdev":0.4}}
+```
+
+### `POST /iperf`
+TCP throughput for `secs` (1-30, default 5). `reverse:false` = this node → peer,
+`true` = peer → this node. `mbps` is goodput at the receiving end. Both nodes
+must run a version with this endpoint.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/linktest/iperf \
+  -H 'Content-Type: application/json' -d '{"link":"wifi","peer_id":47,"secs":5,"reverse":false}'
+# {"link":"wifi","dev":"wlan1","peer_ip":"10.20.1.47","direction":"send",
+#  "mbps":22.09,"mbps_sender":22.43,"bytes":13893632,"seconds":5.03,"retransmits":12}
+```
+
+### `POST /iperf-server`
+Peer side of `/iperf`, called node-to-node by the testing node. Accepted only
+from the wlan1/halow0 subnets or localhost (`403` otherwise).
+
+### `POST /rnprobe`
+`rnprobe` (as the rnsd user, through the shared instance) to a contact's
+`lxmf.delivery` hash; Reticulum picks the interface (RNode LoRa, mesh, eth0).
+`probes` 1-3, `timeout` 1-10 s per probe. `error` is set when no path was found.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/linktest/rnprobe \
+  -H 'Content-Type: application/json' -d '{"dest":"fa65075c2a28f00976d5542e7c87ebfa"}'
+# {"dest":"fa65...","sent":3,"received":3,"loss_pct":0.0,"rtt_ms":[5.2,4.8,7.7],
+#  "rtt_avg_ms":5.9,"hops":1,"interface":"AutoInterfacePeer[eth0/fe80::...]",
+#  "rssi_dbm":null,"snr_db":null,"quality_pct":null,"error":null}
+```
+RSSI/SNR/link quality are filled in when the reply came over the RNode.
+
+Meshtastic LoRa uses the existing traceroute
+(`POST /api/v1/meshtastic/client/nodes/{id}/traceroute`); its result in
+`/client/nodes` now carries `rtt_s` (request → reply round trip).
+
+---
+
 ## Web UI routes (not API)
 
 - `GET /` — main UI (`index.html`)

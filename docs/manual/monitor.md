@@ -63,7 +63,7 @@ Empty means the radio is present but sees no other node over halow0. HaLow
 channel/bandwidth and on/off live on the [HaLow Mesh](halow.md) page (the `HALOW MESH`
 menu entry, also shown only when the radio is plugged in).
 
-## LoRa nodes
+## Meshtastic Nodes
 
 Meshtastic nodes heard over RF, from the CoT bridge. If cot-bridge is not
 running, LoRa visibility is unavailable. Nodes not heard in the last 15 min are
@@ -76,3 +76,28 @@ dropped. When Meshtastic is receive-only, a note under the table says so.
 | SNR | Signal-to-noise ratio of the last packet, or `—`. |
 | Hops | Hops away, or `—`. |
 
+
+## Link test
+
+**» LINK TEST (ping / throughput)** at the bottom of the page opens on-demand
+tests to one peer. Nothing runs until a test button is pressed; the last result
+stays on the page.
+
+| Link | Target | Tests |
+|------|--------|-------|
+| `wifi` | Mesh node (from the tables above) | **PING** (5 ICMP packets over wlan1), **THROUGHPUT SEND** / **RECEIVE** (5 s iperf3, this node → peer / peer → this node). |
+| `halow` | Mesh node | Same tests over halow0 (10.30.1.\<id\>). Fails with "No such device" if this node has no HaLow radio. |
+| `lora` | Meshtastic node | **TRACEROUTE**: hops, per-hop SNR and round-trip time. The reply can take tens of seconds; the page updates when it arrives. |
+| `reticulum` | Reticulum contact | **PROBE**: 3 `rnprobe` packets. Shows loss, average RTT, hops, the interface Reticulum used (RNode LoRa, mesh, eth0) and, over the RNode, RSSI/SNR/link quality. Up to ~40 s. |
+
+Notes:
+- Both ends of a Wi-Fi/HaLow test are bound to that radio, so the result is for
+  that radio even if Babel routes the node over the other one.
+- iperf3 is not a service. For each throughput test this node asks the peer to
+  start a one-shot iperf3 server that exits after the test (or after 20 s if the
+  test never connects). The peer must be on a version with link tests, otherwise
+  the result says "does not support link tests (update it)".
+- One test at a time per node. Throughput tests saturate the radio for 5 s, which
+  delays voice and other mesh traffic in the meantime.
+- Reticulum picks its own path: if the peer is also reachable over eth0 or the
+  mesh, the probe reports that interface rather than the RNode.

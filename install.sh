@@ -22,12 +22,17 @@ fi
 
 echo "==> apt packages"
 apt-get update -qq
-apt-get install -y --no-install-recommends \
+# iperf3 is only ever spawned on demand by the link test (nucleusd/linktest.py);
+# preseed its debconf answer so the package never installs its always-on daemon.
+echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 python3-venv python3-pip git curl gpg \
     build-essential python3-dev libcodec2-dev \
     babeld smcroute hostapd wpasupplicant iw \
     nftables network-manager systemd-resolved ufw \
-    nginx avahi-daemon avahi-utils openssl
+    nginx avahi-daemon avahi-utils openssl iperf3
+# Belt and braces for nodes where iperf3 was installed earlier with the daemon on.
+systemctl disable --now iperf3.service 2>/dev/null || true
 # systemd-resolved carries systemd-networkd's DHCP DNS into /etc/resolv.conf, so
 # DNS survives `nucleusctl apply` handing eth0 from NetworkManager to networkd.
 # Reload dbus first: its policy references the systemd-resolve user the package

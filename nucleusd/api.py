@@ -93,6 +93,13 @@ try:
 except Exception:
     pass
 
+# On-demand link tests (ping / iperf3 / rnprobe) — see nucleusd/linktest.py.
+try:
+    from .linktest_router import router as linktest_router
+    app.include_router(linktest_router)
+except Exception:
+    pass
+
 
 @app.get("/api/v1/version")
 def get_version() -> dict:
