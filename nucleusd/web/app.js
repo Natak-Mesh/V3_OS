@@ -521,15 +521,17 @@ const PAGES = {
         } else {
           h += `<table><tr><th>Node</th><th>Link</th><th>Signal</th><th>State</th><th>Seen</th></tr>`;
           hp.forEach((p) => {
-            const node = p.ipv4 || p.mac;
+            const node = p.ipv4 || p.ipv6 || p.mac;
             const link = p.link_pct != null ? p.link_pct + "%" : "—";
             const sig = p.signal_avg_dbm != null ? p.signal_avg_dbm + " dBm" : "—";
-            const estab = p.plink === "ESTAB";
+            // Radio fields (plink/signal/seen) are null when the station MAC
+            // could not be joined to the Babel row — show a neutral "—".
+            const cls = p.plink == null ? "" : p.plink === "ESTAB" ? "ok" : "warn";
             const seen = p.inactive_ms != null ? ago(Date.now() / 1000 - p.inactive_ms / 1000) : "—";
             h += `<tr><td>${esc(node)}</td><td>${esc(link)}</td>` +
               `<td>${esc(sig)}</td>` +
-              `<td class="${estab ? "ok" : "warn"}">${esc(p.plink || "—")}</td>` +
-              `<td class="${estab ? "ok" : "warn"}">${esc(seen)}</td></tr>`;
+              `<td class="${cls}">${esc(p.plink || "—")}</td>` +
+              `<td class="${cls}">${esc(seen)}</td></tr>`;
           });
           h += `</table>`;
         }

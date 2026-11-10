@@ -383,6 +383,59 @@ def test_halow_peers_station_without_babel(monkeypatch):
     assert p["cost"] is None
 
 
+def test_halow_peers_ipv4_without_kernel_neigh_entry(monkeypatch):
+    """Regression: `ip -6 neigh show dev halow0` is empty on the live node
+    (Babel hellos are multicast; all halow0 routes are `installed no` because
+    wlan1 is cheaper, so no unicast creates a neighbour entry). The peer must
+    still resolve to its mesh IPv4 from the Babel dump, not fall back to MAC."""
+    # Real-format captures from 0042 <-> 0047 (station dump, empty neigh table,
+    # babeld dump with halow0 routes not installed).
+    station = (
+        "Station 0c:bf:74:00:2f:02 (on halow0)\n"
+        "\tinactive time:\t52 ms\n"
+        "\trx bytes:\t220821\n"
+        "\tsignal:  \t-5 dBm\n"
+        "\tsignal avg:\t-4 dBm\n"
+        "\tmesh plink:\tESTAB\n"
+        "\tconnected time:\t131 seconds\n"
+    )
+    dump = (
+        "BABEL 1.0\n"
+        "ok\n"
+        "add interface halow0 up true ipv6 fe80::2770:8056:dd56:5968 ipv4 10.30.1.42\n"
+        "add neighbour 55803a3ae0 address fe80::be2:5a11:d482:8d72 if halow0 "
+        "reach cbef ureach 0000 rxcost 431 txcost 256 cost 431\n"
+        "add neighbour 55803a2650 address fe80::8ae5:2ce0:5629:f96e if wlan1 "
+        "reach ffff ureach 0000 rxcost 256 txcost 258 cost 258\n"
+        "add route 55803a45f0 prefix 10.20.47.0/24 from 0.0.0.0/0 installed no "
+        "id 8a:a2:9e:ff:fe:e1:c8:f2 metric 431 refmetric 0 "
+        "via fe80::be2:5a11:d482:8d72 if halow0\n"
+        "add route 55803a4600 prefix 10.20.47.0/24 from 0.0.0.0/0 installed yes "
+        "id 8a:a2:9e:ff:fe:e1:c8:f2 metric 258 refmetric 0 "
+        "via fe80::8ae5:2ce0:5629:f96e if wlan1\n"
+        "ok\n"
+    )
+
+    def run(cmd, **kw):
+        if "station" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=station, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")  # empty neigh
+    monkeypatch.setattr(status.subprocess, "run", run)
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(dump)())
+    peers = status.halow_peers()
+    assert len(peers) == 1
+    p = peers[0]
+    assert p["ipv4"] == "10.20.1.47"
+    assert p["ipv6"] == "fe80::be2:5a11:d482:8d72"
+    assert p["cost"] == 431
+    assert p["link_pct"] == round(bin(0xCBEF).count("1") / 16 * 100)
+    # MAC could not be joined -> radio fields unknown, not wrong.
+    assert p["mac"] is None
+    assert p["plink"] is None
+    assert p["signal_avg_dbm"] is None
+
+
 def test_babel_routes_tags_interface(monkeypatch):
     """Each route carries the interface Babel installed it on, so the UI can
     tell a wlan1-reached node from a halow0-reached one."""
