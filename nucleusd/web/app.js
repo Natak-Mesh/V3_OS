@@ -2721,6 +2721,28 @@ function m73Html(v) {
     `<span>crc err <b class="${st.crc_errors ? "warn" : ""}">${st.crc_errors ?? "—"}</b></span>` +
     `<span>preamble err <b>${st.preamble_errors ?? "—"}</b></span>` +
     `<span>busy <b>${st.occupancy_pct ?? "—"}%</b></span></div>`;
+  // TUI readouts. Carrier = channel level at the last CSMA check (modem73 log).
+  h += `<div class="kv"><span>carrier <b>${m73Num(v.channel_db)} dB</b>` +
+    `${v.channel_age_s != null ? ` (${Math.round(v.channel_age_s)}s)` : ""}</span>` +
+    `<span>sync <b>${st.sync_count ?? "—"}</b></span>` +
+    `<span>last SNR <b>${m73Num(st.last_snr)} dB</b></span>` +
+    `<span>BER <b>${st.last_ber != null && st.last_ber >= 0 ? m73Num(st.last_ber * 100, 2) + "%" : "—"}</b></span></div>`;
+  const at = v.attempts || [];
+  h += `<div class="page-title" style="padding-left:0">Decode attempts (incl. CRC failures)</div>`;
+  if (!at.length) h += `<div class="off">none heard</div>`;
+  else {
+    h += `<table><tr><th>When</th><th>From</th><th>Mode</th><th>SNR avg/min</th>` +
+      `<th>CFO Hz</th><th>SFO ppm</th><th>Result</th></tr>`;
+    at.slice(0, 15).forEach((a) => {
+      const res = a.ok ? `OK ${m73Num(a.snr)} dB ${m73Num(a.ber_pct, 2)}%` : a.ok === false ? "CRC FAIL" : "…";
+      h += `<tr><td>${a.time ? ago(a.time) : "?"}</td><td>${esc(a.callsign ?? "—")}</td>` +
+        `<td>${esc(`${a.modulation ?? "?"} ${a.code_rate ?? ""}`)}</td>` +
+        `<td class="${m73Cls("snr", a.sym_snr)}">${m73Num(a.sym_snr)}/${m73Num(a.sym_snr_min)}</td>` +
+        `<td>${m73Num(a.cfo_hz)}</td><td>${m73Num(a.sfo_ppm)}</td>` +
+        `<td class="${a.ok ? "ok" : a.ok === false ? "off" : ""}">${res}</td></tr>`;
+    });
+    h += `</table>`;
+  }
   if (drift.length) h += `<div class="warn">live differs from saved: ${esc(drift.join(", "))} — SAVE to keep</div>`;
   // Latest real station frame (callsign-less decodes are noise).
   const frames = (v.frames || []).filter((f) => f.callsign);

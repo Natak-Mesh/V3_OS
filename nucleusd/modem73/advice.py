@@ -64,8 +64,9 @@ def frame_mode_key(frame: dict) -> str | None:
     return None
 
 
-def advise(frames: list[dict], status: dict | None, now: float | None = None) -> dict:
-    """Advice for the most recent sender. `frames` newest first.
+def advise(frames: list[dict], status: dict | None, now: float | None = None,
+           attempts: list[dict] | None = None) -> dict:
+    """Advice for the most recent sender. `frames` / `attempts` newest first.
 
     Returns {"sender", "level", "items": [{"sev": ok|warn|bad, "text"}]}.
     """
@@ -74,6 +75,15 @@ def advise(frames: list[dict], status: dict | None, now: float | None = None) ->
     # "decodes" are noise false-positives (seen live: MFSK-16 at SNR -10 dB),
     # so they never drive advice.
     frames = [f for f in frames if f.get("callsign")]
+    failed = next((a for a in attempts or []
+                   if a.get("callsign") and a.get("ok") is not None), None)
+    if failed and failed.get("ok") is False and \
+            (not frames or (failed.get("time") or 0) > (frames[0].get("time") or 0)):
+        return {"sender": failed["callsign"], "level": "unknown", "items": [{
+            "sev": "bad",
+            "text": f"Frames from {failed['callsign']} ({failed.get('modulation')} "
+                    f"{failed.get('code_rate')}) heard but failing CRC at symbol SNR "
+                    f"{failed.get('sym_snr')} dB. Lower ITS TX level / gain, or its mode."}]}
     if not frames:
         return {"sender": None, "level": "unknown", "items": [{
             "sev": "warn",

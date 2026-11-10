@@ -104,7 +104,12 @@ Radio setup (manual, both nodes):
 
 Shows what **this** node hears from the far node, per decoded frame: sender
 callsign, RX level (dBFS), SNR, BER, mode, plus modem counters (rx/tx, CRC and
-preamble errors, channel busy %) and advice. Controls:
+preamble errors, channel busy %) and advice. TUI readouts the control port
+lacks are parsed from `/var/log/modem73.log`: **carrier** (channel dB at the
+last CSMA check), and a **decode attempts** table with every frame heard,
+including **CRC FAIL** ones, with per-symbol SNR avg/min, CFO and SFO. If
+attempts show CRC FAIL at decent SNR, the far end is distorting (overdriven
+TX) or its mode is too fast. Controls:
 
 - **SEND TEST FRAME**: transmits one short frame now (keys the radio). The far
   node's LIVE page shows its level/SNR/BER. rnsd ignores it.

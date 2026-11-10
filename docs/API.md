@@ -602,6 +602,13 @@ Everything the LIVE page shows. `frames` = last 64 decoded frames, newest first
 dB, `ber_pct` pre-FEC, `mode`, ...). Frames with an empty `callsign` are noise
 decodes. `live` = what the running modem uses (`mode` is `null` if it is not a
 registry mode); `saved` = config.yaml. `advice` grades the newest sender's link.
+`attempts` = last 32 decode attempts parsed from `/var/log/modem73.log`
+(includes CRC failures, which the control port never reports), newest first:
+`time` (null if read on startup backfill), `callsign`, `modulation`,
+`code_rate`, `cfo_hz`, `sfo_ppm`, `sym_snr`/`sym_snr_min` (per-symbol SNR dB),
+`ok` (true decoded / false CRC failed / null in progress), `snr`, `ber_pct`.
+`channel_db` = channel level at the last CSMA check (TUI "Carrier"),
+`channel_age_s` its age.
 ```bash
 curl -s http://localhost:8080/api/v1/modem73/status
 # {"online":true,"error":null,"callsign":"0042",

@@ -83,7 +83,11 @@ def build_view(cfg: NucleusConfig, snap: dict, mixer: dict, now: float | None = 
         "saved": {"mode": r.modem73_mode, "tx_level": r.modem73_tx_level,
                   "rx_gain": r.modem73_rx_gain, "tx_gain": r.modem73_tx_gain},
         "frames": snap["frames"],
-        "advice": adv.advise(snap["frames"], snap["status"], now=now),
+        "attempts": snap["attempts"],
+        "channel_db": snap["channel_db"],
+        "channel_age_s": round(now - snap["channel_ts"], 1) if snap["channel_ts"] else None,
+        "advice": adv.advise(snap["frames"], snap["status"], now=now,
+                             attempts=snap["attempts"]),
         "modes": MODEM73_MODES,
     }
 

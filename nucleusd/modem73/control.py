@@ -25,6 +25,8 @@ import threading
 import time
 from collections import deque
 
+from . import logtail
+
 CONTROL_ADDR = ("127.0.0.1", 8073)
 TIMEOUT = 3.0
 # modem73 drops a client that sends > 1 MiB; replies are far smaller.
@@ -105,6 +107,9 @@ class Monitor:
         self.status_ts = 0.0
         self.config: dict | None = None
         self.frames: deque = deque(maxlen=MAX_FRAMES)
+        # Decoder detail the control port lacks (failed attempts, CFO/SFO, channel dB).
+        self.log = logtail.Parser()
+        self._tail = logtail.LogTail()
         # Bumped on every cache change; the WebSocket pushes when it moves.
         self.version = 0
 
@@ -128,8 +133,19 @@ class Monitor:
                 "status_ts": self.status_ts,
                 "config": dict(self.config) if self.config else None,
                 "frames": list(reversed(self.frames)),  # newest first
+                "attempts": self.log.view(),
+                "channel_db": self.log.channel_db,
+                "channel_ts": self.log.channel_ts,
                 "version": self.version,
             }
+
+    def poll_log(self) -> None:
+        """Fold new modem73 log lines into the cache."""
+        lines, backfill = self._tail.read()
+        now = None if backfill else time.time()
+        with self._lock:
+            if sum(self.log.feed(ln, now) for ln in lines):
+                self.version += 1
 
     def handle(self, msg: dict, pending: str | None) -> None:
         """Fold one control-port message into the cache.
@@ -189,6 +205,7 @@ class Monitor:
             next_poll = time.time() + STATUS_POLL_S
             self._set_link(True, None)
             while time.time() - self._interest <= IDLE_S:
+                self.poll_log()
                 now = time.time()
                 if now >= next_poll:
                     send("get_status")

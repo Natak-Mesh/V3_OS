@@ -22,9 +22,10 @@ from nucleusd.modem73 import control as ctl
 from nucleusd.modem73 import mixer as mx
 from nucleusd.modem73 import router as rt
 from nucleusd.schema import NucleusConfig
+from nucleusd.modem73 import logtail as lt
 from tests.modem73_fixtures import (
-    CONFIG_CHANGED_RDM1200, GET_CONFIG_BPSK, GET_STATUS_LAST,
-    RX_FRAME_EVENTS, RX_FRAME_HISTORY, RX_FRAME_NOISE,
+    CONFIG_CHANGED_RDM1200, GET_CONFIG_BPSK, GET_STATUS_LAST, LOG_CRC_FAIL,
+    LOG_DECODED, RX_FRAME_EVENTS, RX_FRAME_HISTORY, RX_FRAME_NOISE,
 )
 
 client = TestClient(app)
@@ -142,6 +143,80 @@ def test_monitor_keeps_last_max_frames():
     frames = m.snapshot()["frames"]
     assert len(frames) == ctl.MAX_FRAMES
     assert frames[0]["seq"] == ctl.MAX_FRAMES + 9
+
+
+# ── log tail (decoder detail the control port lacks) ─────────────
+
+def _parse(text, now=100.0):
+    p = lt.Parser()
+    for ln in text.splitlines():
+        p.feed(ln, now)
+    return p
+
+
+def test_log_decoded_frame_and_own_tx_block():
+    p = _parse(LOG_DECODED)
+    [a] = p.view()
+    assert (a["callsign"], a["modulation"], a["code_rate"]) == ("N0CALL", "QPSK", "1/2")
+    assert a["ok"] is True and a["snr"] == pytest.approx(4.968, abs=1e-3)
+    assert a["ber_pct"] == pytest.approx(6.604) and a["sym_snr"] == 6.1
+    assert a["cfo_hz"] == pytest.approx(1499.98) and a["sfo_ppm"] == pytest.approx(7.0167)
+    assert "syms" not in a
+    # Our own BPSK TX block after it must not overwrite the RX attempt.
+    assert p.channel_db == pytest.approx(-87.7568) and p.channel_ts == 100.0
+
+
+def test_log_crc_failures_are_attempts():
+    """Regression: 0047 QAM256 3/4 frames reached 0042 but failed CRC; the
+    control port reported nothing, so the LIVE page stayed empty."""
+    v = _parse(LOG_CRC_FAIL).view()
+    assert len(v) == 3                       # back-to-back frames start at SFO
+    assert all(a["callsign"] == "0047" for a in v)
+    assert [a["modulation"] for a in v] == [None, "QAM256", "QAM256"]
+    assert [a["ok"] for a in v] == [None, False, False]   # newest is cut after callsign
+    assert v[2]["sym_snr"] == 16.1 and v[2]["sym_snr_min"] == 14.3
+    assert v[2]["cfo_hz"] == 1500.0 and v[1]["cfo_hz"] is None
+
+
+def test_logtail_reads_complete_lines_and_backfills(tmp_path):
+    f = tmp_path / "modem73.log"
+    f.write_text("junk\n" * 10)
+    t = lt.LogTail(str(f))
+    lines, backfill = t.read()
+    assert backfill and lines == ["junk"] * 10
+    with f.open("a") as fh:
+        fh.write("Decoder: CRC failed\nDecoder: Sync")
+    assert t.read() == (["Decoder: CRC failed"], False)    # partial line held back
+    with f.open("a") as fh:
+        fh.write(" found at sample 1\n")
+    assert t.read() == (["Decoder: Sync found at sample 1"], False)
+    f.write_text("x\n")                                       # truncated / rotated
+    assert t.read() == (["x"], True)
+    assert lt.LogTail(str(tmp_path / "missing")).read() == ([], False)
+
+
+def test_monitor_poll_log_bumps_version(tmp_path):
+    m = ctl.Monitor()
+    m._tail = lt.LogTail(str(tmp_path / "modem73.log"))
+    (tmp_path / "modem73.log").write_text(LOG_CRC_FAIL)
+    m.poll_log()
+    s = m.snapshot()
+    assert s["version"] == 1 and len(s["attempts"]) == 3
+    assert s["attempts"][0]["time"] is None                  # backfill: time unknown
+    m.poll_log()
+    assert m.snapshot()["version"] == 1
+
+
+def test_advice_crc_failures_blame_far_tx():
+    """Regression: with CRC failures and no decodes the advice said only
+    'No frames decoded yet'."""
+    att = _parse(LOG_CRC_FAIL, now=NOW).view()
+    a = adv.advise([], GET_STATUS_LAST, now=NOW, attempts=att)
+    assert a["sender"] == "0047" and a["items"][0]["sev"] == "bad"
+    assert "failing CRC" in a["items"][0]["text"] and "QAM256 3/4" in a["items"][0]["text"]
+    # A decode newer than the failure wins.
+    newer = [{**FRAMES[0], "time": NOW + 1}]
+    assert adv.advise(newer, GET_STATUS_LAST, now=NOW, attempts=att)["sender"] == "N0CALL"
 
 
 # ── advice ───────────────────────────────────────────────────────
@@ -278,6 +353,7 @@ def test_build_view_from_real_snapshot():
     assert [f["seq"] for f in v["frames"]] == [3, 2, 1]
     assert v["advice"]["level"] == "ok"
     assert "rdm_1200" in v["modes"]
+    assert v["attempts"] == [] and v["channel_db"] is None and v["channel_age_s"] is None
 
 
 def test_test_frame_sends_m73_text_frame(seeded, ctl_calls):
