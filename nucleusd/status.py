@@ -145,16 +145,24 @@ def _halow_neigh_mac_to_ipv6() -> dict[str, str]:
 
 
 def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
-    """HaLow (halow0) 802.11s peers, one row per linked station.
+    """HaLow (halow0) 802.11s peers, one row per peer.
 
     Babel's route list cannot show HaLow-only neighbours when the same node is
-    cheaper over wlan1, so this reports the radio link directly. It joins three
-    read-only sources:
+    cheaper over wlan1, so rows come from Babel *neighbours* on halow0 (present
+    regardless of which interface the route is installed on). Each resolves to
+    the node's canonical mesh IPv4 (10.20.1.<id>) from the Babel dump alone —
+    the same source the wifi mesh table uses. Sources (all read-only):
+      * Babel neighbours on halow0 — link-local IPv6, link %, cost, mesh IPv4.
       * `iw dev halow0 station dump` — MAC, mesh plink state, avg signal (dBm),
         inactivity (ms since last frame) and connected time (s).
-      * `ip -6 neigh show dev halow0` — MAC -> link-local IPv6.
-      * Babel neighbours seen on halow0 — link % and cost, keyed by that IPv6,
-        plus the node's canonical mesh IPv4 (10.20.1.<id>) when resolvable.
+      * `ip -6 neigh show dev halow0` — MAC -> link-local IPv6, used only to
+        attach the radio fields to a Babel row. This kernel entry is usually
+        absent (Babel hellos are multicast; no unicast crosses halow0 while
+        wlan1 is cheaper), so radio fields are None when it is missing.
+
+    A station with no Babel neighbour at all (adjacency not yet formed) is
+    still reported, keyed by MAC, but only when every Babel row is matched —
+    otherwise it is one of the unmatched Babel rows and would duplicate a node.
 
     Returns [] when halow0 is absent or iw is unavailable; never raises.
     """
@@ -167,19 +175,13 @@ def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     if r.returncode != 0:
         return peers
 
-    mac_to_ipv6 = _halow_neigh_mac_to_ipv6()
-    # Babel neighbours on halow0, keyed by their link-local IPv6.
-    babel_by_ipv6: dict[str, dict] = {
-        n["address"]: n for n in babel_neighbours(port, timeout)
-        if n.get("if") == "halow0" and n.get("address")
-    }
-
+    stations: list[dict] = []
     cur: dict | None = None
     for line in r.stdout.splitlines():
         s = line.strip()
         if s.startswith("Station "):
             if cur is not None:
-                peers.append(cur)
+                stations.append(cur)
             cur = {"mac": s.split()[1].lower()}
         elif cur is None:
             continue
@@ -192,19 +194,57 @@ def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
         elif s.startswith("mesh plink:"):
             cur["plink"] = s.split(":", 1)[1].strip()
     if cur is not None:
-        peers.append(cur)
+        stations.append(cur)
 
-    for p in peers:
-        ipv6 = mac_to_ipv6.get(p["mac"])
-        p["ipv6"] = ipv6
-        nb = babel_by_ipv6.get(ipv6) if ipv6 else None
-        p["link_pct"] = nb.get("link_pct") if nb else None
-        p["ipv4"] = nb.get("ipv4") if nb else None
+    mac_to_ipv6 = _halow_neigh_mac_to_ipv6()
+    station_by_ipv6 = {mac_to_ipv6[s["mac"]]: s for s in stations
+                       if s["mac"] in mac_to_ipv6}
+    matched_macs: set[str] = set()
+    unmatched_babel = 0
+
+    for nb in babel_neighbours(port, timeout):
+        if nb.get("if") != "halow0" or not nb.get("address"):
+            continue
+        ipv6 = nb["address"]
         try:
-            p["cost"] = int(nb["cost"]) if nb and "cost" in nb else None
+            cost = int(nb["cost"]) if "cost" in nb else None
         except (ValueError, TypeError):
-            p["cost"] = None
-    peers.sort(key=lambda p: p.get("ipv4") or p["mac"])
+            cost = None
+        st = station_by_ipv6.get(ipv6)
+        if st is not None:
+            matched_macs.add(st["mac"])
+        else:
+            unmatched_babel += 1
+        peers.append({
+            "mac": st["mac"] if st else None,
+            "inactive_ms": st.get("inactive_ms") if st else None,
+            "signal_avg_dbm": st.get("signal_avg_dbm") if st else None,
+            "plink": st.get("plink") if st else None,
+            "connected_s": st.get("connected_s") if st else None,
+            "ipv6": ipv6,
+            "link_pct": nb.get("link_pct"),
+            "ipv4": nb.get("ipv4"),
+            "cost": cost,
+        })
+
+    # Stations Babel has no neighbour for yet. Only safe to list when no Babel
+    # row is left unmatched (else the station is one of those rows).
+    if unmatched_babel == 0:
+        for st in stations:
+            if st["mac"] in matched_macs:
+                continue
+            peers.append({
+                "mac": st["mac"],
+                "inactive_ms": st.get("inactive_ms"),
+                "signal_avg_dbm": st.get("signal_avg_dbm"),
+                "plink": st.get("plink"),
+                "connected_s": st.get("connected_s"),
+                "ipv6": mac_to_ipv6.get(st["mac"]),
+                "link_pct": None,
+                "ipv4": None,
+                "cost": None,
+            })
+    peers.sort(key=lambda p: p.get("ipv4") or p.get("ipv6") or p.get("mac") or "")
     return peers
 
 
