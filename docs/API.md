@@ -587,6 +587,72 @@ Meshtastic LoRa uses the existing traceroute
 
 ---
 
+## modem73 live (`/api/v1/modem73`)
+
+Live link tuning for the modem73 VHF/UHF soundmodem, relayed over modem73's
+local control port (`127.0.0.1:8073`, never exposed directly). One shared
+connection serves all clients; it is held only while someone polls or has the
+WebSocket open. Live changes (`tx_level`, `mixer`) take effect at once and last
+until modem73 restarts; `save` persists. Errors: `503` modem73 / amixer
+unavailable · `502` modem73 rejected the command · `422` bad input.
+
+### `GET /status`
+Everything the LIVE page shows. `frames` = last 64 decoded frames, newest first
+(modem73 `rx_frame` fields: `callsign`, `time`, `level_db` RX audio dBFS, `snr`
+dB, `ber_pct` pre-FEC, `mode`, ...). Frames with an empty `callsign` are noise
+decodes. `live` = what the running modem uses (`mode` is `null` if it is not a
+registry mode); `saved` = config.yaml. `advice` grades the newest sender's link.
+```bash
+curl -s http://localhost:8080/api/v1/modem73/status
+# {"online":true,"error":null,"callsign":"0042",
+#  "status":{"channel_state":"idle","ptt_on":false,"rx_frame_count":3,"crc_errors":0,...},
+#  "status_age_s":1.2,
+#  "live":{"mode":"qpsk_1_2","modulation":"QPSK","code_rate":"1/2","payload_size":512,
+#          "tx_level":5,"rx_gain":20,"tx_gain":17},
+#  "saved":{"mode":"qpsk_1_2","tx_level":5,"rx_gain":20,"tx_gain":17},
+#  "frames":[{"seq":3,"time":1794349203.45,"callsign":"0047","level_db":-12.8,
+#             "snr":4.97,"ber_pct":6.6,"mode":"QPSK 1/2 N",...}],
+#  "advice":{"sender":"0047","level":"ok","items":[{"sev":"bad","text":"SNR 4.9 dB / ..."}]},
+#  "modes":{"rdm_1200":{"family":"robust","bitrate":1150,"payload":512,...},...}}
+```
+
+### `WS /ws`
+Pushes `{"event":"modem73","view":<same as GET /status>}` on connect and on
+every change (new frame, status poll, config change).
+
+### `POST /test`
+Transmits one short test frame now (keys the radio): payload
+`M73:<callsign>:nucleus test <n>`, modem73's text-message format. The far node
+sees its level/SNR/BER; rnsd discards it.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/modem73/test
+# {"ok":true,"seq":1,"bytes":26}
+```
+
+### `PUT /tx_level`
+Live modem73 TX level, 5-100 % (`tx_drive` = level/100). Not saved.
+```bash
+curl -s -X PUT http://localhost:8080/api/v1/modem73/tx_level \
+  -H 'Content-Type: application/json' -d '{"tx_level":10}'
+```
+
+### `PUT /mixer`
+Live sound-card gains (raw ALSA steps): `rx_gain` 0-35 (`Mic Capture Volume`),
+`tx_gain` 0-37 (`Speaker Playback Volume`). Either or both. Not saved.
+
+### `POST /save`
+Writes any of `mode`, `tx_level`, `rx_gain`, `tx_gain` to config.yaml, then
+applies: modem73 restarts (and rnsd too when the mode, hence the RNS bitrate,
+changed). Mode changes are save-only so the RNS bitrate always matches.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/modem73/save \
+  -H 'Content-Type: application/json' -d '{"mode":"rdm_1200","tx_level":5}'
+# {"ok":true,"changed":["/opt/nucleus/bin/nucleus-modem73-up.sh",...],
+#  "units_restarted":["rnsd","nucleus-modem73"]}
+```
+
+---
+
 ## Web UI routes (not API)
 
 - `GET /` — main UI (`index.html`)

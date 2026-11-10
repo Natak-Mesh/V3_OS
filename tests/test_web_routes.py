@@ -119,12 +119,12 @@ def test_reticulum_nodes_route_removed():
     assert client.get("/api/v1/reticulum/nodes").status_code == 404
 
 
-def test_modem73_page_wires_ofdm_mode():
-    """The modem73 config page must expose the OFDM mode selector and persist it.
+def test_modem73_page_wires_mode():
+    """The modem73 config page must expose the mode selector and persist it.
 
     Node isn't installed on this node, so pin the wiring in the static app.js
     rather than executing the JS: the page loads modem73_mode into its working
-    copy, renders an 'OFDM mode' dropdown whose options come from the schema
+    copy, renders a 'Mode' dropdown whose options come from the schema
     contract (enum + per-mode bitrate), and saveModem73 writes the key back.
     """
     web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
@@ -133,12 +133,32 @@ def test_modem73_page_wires_ofdm_mode():
     assert "mode: r.modem73_mode," in app_js, "modem73 page lost the mode load"
     # Dropdown is schema-driven (enum + bitrate from the published `modes` meta),
     # not a hardcoded rate table in the frontend.
-    assert 'label: "OFDM mode"' in app_js, "no OFDM mode dropdown on the page"
+    assert 'label: "Mode",' in app_js, "no mode dropdown on the page"
     assert "P.modem73_mode" in app_js, "mode dropdown isn't driven by the schema"
     assert "mo.modes" in app_js, "mode labels don't read bitrate from the contract"
     # Save persists the selected mode.
     assert "cfg.reticulum.modem73_mode = MO.mode;" in app_js, \
-        "saveModem73 no longer persists the OFDM mode"
+        "saveModem73 no longer persists the mode"
+    # Gains persist too; a blank callsign is omitted so the node id applies.
+    assert "cfg.reticulum.modem73_rx_gain = " in app_js
+    assert "cfg.reticulum.modem73_tx_gain = " in app_js
+    assert "delete cfg.reticulum.modem73_callsign" in app_js
+
+
+def test_modem73_live_page_wired():
+    """The modem73 LIVE page is reachable from both modem73 entry points, uses
+    the WS push (with a polling fallback) and the /api/v1/modem73 actions, and
+    closes its socket on leave."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    assert app_js.count('to: "rns_modem73_live"') == 2
+    assert "rns_modem73_live: {" in app_js
+    assert '"/api/v1/modem73/ws"' in app_js
+    assert 'jget("/api/v1/modem73/status")' in app_js
+    for path in ("/api/v1/modem73/test", "/api/v1/modem73/tx_level",
+                 "/api/v1/modem73/mixer", "/api/v1/modem73/save"):
+        assert f'"{path}"' in app_js, path
+    assert "onLeave: () => { m73WsClose();" in app_js
 
 
 def test_rns_direct_message_ui_wired():

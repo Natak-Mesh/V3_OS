@@ -196,6 +196,12 @@ let RN_SCHEMA = null;
 // on the RETICULUM > INTERFACES > CONFIGURE MODEM73 page. Shares RN_SCHEMA (both
 // live under ReticulumConfig), mirroring the RNode page.
 let MO = null;
+// modem73 LIVE page: latest pushed view (/api/v1/modem73/ws, polling fallback)
+// and the operator's working copy of the live controls (null = follow live).
+let M73_VIEW = null;
+let M73_WS = null;
+let M73_WS_POLL = false;
+let M73_EDIT = null;
 let MSG_DRAFT = "";
 // Live chat state: messages cache + WebSocket, populated by the messaging page.
 let MSG_CACHE = [];        // ordered oldest→newest, keyed by id
@@ -1168,6 +1174,7 @@ const PAGES = {
       }
       items.push({ type: "nav", label: "» CONFIGURE RNODE (LoRa radio)", to: "rns_rnode" });
       items.push({ type: "nav", label: "» CONFIGURE MODEM73 (soundmodem)", to: "rns_modem73" });
+      items.push({ type: "nav", label: "» MODEM73 LIVE (levels, SNR/BER, test)", to: "rns_modem73_live" });
       return { items };
     },
   },
@@ -1260,6 +1267,8 @@ const PAGES = {
           ptt_line: r.modem73_ptt_line,
           callsign: r.modem73_callsign,
           tx_level: r.modem73_tx_level,
+          rx_gain: r.modem73_rx_gain,
+          tx_gain: r.modem73_tx_gain,
           mode: r.modem73_mode,
         };
       }
@@ -1267,10 +1276,11 @@ const PAGES = {
       const items = [
         { type: "content", html: `<div class="content"><div class="hint" ` +
           `style="padding-left:0">USB soundcard TNC (e.g. DigiRig) for Reticulum. ` +
-          `Audio device name is from 'modem73 --list-audio'. OFDM mode sets the ` +
-          `on-air rate: lower = slower but decodes in poorer conditions, higher = ` +
-          `faster but needs a cleaner signal. Save, then Apply to ` +
-          `restart rnsd + modem73.</div></div>` },
+          `Audio device name is from 'modem73 --list-audio'. Mode sets what this ` +
+          `node transmits (receivers auto-detect): rdm_1200 is the hardy fallback, ` +
+          `higher QAM is faster but needs a cleaner signal. Tune levels on the ` +
+          `LIVE page. Save, then Apply to restart rnsd + modem73.</div></div>` },
+        { type: "nav", label: "» LIVE: levels, SNR/BER, test frame", to: "rns_modem73_live" },
         { type: "fselect", label: "modem73", options: ["on", "off"],
           value: MO.enabled ? "on" : "off", onChange: (v) => MO.enabled = (v === "on") },
       ];
@@ -1296,19 +1306,72 @@ const PAGES = {
       const modeOpts = (mo.enum || []).map(modeLabel);
       const labelToKey = {};
       (mo.enum || []).forEach((k) => { labelToKey[modeLabel(k)] = k; });
-      items.push({ type: "fselect", label: "OFDM mode",
+      items.push({ type: "fselect", label: "Mode",
         options: modeOpts,
         value: MO.mode != null ? modeLabel(MO.mode) : "",
         onChange: (v) => MO.mode = (labelToKey[v] != null ? labelToKey[v] : v) });
-      items.push({ type: "ftext", label: "Callsign",
+      // Blank callsign = the node id (schema default), shown as the placeholder.
+      items.push({ type: "ftext", label: "Callsign", max: 9,
         value: MO.callsign != null ? MO.callsign : "",
+        placeholder: "node id",
         onChange: (v) => MO.callsign = v });
-      const tl = P.modem73_tx_level || {};
-      items.push({ type: "fnum", label: tl.title || "TX level (%)", value: MO.tx_level,
-        min: tl.minimum, max: tl.maximum, step: 1, onChange: (v) => MO.tx_level = v });
+      const numItem = (key, label) => {
+        const p = P["modem73_" + key] || {};
+        return { type: "fnum", label, value: MO[key], min: p.minimum, max: p.maximum,
+          step: 1, onChange: (v) => MO[key] = v };
+      };
+      items.push(numItem("tx_level", "TX level (%)"));
+      items.push(numItem("rx_gain", "RX gain (step)"));
+      items.push(numItem("tx_gain", "TX gain (step)"));
       items.push({ type: "button", label: "» Save (not applied)", onEnter: saveModem73 });
       items.push({ type: "button", label: "» Apply", onEnter: (S) => applyCfg(S, false) });
       items.push({ type: "button", label: "» Reload", onEnter: (S) => { MO = null; return S.reload(); } });
+      return { items };
+    },
+  },
+
+  // modem73 LIVE: what this node hears (level / SNR / BER per decoded frame),
+  // advice, a test-frame button, and live TX level + sound-card gains. Live
+  // changes last until modem73 restarts; "Save" writes them + the mode to
+  // config.yaml and applies. Data via /api/v1/modem73 (WS push, poll fallback).
+  rns_modem73_live: {
+    title: "modem73 Live",
+    dynamic: 3000,
+    onEnter: (S) => m73WsOpen(S),
+    onLeave: () => { m73WsClose(); M73_EDIT = null; },
+    async build() {
+      if (!M73_VIEW || !M73_WS || M73_WS_POLL) {
+        const r = await jget("/api/v1/modem73/status");
+        if (r.ok) M73_VIEW = r.d;
+      }
+      const v = M73_VIEW;
+      if (!v) return { items: [{ type: "content", html:
+        `<div class="content"><div class="off">modem73 status unavailable</div></div>` }] };
+      if (!M73_EDIT) {
+        M73_EDIT = {
+          tx_level: v.live.tx_level != null ? v.live.tx_level : v.saved.tx_level,
+          rx_gain: v.live.rx_gain != null ? v.live.rx_gain : v.saved.rx_gain,
+          tx_gain: v.live.tx_gain != null ? v.live.tx_gain : v.saved.tx_gain,
+          mode: v.saved.mode,
+        };
+      }
+      const items = [{ type: "content", html: m73Html(v) }];
+      const modes = v.modes || {};
+      const modeLabel = (k) => modes[k] ? `${k} (${(modes[k].bitrate / 1000).toFixed(2)} kbps)` : k;
+      const labelToKey = {};
+      Object.keys(modes).forEach((k) => { labelToKey[modeLabel(k)] = k; });
+      items.push({ type: "button", label: "» SEND TEST FRAME (keys radio)", onEnter: m73Test });
+      items.push({ type: "fnum", label: "TX level (%) — live", value: M73_EDIT.tx_level,
+        min: 5, max: 100, onChange: (x) => { M73_EDIT.tx_level = x; m73Live("tx_level", x); } });
+      items.push({ type: "fnum", label: "RX gain (0-35) — live", value: M73_EDIT.rx_gain,
+        min: 0, max: 35, onChange: (x) => { M73_EDIT.rx_gain = x; m73Live("rx_gain", x); } });
+      items.push({ type: "fnum", label: "TX gain (0-37) — live", value: M73_EDIT.tx_gain,
+        min: 0, max: 37, onChange: (x) => { M73_EDIT.tx_gain = x; m73Live("tx_gain", x); } });
+      items.push({ type: "fselect", label: "Mode (applies on save)",
+        options: Object.keys(modes).map(modeLabel), value: modeLabel(M73_EDIT.mode),
+        onChange: (x) => M73_EDIT.mode = labelToKey[x] || M73_EDIT.mode });
+      items.push({ type: "button", label: "» SAVE + APPLY (restarts modem73)", onEnter: m73Save });
+      items.push({ type: "button", label: "» Revert edits to live", onEnter: (S) => { M73_EDIT = null; return S.reload(); } });
       return { items };
     },
   },
@@ -2379,8 +2442,12 @@ async function saveModem73(S) {
   cfg.reticulum.modem73_enabled = MO.enabled;
   cfg.reticulum.modem73_audio_device = MO.audio_device;
   cfg.reticulum.modem73_ptt_line = MO.ptt_line;
-  cfg.reticulum.modem73_callsign = MO.callsign;
+  // Blank callsign -> omit so the schema derives it from the node id.
+  if (MO.callsign && String(MO.callsign).trim()) cfg.reticulum.modem73_callsign = MO.callsign;
+  else delete cfg.reticulum.modem73_callsign;
   cfg.reticulum.modem73_tx_level = parseInt(MO.tx_level, 10);
+  cfg.reticulum.modem73_rx_gain = parseInt(MO.rx_gain, 10);
+  cfg.reticulum.modem73_tx_gain = parseInt(MO.tx_gain, 10);
   cfg.reticulum.modem73_mode = MO.mode;
   const { ok, d } = await jsend("PUT", "/api/v1/config", cfg);
   if (ok) S.msg("modem73 saved — not yet applied; press Apply to restart rnsd + modem73");
@@ -2621,6 +2688,135 @@ function msgWsClose() {
   if (MSG_WS) {
     try { MSG_WS.onclose = null; MSG_WS.close(); } catch (e) {}
     MSG_WS = null;
+  }
+}
+
+// ── modem73 LIVE page ──────────────────────────────────────────
+// Thresholds mirror nucleusd/modem73/advice.py (the advice grades the link
+// server-side; these only colour the readouts).
+function m73Cls(kind, x) {
+  if (x == null || x < -999) return "";
+  if (kind === "level") return (x === 0 || x > -6 || x < -40) ? "off" : "ok";
+  if (kind === "snr") return x >= 15 ? "ok" : x >= 10 ? "warn" : "off";
+  if (kind === "ber") return x < 0 ? "" : x < 1 ? "ok" : x < 3 ? "warn" : "off";
+  return "";
+}
+const m73Num = (x, d = 1) => (x == null || x < -999 ? "—" : Number(x).toFixed(d));
+
+function m73Html(v) {
+  const st = v.status || {};
+  const lv = v.live || {};
+  let h = `<div class="content">`;
+  if (!v.online) h += `<div class="warn">modem73 offline: ${esc(v.error || "unknown")} — retrying</div>`;
+  const drift = ["tx_level", "rx_gain", "tx_gain", "mode"].filter((k) =>
+    lv[k] != null && v.saved[k] != null && lv[k] !== v.saved[k]);
+  h += `<div class="kv"><span>call <b>${esc(v.callsign)}</b></span>` +
+    `<span>tx mode <b>${esc(lv.mode || lv.modulation || "—")}</b></span>` +
+    `<span>state <b class="${st.ptt_on ? "warn" : ""}">${esc(st.channel_state || "—")}` +
+    `${st.ptt_on ? " (PTT)" : ""}</b></span>` +
+    `<span>audio <b class="${st.audio_connected ? "ok" : "off"}">` +
+    `${st.audio_connected ? "ok" : "down"}</b></span></div>`;
+  h += `<div class="kv"><span>rx <b>${st.rx_frame_count ?? "—"}</b></span>` +
+    `<span>tx <b>${st.tx_frame_count ?? "—"}</b></span>` +
+    `<span>crc err <b class="${st.crc_errors ? "warn" : ""}">${st.crc_errors ?? "—"}</b></span>` +
+    `<span>preamble err <b>${st.preamble_errors ?? "—"}</b></span>` +
+    `<span>busy <b>${st.occupancy_pct ?? "—"}%</b></span></div>`;
+  if (drift.length) h += `<div class="warn">live differs from saved: ${esc(drift.join(", "))} — SAVE to keep</div>`;
+  // Latest real station frame (callsign-less decodes are noise).
+  const frames = (v.frames || []).filter((f) => f.callsign);
+  const f = frames[0];
+  h += `<div class="page-title" style="padding-left:0">Last frame heard</div>`;
+  if (!f) {
+    h += `<div class="off">none yet — have the far node SEND TEST FRAME</div>`;
+  } else {
+    h += `<div class="kv"><span>from <b>${esc(f.callsign)}</b></span>` +
+      `<span>${ago(f.time)} ago</span><span>${esc(f.mode)}</span></div>` +
+      `<div class="kv"><span>level <b class="${m73Cls("level", f.level_db)}">${m73Num(f.level_db)} dBFS</b></span>` +
+      `<span>SNR <b class="${m73Cls("snr", f.snr)}">${m73Num(f.snr)} dB</b></span>` +
+      `<span>BER <b class="${m73Cls("ber", f.ber_pct)}">${m73Num(f.ber_pct, 2)}%</b></span></div>`;
+  }
+  ((v.advice || {}).items || []).forEach((it) => {
+    const cls = it.sev === "bad" ? "off" : it.sev === "warn" ? "warn" : "ok";
+    h += `<div class="${cls}">• ${esc(it.text)}</div>`;
+  });
+  if (frames.length) {
+    h += `<table><tr><th>When</th><th>From</th><th>Mode</th><th>Level</th><th>SNR</th><th>BER%</th></tr>`;
+    frames.slice(0, 15).forEach((x) => {
+      h += `<tr><td>${ago(x.time)}</td><td>${esc(x.callsign)}</td><td>${esc(x.mode)}</td>` +
+        `<td class="${m73Cls("level", x.level_db)}">${m73Num(x.level_db)}</td>` +
+        `<td class="${m73Cls("snr", x.snr)}">${m73Num(x.snr)}</td>` +
+        `<td class="${m73Cls("ber", x.ber_pct)}">${m73Num(x.ber_pct, 2)}</td></tr>`;
+    });
+    h += `</table>`;
+  }
+  h += `<div class="hint" style="padding-left:0">Readings are what THIS node hears from the far ` +
+    `node. Level = this radio's volume knob + RX gain (aim −10..−30 dBFS). SNR/BER = far ` +
+    `node's TX level + mode. Tune one end at a time; level shows only when a frame decodes.</div>`;
+  return h + `</div>`;
+}
+
+async function m73Test(S) {
+  const { ok, d } = await jsend("POST", "/api/v1/modem73/test");
+  if (!ok) return S.msg("test frame failed: " + (d.detail || "error"), false);
+  S.msg(`test frame #${d.seq} queued — check the far node's LIVE page`);
+}
+
+// Live control changes are debounced so holding ▲▼ sends one request.
+const M73_TIMERS = {};
+function m73Live(key, value) {
+  clearTimeout(M73_TIMERS[key]);
+  M73_TIMERS[key] = setTimeout(async () => {
+    const S = window.__shell;
+    const r = key === "tx_level"
+      ? await jsend("PUT", "/api/v1/modem73/tx_level", { tx_level: value })
+      : await jsend("PUT", "/api/v1/modem73/mixer", { [key]: value });
+    if (S) S.msg(r.ok ? `${key} = ${value} (live, not saved)` :
+      `${key} failed: ` + (r.d.detail || "error"), r.ok);
+  }, 300);
+}
+
+async function m73Save(S) {
+  if (!M73_EDIT) return S.msg("nothing to save", false);
+  S.msg("saving + applying…");
+  const body = {
+    mode: M73_EDIT.mode,
+    tx_level: parseInt(M73_EDIT.tx_level, 10),
+    rx_gain: parseInt(M73_EDIT.rx_gain, 10),
+    tx_gain: parseInt(M73_EDIT.tx_gain, 10),
+  };
+  const { ok, d } = await jsend("POST", "/api/v1/modem73/save", body);
+  if (!ok) return S.msg("save failed: " + JSON.stringify(d.detail || "error"), false);
+  S.msg(d.changed.length ? "saved — restarted: " + (d.units_restarted.join(", ") || "none")
+    : "saved — no changes");
+  M73_EDIT = null;
+  MO = null;  // CONFIGURE page re-reads config
+  return S.reload();
+}
+
+function m73WsOpen(S) {
+  m73WsClose();
+  M73_WS_POLL = false;
+  let ws;
+  try {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/api/v1/modem73/ws");
+  } catch (e) { M73_WS_POLL = true; return; }
+  M73_WS = ws;
+  ws.onmessage = (ev) => {
+    let obj;
+    try { obj = JSON.parse(ev.data); } catch (e) { return; }
+    if (obj.event !== "modem73") return;
+    M73_VIEW = obj.view;
+    if (S) S.reload();
+  };
+  ws.onclose = () => { if (M73_WS === ws) { M73_WS = null; M73_WS_POLL = true; } };
+  ws.onerror = () => { M73_WS_POLL = true; };
+}
+
+function m73WsClose() {
+  if (M73_WS) {
+    try { M73_WS.onclose = null; M73_WS.close(); } catch (e) {}
+    M73_WS = null;
   }
 }
 

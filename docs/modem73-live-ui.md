@@ -1,6 +1,33 @@
 # modem73 live web UI — plan
 
-Status: **proposal** (nothing implemented yet).
+Status: **phases 1–4 implemented** on branch `feat/modem73-live` (0.22.0):
+backend `nucleusd/modem73/`, API `/api/v1/modem73` (docs/API.md), page
+RETICULUM › MODEM73 LIVE (docs/manual/reticulum.md). Phase 5 (automatic mode
+adaptation) waits for range data.
+
+Decisions taken during implementation:
+
+- **Modes cut to a squad-level data budget**: a full 500 B packet in < 4 s
+  (≥ 1000 bps). Offered: `rdm_1200` + OFDM `qpsk_1_2` … `qam4096_5_6`. Dropped
+  BPSK 1/2, all MFSK and the other RDM modes. Every offered mode carries
+  ≥ 512 B per frame, so `--no-frag` is safe (RNS refuses `fixed_mtu` < 500, and
+  modem73 truncates oversize frames without fragmentation).
+- **Receivers auto-detect**, so nodes need not share a mode; each node's
+  mode only sets its TX rate and matching RNS bitrate. No negotiation needed.
+- **Mode changes are save + apply only** (restart), so the RNS bitrate never
+  disagrees with what the modem sends. TX level and sound-card gains are live,
+  with "Save" to persist and a drift warning on the page.
+- **Sound-card mixer pinned from config** on every modem73 start
+  (`modem73_rx_gain`/`tx_gain`, AGC off), leaving the radio knob the only
+  unknown gain.
+- **Test frame instead of beacon**: `send_beacon` is a presence tone, not a
+  decodable frame, so it yields no `rx_frame`. The page sends a short
+  `M73:<call>:...` frame via the control port's `tx`.
+- **Callsign defaults to the node id** (`0042`), so frames identify the sender.
+- MFSK RX decoders are disabled (`--no-mfsk-rx`): they produced false decodes
+  from receiver hiss.
+
+The original proposal follows.
 
 ## Problem
 

@@ -126,16 +126,23 @@ reticulum:
   # over the adapter's serial control line (DigiRig = rts) at /dev/nucleus/modem.
   # modem73_audio_device: "USB Audio Device, USB Audio"
   # modem73_ptt_line: rts        # rts | dtr | both | -rts | -dtr | -both
-  # modem73_callsign: N0CALL
-  # modem73_tx_level: 100        # 5-100 percent
-  # OFDM mode: modulation + FEC code rate. Sets BOTH the modem on-air rate and
-  # the matching RNS bitrate (one source of truth). Lower = slower but decodes in
-  # poorer conditions; higher = faster but needs a cleaner signal. On-air rates:
-  #   bpsk_1_2   ~788 bps     qam64_2_3   ~6406 bps
-  #   qpsk_1_2   ~1577 bps    qam64_3_4   ~7193 bps
-  #   (default)               qam256_3_4  ~9464 bps
-  #   qam16_1_2  ~3155 bps    qam256_5_6  ~10500 bps
-  #   qam16_2_3  ~4215 bps    qam4096_5_6 ~15959 bps
+  # modem73_callsign:            # blank = node id (e.g. 0042); <= 9 chars A-Z 0-9 /
+  # modem73_tx_level: 5          # 5-100 percent; 5 = bench-tested (higher overdrives a UV-5R)
+  # Sound-card mixer, pinned on every modem73 start (AGC + monitor loop forced off)
+  # so the radio's volume knob is the only unknown gain. Tune live on the
+  # RETICULUM > MODEM73 LIVE page, then Save.
+  # modem73_alsa_card: Device    # ALSA card id (/proc/asound/cards)
+  # modem73_rx_gain: 20          # 'Mic Capture Volume' 0-35 (-12..+23 dB)
+  # modem73_tx_gain: 17          # 'Speaker Playback Volume' 0-37 (-37..0 dB)
+  # TX mode. Sets BOTH the modem on-air rate and the matching RNS bitrate (one
+  # source of truth). Receivers auto-detect, so nodes need not match. Only modes
+  # that send a full 500 B packet in < 4 s are offered. On-air rates:
+  #   rdm_1200   ~1150 bps (robust)   qam64_2_3   ~6406 bps
+  #   qpsk_1_2   ~1577 bps (default)  qam64_3_4   ~7193 bps
+  #   qam16_1_2  ~3155 bps            qam256_3_4  ~9464 bps
+  #   qam16_2_3  ~4215 bps            qam256_5_6  ~10500 bps
+  #                                   qam4096_5_6 ~15959 bps
+  # (bpsk_1_2 was dropped; an existing config using it loads as qpsk_1_2.)
   # modem73_mode: qpsk_1_2
   # rnode_frequency: 914875000   # Hz (150M-960M, SX1262 range)
   # rnode_bandwidth: 250000      # Hz — one step: 7800/10400/15600/20800/31250/41700/62500/125000/250000/500000

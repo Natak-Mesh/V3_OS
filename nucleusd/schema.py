@@ -80,46 +80,90 @@ RNODE_DEVICE_PATH = "/dev/nucleus/rnode"
 # the plug-order /dev/ttyUSB* name.
 MODEM_DEVICE_PATH = "/dev/nucleus/modem"
 
-# --- modem73 OFDM mode registry ----------------------------------------------
+# --- modem73 mode registry ---------------------------------------------------
 # Single source of truth mapping a named, operator-selectable mode to the
-# modem73 OFDM settings that produce it AND the exact on-air bitrate modem73
-# reports for that combination. The two sides must agree: the launch script
-# (nucleus-modem73-up.sh) passes the modulation/code-rate flags, and the RNS
-# TCPClientInterface (reticulum config) is told the matching `bitrate` so its
-# framing, timeouts and announce rate-cap are sized to the real link. Deriving
-# both from one entry means they can never drift.
+# modem73 settings that produce it AND the exact on-air bitrate modem73 reports
+# for it. The two sides must agree: the launch script (nucleus-modem73-up.sh)
+# passes the modem flags, and the RNS TCPClientInterface (reticulum config) is
+# told the matching `bitrate` so its framing, timeouts and announce rate-cap
+# are sized to the real link. Deriving both from one entry means they can
+# never drift. The live web UI (nucleusd/modem73) reads the same table.
 #
-# OFDM is modem73's "fast family": hundreds of carriers in 2400 Hz, each a
-# PSK/QAM symbol, and per the modem73 manual it is the mode to "use for anything
-# over FM" — i.e. a VHF/UHF FM radio like a Baofeng. Modulation order trades
-# throughput against the signal quality (SNR) required to decode: BPSK needs the
-# least and is the slowest; QAM4096 needs the cleanest link and is the fastest.
-# The code rate is the FEC overhead (1/2 = half the bits are parity, most
-# robust; 5/6 = least overhead, fastest).
+# Families:
+#   * ofdm   — modem73's "fast family": hundreds of PSK/QAM carriers in
+#     2400 Hz; the mode to "use for anything over FM" (modem73 manual).
+#     Modulation order + FEC code rate trade throughput for required SNR.
+#   * robust — RDM-1200: a hardier single-mode fallback for weak links that
+#     still moves a full packet in ~3.5 s.
 #
-# Each `bitrate` below is the integer bits/second modem73 itself prints
-# ("bitrate: N.NNNkb/s") at startup for that exact modulation + code rate with
-# NORMAL frames — measured on this build, not estimated. Spread runs from the
-# most robust (BPSK 1/2, ~788 bps) to the fastest (QAM4096 5/6, ~15959 bps) so
-# an operator can drop to a slower, hardier mode in poor conditions or push a
-# faster one on a clean short-range link.
+# Selection rule (squad-level data link): a full 500 B Reticulum packet must go
+# out in under ~4 s, i.e. >= ~1000 bps. That drops OFDM BPSK (788 bps), every
+# MFSK mode and every other RDM mode (<= 781 bps). Configs still naming the
+# dropped bpsk_1_2 are migrated to qpsk_1_2 (see ReticulumConfig).
+#
+# `payload` is the PHY frame capacity in bytes modem73 reports (get_config
+# payload_size, 2 B of it is a length prefix). Every mode here is >= 512 B, so
+# a 500 B RNS packet always fits one frame: no modem fragmentation is needed
+# (modem73 TRUNCATES an oversize frame when --frag is off). RNS itself refuses
+# fixed_mtu < 500, so MODEM73_MIN_PAYLOAD is enforced by tests.
+#
+# `bitrate`/`payload` are what modem73 2.4.2 prints/reports for that exact mode
+# with NORMAL frames — measured on node 0042 via the control port, not estimated.
 MODEM73_MODES: dict[str, dict] = {
-    #  key            modulation  rate   bitrate(bps)  (robust → fast)
-    "bpsk_1_2":   {"modulation": "BPSK",    "rate": "1/2", "bitrate": 788},
-    "qpsk_1_2":   {"modulation": "QPSK",    "rate": "1/2", "bitrate": 1577},
-    "qam16_1_2":  {"modulation": "QAM16",   "rate": "1/2", "bitrate": 3155},
-    "qam16_2_3":  {"modulation": "QAM16",   "rate": "2/3", "bitrate": 4215},
-    "qam64_2_3":  {"modulation": "QAM64",   "rate": "2/3", "bitrate": 6406},
-    "qam64_3_4":  {"modulation": "QAM64",   "rate": "3/4", "bitrate": 7193},
-    "qam256_3_4": {"modulation": "QAM256",  "rate": "3/4", "bitrate": 9464},
-    "qam256_5_6": {"modulation": "QAM256",  "rate": "5/6", "bitrate": 10500},
-    "qam4096_5_6": {"modulation": "QAM4096", "rate": "5/6", "bitrate": 15959},
+    #  key            family     modulation  rate   bitrate(bps) payload(B)
+    "rdm_1200":    {"family": "robust", "modulation": "RDM-1200", "rate": None,
+                    "bitrate": 1150, "payload": 512},
+    "qpsk_1_2":    {"family": "ofdm", "modulation": "QPSK",    "rate": "1/2",
+                    "bitrate": 1577, "payload": 512},
+    "qam16_1_2":   {"family": "ofdm", "modulation": "QAM16",   "rate": "1/2",
+                    "bitrate": 3155, "payload": 1024},
+    "qam16_2_3":   {"family": "ofdm", "modulation": "QAM16",   "rate": "2/3",
+                    "bitrate": 4215, "payload": 1368},
+    "qam64_2_3":   {"family": "ofdm", "modulation": "QAM64",   "rate": "2/3",
+                    "bitrate": 6406, "payload": 2736},
+    "qam64_3_4":   {"family": "ofdm", "modulation": "QAM64",   "rate": "3/4",
+                    "bitrate": 7193, "payload": 3072},
+    "qam256_3_4":  {"family": "ofdm", "modulation": "QAM256",  "rate": "3/4",
+                    "bitrate": 9464, "payload": 3072},
+    "qam256_5_6":  {"family": "ofdm", "modulation": "QAM256",  "rate": "5/6",
+                    "bitrate": 10500, "payload": 3408},
+    "qam4096_5_6": {"family": "ofdm", "modulation": "QAM4096", "rate": "5/6",
+                    "bitrate": 15959, "payload": 6816},
 }
 
-# Default mode: QPSK 1/2 — modem73's own default, so the radio's on-air behaviour
-# is unchanged from the pre-registry build; only the RNS bitrate is corrected
-# (was a 300 bps placeholder, actually 1577 bps).
+# Smallest PHY frame a mode may have: a 500 B RNS packet + 2 B length prefix.
+MODEM73_MIN_PAYLOAD = 502
+
+# Dropped modes → their replacement, applied when a config is loaded so an
+# older config.yaml still validates (and `nucleusctl apply` normalizes it).
+MODEM73_MODE_MIGRATIONS: dict[str, str] = {"bpsk_1_2": "qpsk_1_2"}
+
+# Default mode: QPSK 1/2 — modem73's own default, and the slowest OFDM mode
+# that keeps a full packet under the airtime budget.
 MODEM73_DEFAULT_MODE = "qpsk_1_2"
+
+
+def modem73_mode_flags(mode: str) -> str:
+    """modem73 CLI flags selecting `mode` (from MODEM73_MODES)."""
+    m = MODEM73_MODES[mode]
+    if m["family"] == "robust":
+        return f"--robust-mode {m['modulation']}"
+    return f"--modem ofdm --modulation {m['modulation']} --rate {m['rate']}"
+
+
+def modem73_mode_from_live(cfg: dict) -> Optional[str]:
+    """Map a modem73 control-port get_config dict back to a MODEM73_MODES key.
+
+    Returns None when the live modem runs a mode outside the registry (e.g. one
+    set from the TUI)."""
+    t = cfg.get("modem_type")
+    for key, m in MODEM73_MODES.items():
+        if m["family"] == "robust" and t == 2 and cfg.get("modulation") == m["modulation"]:
+            return key
+        if (m["family"] == "ofdm" and t == 0 and cfg.get("modulation") == m["modulation"]
+                and cfg.get("code_rate") == m["rate"]):
+            return key
+    return None
 
 # Fixed interface name the HaLow radio is renamed to by the generated udev rule
 # (parallels RNODE_DEVICE_PATH). The interface the driver enumerates as
@@ -534,16 +578,39 @@ class ReticulumConfig(BaseModel):
     modem73_ptt_line: Literal["rts", "dtr", "both", "-rts", "-dtr", "-both"] = Field(
         "rts", description="Serial control line that keys PTT on the modem adapter (DigiRig = rts)."
     )
-    modem73_callsign: str = Field("N0CALL", description="modem73 station callsign.")
-    modem73_tx_level: int = Field(100, ge=5, le=100, description="modem73 TX audio output level, 5-100 percent.")
-    # OFDM mode (modulation + FEC code rate). Selects an entry from MODEM73_MODES,
-    # which drives BOTH the modem73 launch flags and the RNS interface bitrate so
-    # the two always agree. Lower modes (bpsk_1_2, qpsk_1_2) are slower but decode
-    # in poorer conditions; higher QAM modes are faster but need a cleaner signal.
-    # OFDM is the right family for a VHF/UHF FM radio (manual: "use it for anything
-    # over FM"). Default qpsk_1_2 = modem73's own default (~1577 bps on-air).
+    # Callsign sent in every frame (modem73 PHY header); receivers show it per
+    # frame, so it identifies the sending node on the live page. Blank = the
+    # node short id ("0042"). Must pass modem73's own check (<= 9 chars of
+    # A-Z a-z 0-9 / space) or modem73 refuses to start.
+    modem73_callsign: Optional[str] = Field(
+        None, description="modem73 station callsign (<= 9 chars, A-Z 0-9 /). Blank = node id (e.g. 0042)."
+    )
+    # 5 = bench-tested on UV-5R: higher overdrives the radio's mic input (OFDM
+    # peak-to-average), showing as low SNR / high BER at the far end. Tune live
+    # on the modem73 Live page while the far node watches SNR/BER.
+    modem73_tx_level: int = Field(5, ge=5, le=100, description="modem73 TX audio output level, 5-100 percent.")
+    # Sound-card mixer, pinned by the launch script on every start so the only
+    # unknown gain left in the chain is the radio's volume knob. Raw ALSA steps
+    # of the DigiRig's C-Media codec (card id from /proc/asound/cards). AGC and
+    # the Mic->Speaker monitor loop are always forced off.
+    modem73_alsa_card: str = Field(
+        "Device", description="ALSA card id of the modem sound card (see /proc/asound/cards)."
+    )
+    modem73_rx_gain: int = Field(
+        20, ge=0, le=35,
+        description="Sound-card capture gain step ('Mic Capture Volume' 0-35 = -12..+23 dB).",
+    )
+    modem73_tx_gain: int = Field(
+        17, ge=0, le=37,
+        description="Sound-card playback step ('Speaker Playback Volume' 0-37 = -37..0 dB).",
+    )
+    # Mode: selects an entry from MODEM73_MODES, which drives BOTH the modem73
+    # launch flags and the RNS interface bitrate so the two always agree.
+    # Receivers auto-detect the mode, so nodes need not match: each node's mode
+    # only sets what IT transmits. rdm_1200 is the hardy fallback; higher QAM is
+    # faster but needs a cleaner signal.
     modem73_mode: Literal[
-        "bpsk_1_2",
+        "rdm_1200",
         "qpsk_1_2",
         "qam16_1_2",
         "qam16_2_3",
@@ -554,13 +621,35 @@ class ReticulumConfig(BaseModel):
         "qam4096_5_6",
     ] = Field(
         MODEM73_DEFAULT_MODE,
-        description="modem73 OFDM mode (modulation + code rate); sets on-air rate and the matching RNS bitrate.",
+        description="modem73 TX mode; sets on-air rate and the matching RNS bitrate.",
         # Publish the per-mode metadata (modulation, code rate, on-air bitrate) from
         # MODEM73_MODES into the field's JSON schema, so the web UI can label the
         # mode dropdown with real rates read from the one contract — no second copy
         # of the rate table in the frontend.
         json_schema_extra={"modes": MODEM73_MODES},
     )
+
+    @field_validator("modem73_mode", mode="before")
+    @classmethod
+    def _migrate_modem73_mode(cls, v):
+        # Dropped modes (too slow for a squad data link) map to their
+        # replacement so an older config.yaml still loads.
+        return MODEM73_MODE_MIGRATIONS.get(v, v)
+
+    @field_validator("modem73_callsign", mode="before")
+    @classmethod
+    def _clean_modem73_callsign(cls, v):
+        # Blank, or the old "N0CALL" placeholder default, means "use the node
+        # id". Anything else must pass modem73's own callsign check, which
+        # otherwise aborts modem73 at startup.
+        if v is None:
+            return None
+        v = str(v).strip()
+        if not v or v.upper() == "N0CALL":
+            return None
+        if len(v) > 9 or not re.fullmatch(r"[A-Za-z0-9/ ]+", v):
+            raise ValueError("modem73_callsign must be <= 9 chars of A-Z a-z 0-9 / space")
+        return v
 
     # RNode LoRa radio attached over USB (on by default). Bound to the
     # stable RNODE_DEVICE_PATH symlink by the generated udev rule, so the config
@@ -788,6 +877,11 @@ class NucleusConfig(BaseModel):
     def ap_name(self) -> str:
         return self.ap.name or f"{self.node.short}-nucleus-ap"
 
+    @property
+    def modem73_callsign(self) -> str:
+        """Callsign modem73 transmits: configured value, else the node short id."""
+        return self.reticulum.modem73_callsign or self.node.short
+
     # ---- TAK PKI names (derived from hostname; CN cannot contain spaces) ----
     @property
     def tak_root_ca_name(self) -> str:
@@ -974,7 +1068,7 @@ class NucleusConfig(BaseModel):
             "reti_modem73_host": "127.0.0.1",
             "reti_modem73_port": 8001,
             "reti_modem73_fixed_mtu": 500,
-            # Bitrate is DERIVED from the selected OFDM mode (MODEM73_MODES) so it
+            # Bitrate is DERIVED from the selected mode (MODEM73_MODES) so it
             # always matches the modem73 launch flags below — RNS is told the real
             # on-air rate, not a placeholder, so its framing/timeouts and the
             # announce rate-cap are sized correctly.
@@ -985,15 +1079,17 @@ class NucleusConfig(BaseModel):
             "modem73_audio_device": self.reticulum.modem73_audio_device,
             "modem73_ptt_line": self.reticulum.modem73_ptt_line,
             "modem73_ptt_device": MODEM_DEVICE_PATH,
-            "modem73_callsign": self.reticulum.modem73_callsign,
+            "modem73_callsign": self.modem73_callsign,
             "modem73_tx_level": self.reticulum.modem73_tx_level,
             "modem73_kiss_port": 8001,
             "modem73_control_port": 8073,
-            # OFDM modulation + code rate for the launch script's --modulation /
-            # --rate flags, from the same registry entry that sets the RNS bitrate
-            # above (so the modem and RNS can never disagree about the link).
-            "modem73_modulation": MODEM73_MODES[self.reticulum.modem73_mode]["modulation"],
-            "modem73_code_rate": MODEM73_MODES[self.reticulum.modem73_mode]["rate"],
+            # Mode flags (--modem ofdm --modulation/--rate, or --robust-mode) from
+            # the same registry entry that sets the RNS bitrate above.
+            "modem73_mode_flags": modem73_mode_flags(self.reticulum.modem73_mode),
+            # Sound-card mixer pinned by the launch script (see ReticulumConfig).
+            "modem73_alsa_card": self.reticulum.modem73_alsa_card,
+            "modem73_rx_gain": self.reticulum.modem73_rx_gain,
+            "modem73_tx_gain": self.reticulum.modem73_tx_gain,
             # --- USB device registry (generated udev rule) ---
             "usb_devices": USB_DEVICES,
             # --- Web UI auth (nginx) ---

@@ -77,6 +77,7 @@ Everything flows one direction, from one file:
 | `rf.py` | Per-radio RF control — the **only** module that touches rfkill/`/sys`. Resolves a phy from its interface, soft-blocks/unblocks it, and enforces persistent RF state at boot (`nucleus-rf.service`). Consumed by `apply.py`, `status.py` and the AP toggle. |
 | `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |
 | `reticulum.py`, `reticulum_router.py` | Read-only rnsd status via the shared-instance control socket. |
+| `modem73/` | modem73 live link tuning: one shared control-port connection (`control.py`, status/config/decoded-frame cache), sound-card mixer (`mixer.py`), link advice (`advice.py`), router (`/api/v1/modem73`: test frame, live TX level/gains, save + apply). |
 | `linktest.py`, `linktest_router.py` | On-demand link tests: ping + iperf3 over wlan1/halow0 (peer spawns a one-shot `iperf3 -s -1` per test — no daemon), `rnprobe` over Reticulum. |
 | `update.py` | Self-update: version check + launches `nucleus-update.sh`. |
 | `power.py` | Imperative node power control (reboot / power off) via `systemctl`; the router/API only relays to it. |

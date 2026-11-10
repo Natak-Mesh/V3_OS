@@ -93,6 +93,14 @@ try:
 except Exception:
     pass
 
+# modem73 live link tuning (level/SNR/BER, test frame, live TX level + gains,
+# save-to-config) — see nucleusd/modem73/.
+try:
+    from .modem73.router import router as modem73_router
+    app.include_router(modem73_router)
+except Exception:
+    pass
+
 # On-demand link tests (ping / iperf3 / rnprobe) — see nucleusd/linktest.py.
 try:
     from .linktest_router import router as linktest_router
