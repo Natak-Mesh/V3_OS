@@ -601,14 +601,12 @@ Everything the LIVE page shows. `frames` = last 64 decoded frames, newest first
 (modem73 `rx_frame` fields: `callsign`, `time`, `level_db` RX audio dBFS, `snr`
 dB, `ber_pct` pre-FEC, `mode`, ...). Frames with an empty `callsign` are noise
 decodes. `live` = what the running modem uses (`mode` is `null` if it is not a
-registry mode); `saved` = config.yaml. `advice` grades the newest sender's link.
-`attempts` = last 32 decode attempts parsed from `/var/log/modem73.log`
-(includes CRC failures, which the control port never reports), newest first:
-`time` (null if read on startup backfill), `callsign`, `modulation`,
-`code_rate`, `cfo_hz`, `sfo_ppm`, `sym_snr`/`sym_snr_min` (per-symbol SNR dB),
-`ok` (true decoded / false CRC failed / null in progress), `snr`, `ber_pct`.
-`channel_db` = channel level at the last CSMA check (TUI "Carrier"),
-`channel_age_s` its age.
+registry mode); `saved` = config.yaml. `attempts` = last 32 frames heard,
+from `/var/log/modem73.log`, incl. CRC failures (the control port reports
+decodes only), newest first: `time` (null if read at startup), `callsign`,
+`modulation`, `code_rate`, `ok` (true / false = CRC fail / null = in
+progress), `snr` dB (decoded SNR; mean per-symbol SNR on CRC fail), `ber_pct`
+(decoded only).
 ```bash
 curl -s http://localhost:8080/api/v1/modem73/status
 # {"online":true,"error":null,"callsign":"0042",
@@ -619,7 +617,8 @@ curl -s http://localhost:8080/api/v1/modem73/status
 #  "saved":{"mode":"qpsk_1_2","tx_level":5,"rx_gain":20,"tx_gain":17},
 #  "frames":[{"seq":3,"time":1794349203.45,"callsign":"0047","level_db":-12.8,
 #             "snr":4.97,"ber_pct":6.6,"mode":"QPSK 1/2 N",...}],
-#  "advice":{"sender":"0047","level":"ok","items":[{"sev":"bad","text":"SNR 4.9 dB / ..."}]},
+#  "attempts":[{"time":1794349203.4,"callsign":"0047","modulation":"QAM256",
+#               "code_rate":"3/4","ok":false,"snr":16.1,"ber_pct":null}],
 #  "modes":{"rdm_1200":{"family":"robust","bitrate":1150,"payload":512,...},...}}
 ```
 

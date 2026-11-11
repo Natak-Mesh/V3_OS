@@ -102,14 +102,18 @@ Radio setup (manual, both nodes):
 
 ### Live tuning page (RETICULUM › NODE STATUS › MODEM73 LIVE)
 
-Shows what **this** node hears from the far node, per decoded frame: sender
-callsign, RX level (dBFS), SNR, BER, mode, plus modem counters (rx/tx, CRC and
-preamble errors, channel busy %) and advice. TUI readouts the control port
-lacks are parsed from `/var/log/modem73.log`: **carrier** (channel dB at the
-last CSMA check), and a **decode attempts** table with every frame heard,
-including **CRC FAIL** ones, with per-symbol SNR avg/min, CFO and SFO. If
-attempts show CRC FAIL at decent SNR, the far end is distorting (overdriven
-TX) or its mode is too fast. Controls:
+Each section is a reading with its target and the control that fixes it:
+
+| Section | Reading (target) | Fix |
+|---|---|---|
+| Heard from far node | sender, its mode, last 10 frames OK / CRC FAIL | far node: TX level, then Mode |
+| RX level | dBFS of last decoded frame (−10…−30) | this radio's volume knob, RX gain |
+| Signal quality | SNR (≥ 15 dB), BER (< 1 %) | far node: TX level / TX gain, then Mode |
+| This node TX | frames sent, PTT, mode | TX level, TX gain, Mode, SEND TEST FRAME |
+
+CRC-failed frames come from `/var/log/modem73.log` (the control port reports
+decodes only); their SNR is the mean per-symbol SNR, and they carry no RX
+level. Controls:
 
 - **SEND TEST FRAME**: transmits one short frame now (keys the radio). The far
   node's LIVE page shows its level/SNR/BER. rnsd ignores it.
@@ -122,8 +126,9 @@ Tuning order, one end at a time, with someone watching the other end's page:
 
 1. **RX level first.** Far node sends test frames; on this node adjust the
    radio volume knob (coarse) and RX gain (fine) until level sits in
-   **−10…−30 dBFS** (green). Level only updates when a frame decodes, so if
-   nothing decodes, start with the knob mid-scale.
+   **−10…−30 dBFS** (green). Level only updates when a frame decodes. If every
+   frame is CRC FAIL, step the knob one way and keep the direction that raises
+   SNR.
 2. **Far-end TX level.** With level green, low SNR plus high BER means the far
    node's TX is overdriven. Lower **its** TX level (or TX gain below the 5 %
    floor) until SNR stops improving.

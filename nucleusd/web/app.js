@@ -1330,8 +1330,7 @@ const PAGES = {
     },
   },
 
-  // modem73 LIVE: what this node hears (level / SNR / BER per decoded frame),
-  // advice, a test-frame button, and live TX level + sound-card gains. Live
+  // modem73 LIVE: each section = a reading + the control that fixes it. Live
   // changes last until modem73 restarts; "Save" writes them + the mode to
   // config.yaml and applies. Data via /api/v1/modem73 (WS push, poll fallback).
   rns_modem73_live: {
@@ -1355,16 +1354,20 @@ const PAGES = {
           mode: v.saved.mode,
         };
       }
-      const items = [{ type: "content", html: m73Html(v) }];
       const modes = v.modes || {};
       const modeLabel = (k) => modes[k] ? `${k} (${(modes[k].bitrate / 1000).toFixed(2)} kbps)` : k;
       const labelToKey = {};
       Object.keys(modes).forEach((k) => { labelToKey[modeLabel(k)] = k; });
+      const S = m73Sections(v);
+      const html = (h) => ({ type: "content", html: `<div class="content">${h}</div>` });
+      const items = [html(S.top + S.heard), html(S.level)];
+      items.push({ type: "fnum", label: "RX gain (0-35) — live", value: M73_EDIT.rx_gain,
+        min: 0, max: 35, onChange: (x) => { M73_EDIT.rx_gain = x; m73Live("rx_gain", x); } });
+      items.push(html(S.quality));
+      items.push(html(S.tx));
       items.push({ type: "button", label: "» SEND TEST FRAME (keys radio)", onEnter: m73Test });
       items.push({ type: "fnum", label: "TX level (%) — live", value: M73_EDIT.tx_level,
         min: 5, max: 100, onChange: (x) => { M73_EDIT.tx_level = x; m73Live("tx_level", x); } });
-      items.push({ type: "fnum", label: "RX gain (0-35) — live", value: M73_EDIT.rx_gain,
-        min: 0, max: 35, onChange: (x) => { M73_EDIT.rx_gain = x; m73Live("rx_gain", x); } });
       items.push({ type: "fnum", label: "TX gain (0-37) — live", value: M73_EDIT.tx_gain,
         min: 0, max: 37, onChange: (x) => { M73_EDIT.tx_gain = x; m73Live("tx_gain", x); } });
       items.push({ type: "fselect", label: "Mode (applies on save)",
@@ -1372,6 +1375,7 @@ const PAGES = {
         onChange: (x) => M73_EDIT.mode = labelToKey[x] || M73_EDIT.mode });
       items.push({ type: "button", label: "» SAVE + APPLY (restarts modem73)", onEnter: m73Save });
       items.push({ type: "button", label: "» Revert edits to live", onEnter: (S) => { M73_EDIT = null; return S.reload(); } });
+      items.push(html(S.table));
       return { items };
     },
   },
@@ -2692,89 +2696,79 @@ function msgWsClose() {
 }
 
 // ── modem73 LIVE page ──────────────────────────────────────────
-// Thresholds mirror nucleusd/modem73/advice.py (the advice grades the link
-// server-side; these only colour the readouts).
+// Targets: RX level -10..-30 dBFS, SNR >= 15 dB, BER < 1 %.
 function m73Cls(kind, x) {
-  if (x == null || x < -999) return "";
+  if (x == null) return "";
   if (kind === "level") return (x === 0 || x > -6 || x < -40) ? "off" : "ok";
   if (kind === "snr") return x >= 15 ? "ok" : x >= 10 ? "warn" : "off";
-  if (kind === "ber") return x < 0 ? "" : x < 1 ? "ok" : x < 3 ? "warn" : "off";
+  if (kind === "ber") return x < 1 ? "ok" : x < 3 ? "warn" : "off";
   return "";
 }
-const m73Num = (x, d = 1) => (x == null || x < -999 ? "—" : Number(x).toFixed(d));
+const m73Num = (x, d = 1) => (x == null ? "—" : Number(x).toFixed(d));
+const m73Val = (kind, x, unit, d = 1) =>
+  `<b class="${m73Cls(kind, x)}">${x == null ? "—" : m73Num(x, d) + unit}</b>`;
+const m73H = (t) => `<div class="page-title" style="padding-left:0">${t}</div>`;
+const m73Fix = (t) => `<div class="hint" style="padding-left:0">${t}</div>`;
 
-function m73Html(v) {
+// HTML blocks; the page interleaves them with the controls that fix them.
+function m73Sections(v) {
   const st = v.status || {};
   const lv = v.live || {};
-  let h = `<div class="content">`;
-  if (!v.online) h += `<div class="warn">modem73 offline: ${esc(v.error || "unknown")} — retrying</div>`;
+  // Callsign-less entries are noise (hiss false syncs/decodes).
+  const att = (v.attempts || []).filter((a) => a.callsign && a.ok != null);
+  const frames = (v.frames || []).filter((f) => f.callsign);
+  const a = att[0];
+  const f = frames[0];
+  let top = "";
+  if (!v.online) top += `<div class="off">modem73 offline: ${esc(v.error || "unknown")}</div>`;
+  if (v.status && !st.audio_connected) top += `<div class="off">sound card disconnected</div>`;
   const drift = ["tx_level", "rx_gain", "tx_gain", "mode"].filter((k) =>
     lv[k] != null && v.saved[k] != null && lv[k] !== v.saved[k]);
-  h += `<div class="kv"><span>call <b>${esc(v.callsign)}</b></span>` +
-    `<span>tx mode <b>${esc(lv.mode || lv.modulation || "—")}</b></span>` +
-    `<span>state <b class="${st.ptt_on ? "warn" : ""}">${esc(st.channel_state || "—")}` +
-    `${st.ptt_on ? " (PTT)" : ""}</b></span>` +
-    `<span>audio <b class="${st.audio_connected ? "ok" : "off"}">` +
-    `${st.audio_connected ? "ok" : "down"}</b></span></div>`;
-  h += `<div class="kv"><span>rx <b>${st.rx_frame_count ?? "—"}</b></span>` +
-    `<span>tx <b>${st.tx_frame_count ?? "—"}</b></span>` +
-    `<span>crc err <b class="${st.crc_errors ? "warn" : ""}">${st.crc_errors ?? "—"}</b></span>` +
-    `<span>preamble err <b>${st.preamble_errors ?? "—"}</b></span>` +
-    `<span>busy <b>${st.occupancy_pct ?? "—"}%</b></span></div>`;
-  // TUI readouts. Carrier = channel level at the last CSMA check (modem73 log).
-  h += `<div class="kv"><span>carrier <b>${m73Num(v.channel_db)} dB</b>` +
-    `${v.channel_age_s != null ? ` (${Math.round(v.channel_age_s)}s)` : ""}</span>` +
-    `<span>sync <b>${st.sync_count ?? "—"}</b></span>` +
-    `<span>last SNR <b>${m73Num(st.last_snr)} dB</b></span>` +
-    `<span>BER <b>${st.last_ber != null && st.last_ber >= 0 ? m73Num(st.last_ber * 100, 2) + "%" : "—"}</b></span></div>`;
-  const at = v.attempts || [];
-  h += `<div class="page-title" style="padding-left:0">Decode attempts (incl. CRC failures)</div>`;
-  if (!at.length) h += `<div class="off">none heard</div>`;
-  else {
-    h += `<table><tr><th>When</th><th>From</th><th>Mode</th><th>SNR avg/min</th>` +
-      `<th>CFO Hz</th><th>SFO ppm</th><th>Result</th></tr>`;
-    at.slice(0, 15).forEach((a) => {
-      const res = a.ok ? `OK ${m73Num(a.snr)} dB ${m73Num(a.ber_pct, 2)}%` : a.ok === false ? "CRC FAIL" : "…";
-      h += `<tr><td>${a.time ? ago(a.time) : "?"}</td><td>${esc(a.callsign ?? "—")}</td>` +
-        `<td>${esc(`${a.modulation ?? "?"} ${a.code_rate ?? ""}`)}</td>` +
-        `<td class="${m73Cls("snr", a.sym_snr)}">${m73Num(a.sym_snr)}/${m73Num(a.sym_snr_min)}</td>` +
-        `<td>${m73Num(a.cfo_hz)}</td><td>${m73Num(a.sfo_ppm)}</td>` +
-        `<td class="${a.ok ? "ok" : a.ok === false ? "off" : ""}">${res}</td></tr>`;
-    });
-    h += `</table>`;
-  }
-  if (drift.length) h += `<div class="warn">live differs from saved: ${esc(drift.join(", "))} — SAVE to keep</div>`;
-  // Latest real station frame (callsign-less decodes are noise).
-  const frames = (v.frames || []).filter((f) => f.callsign);
-  const f = frames[0];
-  h += `<div class="page-title" style="padding-left:0">Last frame heard</div>`;
-  if (!f) {
-    h += `<div class="off">none yet — have the far node SEND TEST FRAME</div>`;
-  } else {
-    h += `<div class="kv"><span>from <b>${esc(f.callsign)}</b></span>` +
-      `<span>${ago(f.time)} ago</span><span>${esc(f.mode)}</span></div>` +
-      `<div class="kv"><span>level <b class="${m73Cls("level", f.level_db)}">${m73Num(f.level_db)} dBFS</b></span>` +
-      `<span>SNR <b class="${m73Cls("snr", f.snr)}">${m73Num(f.snr)} dB</b></span>` +
-      `<span>BER <b class="${m73Cls("ber", f.ber_pct)}">${m73Num(f.ber_pct, 2)}%</b></span></div>`;
-  }
-  ((v.advice || {}).items || []).forEach((it) => {
-    const cls = it.sev === "bad" ? "off" : it.sev === "warn" ? "warn" : "ok";
-    h += `<div class="${cls}">• ${esc(it.text)}</div>`;
-  });
-  if (frames.length) {
-    h += `<table><tr><th>When</th><th>From</th><th>Mode</th><th>Level</th><th>SNR</th><th>BER%</th></tr>`;
-    frames.slice(0, 15).forEach((x) => {
-      h += `<tr><td>${ago(x.time)}</td><td>${esc(x.callsign)}</td><td>${esc(x.mode)}</td>` +
-        `<td class="${m73Cls("level", x.level_db)}">${m73Num(x.level_db)}</td>` +
+  if (drift.length) top += `<div class="warn">not saved: ${esc(drift.join(", "))}</div>`;
+
+  const last10 = att.slice(0, 10);
+  const nOk = last10.filter((x) => x.ok).length;
+  let heard = m73H("Heard from far node");
+  heard += a
+    ? `<div class="kv"><span>from <b>${esc(a.callsign)}</b></span>` +
+      `<span>mode <b>${esc(`${a.modulation ?? "?"} ${a.code_rate ?? ""}`)}</b></span>` +
+      `<span>last ${last10.length}: <b class="${nOk === last10.length ? "ok" : "off"}">` +
+      `${nOk} OK / ${last10.length - nOk} CRC FAIL</b></span></div>`
+    : `<div class="off">nothing heard — far node: SEND TEST FRAME</div>`;
+  heard += m73Fix("CRC FAIL at good SNR → far node lowers TX level. Still failing → far node picks a slower Mode.");
+
+  const lvl = f ? f.level_db : null;
+  let level = m73H("RX level (target −10…−30 dBFS)");
+  level += `<div class="kv"><span>level ${m73Val("level", lvl, " dBFS")}</span>` +
+    `${f ? `<span>${ago(f.time)} ago</span>` : ""}</div>`;
+  if (a && !a.ok && !(f && a.time && f.time >= a.time))
+    level += `<div class="warn">unknown for CRC-failed frames: turn radio volume one step, ` +
+      `send a test frame, keep the direction that raises SNR</div>`;
+  level += m73Fix("Fix: radio volume knob (coarse), RX gain (fine). Above −6 = clipping.");
+
+  let quality = m73H("Signal quality (SNR ≥ 15 dB, BER < 1 %)");
+  quality += `<div class="kv"><span>SNR ${m73Val("snr", a ? a.snr : null, " dB")}</span>` +
+    `<span>BER ${m73Val("ber", a && a.ok ? a.ber_pct : null, "%", 2)}</span></div>`;
+  quality += m73Fix("Low → far node lowers its TX level / TX gain (overdrive), then its Mode.");
+
+  let tx = m73H("This node TX");
+  tx += `<div class="kv"><span>sent <b>${st.tx_frame_count ?? "—"}</b></span>` +
+    `<span>PTT <b class="${st.ptt_on ? "warn" : ""}">${st.ptt_on ? "ON" : "off"}</b></span>` +
+    `<span>mode <b>${esc(lv.mode || lv.modulation || "—")}</b></span></div>`;
+
+  let table = "";
+  if (att.length) {
+    table = m73H("Frames heard") +
+      `<table><tr><th>When</th><th>From</th><th>Mode</th><th>SNR</th><th>Result</th></tr>`;
+    att.slice(0, 15).forEach((x) => {
+      table += `<tr><td>${x.time ? ago(x.time) : "?"}</td><td>${esc(x.callsign)}</td>` +
+        `<td>${esc(`${x.modulation ?? "?"} ${x.code_rate ?? ""}`)}</td>` +
         `<td class="${m73Cls("snr", x.snr)}">${m73Num(x.snr)}</td>` +
-        `<td class="${m73Cls("ber", x.ber_pct)}">${m73Num(x.ber_pct, 2)}</td></tr>`;
+        `<td class="${x.ok ? "ok" : "off"}">${x.ok ? `OK BER ${m73Num(x.ber_pct, 2)}%` : "CRC FAIL"}</td></tr>`;
     });
-    h += `</table>`;
+    table += `</table>`;
   }
-  h += `<div class="hint" style="padding-left:0">Readings are what THIS node hears from the far ` +
-    `node. Level = this radio's volume knob + RX gain (aim −10..−30 dBFS). SNR/BER = far ` +
-    `node's TX level + mode. Tune one end at a time; level shows only when a frame decodes.</div>`;
-  return h + `</div>`;
+  return { top, heard, level, quality, tx, table };
 }
 
 async function m73Test(S) {

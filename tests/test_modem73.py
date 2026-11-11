@@ -1,6 +1,6 @@
 """nucleusd.modem73 + /api/v1/modem73 — live link tuning. Off-box.
 
-Message handling and advice run on real control-port messages captured on node
+Message handling runs on real control-port messages captured on node
 0042 (tests/modem73_fixtures.py). The control port, amixer and apply are
 stubbed; nothing here opens a socket to modem73 or keys a radio.
 """
@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 
 from nucleusd import config as cfgio
 from nucleusd.api import app
-from nucleusd.modem73 import advice as adv
 from nucleusd.modem73 import control as ctl
 from nucleusd.modem73 import mixer as mx
 from nucleusd.modem73 import router as rt
@@ -25,7 +24,7 @@ from nucleusd.schema import NucleusConfig
 from nucleusd.modem73 import logtail as lt
 from tests.modem73_fixtures import (
     CONFIG_CHANGED_RDM1200, GET_CONFIG_BPSK, GET_STATUS_LAST, LOG_CRC_FAIL,
-    LOG_DECODED, RX_FRAME_EVENTS, RX_FRAME_HISTORY, RX_FRAME_NOISE,
+    LOG_DECODED, RX_FRAME_EVENTS, RX_FRAME_HISTORY,
 )
 
 client = TestClient(app)
@@ -158,12 +157,10 @@ def test_log_decoded_frame_and_own_tx_block():
     p = _parse(LOG_DECODED)
     [a] = p.view()
     assert (a["callsign"], a["modulation"], a["code_rate"]) == ("N0CALL", "QPSK", "1/2")
-    assert a["ok"] is True and a["snr"] == pytest.approx(4.968, abs=1e-3)
-    assert a["ber_pct"] == pytest.approx(6.604) and a["sym_snr"] == 6.1
-    assert a["cfo_hz"] == pytest.approx(1499.98) and a["sfo_ppm"] == pytest.approx(7.0167)
-    assert "syms" not in a
-    # Our own BPSK TX block after it must not overwrite the RX attempt.
-    assert p.channel_db == pytest.approx(-87.7568) and p.channel_ts == 100.0
+    # Decoded: modem73's own SNR (what the TUI shows), not the per-symbol mean.
+    assert a["ok"] is True and a["snr"] == 5.0 and a["ber_pct"] == pytest.approx(6.604)
+    assert a["time"] == 100.0 and "syms" not in a
+    # Our own BPSK TX block after it did not overwrite the RX attempt.
 
 
 def test_log_crc_failures_are_attempts():
@@ -174,8 +171,8 @@ def test_log_crc_failures_are_attempts():
     assert all(a["callsign"] == "0047" for a in v)
     assert [a["modulation"] for a in v] == [None, "QAM256", "QAM256"]
     assert [a["ok"] for a in v] == [None, False, False]   # newest is cut after callsign
-    assert v[2]["sym_snr"] == 16.1 and v[2]["sym_snr_min"] == 14.3
-    assert v[2]["cfo_hz"] == 1500.0 and v[1]["cfo_hz"] is None
+    # No decoded SNR on a CRC failure: mean per-symbol SNR instead.
+    assert v[2]["snr"] == 16.1 and v[2]["ber_pct"] is None
 
 
 def test_logtail_reads_complete_lines_and_backfills(tmp_path):
@@ -205,81 +202,6 @@ def test_monitor_poll_log_bumps_version(tmp_path):
     assert s["attempts"][0]["time"] is None                  # backfill: time unknown
     m.poll_log()
     assert m.snapshot()["version"] == 1
-
-
-def test_advice_crc_failures_blame_far_tx():
-    """Regression: with CRC failures and no decodes the advice said only
-    'No frames decoded yet'."""
-    att = _parse(LOG_CRC_FAIL, now=NOW).view()
-    a = adv.advise([], GET_STATUS_LAST, now=NOW, attempts=att)
-    assert a["sender"] == "0047" and a["items"][0]["sev"] == "bad"
-    assert "failing CRC" in a["items"][0]["text"] and "QAM256 3/4" in a["items"][0]["text"]
-    # A decode newer than the failure wins.
-    newer = [{**FRAMES[0], "time": NOW + 1}]
-    assert adv.advise(newer, GET_STATUS_LAST, now=NOW, attempts=att)["sender"] == "N0CALL"
-
-
-# ── advice ───────────────────────────────────────────────────────
-
-def test_advice_real_overdriven_link_blames_far_tx():
-    """Captured 0047 -> 0042 link: 0047 at tx-level 100, level fine (-12..-17
-    dBFS), SNR ~4.9 dB, BER ~6.5% -> far-end TX overdrive, not RX level."""
-    a = adv.advise(FRAMES, GET_STATUS_LAST, now=NOW)
-    assert a["sender"] == "N0CALL"
-    assert a["level"] == "ok"
-    texts = " ".join(i["text"] for i in a["items"])
-    assert "overdriven" in texts and "Lower ITS TX level" in texts
-    assert a["items"][0]["sev"] == "bad"
-
-
-def test_advice_level_problems_take_priority():
-    hot = [{**FRAMES[0], "level_db": -2.0}]
-    a = adv.advise(hot, GET_STATUS_LAST, now=NOW)
-    assert a["level"] == "high"
-    assert len(a["items"]) == 1 and "volume down" in a["items"][0]["text"]
-    quiet = [{**FRAMES[0], "level_db": -55.0}]
-    a = adv.advise(quiet, GET_STATUS_LAST, now=NOW)
-    assert a["level"] == "low" and "volume" in a["items"][0]["text"]
-
-
-def test_advice_ignores_noise_decodes():
-    """Regression: a callsign-less MFSK 'decode' of hiss (level -88 dBFS) was
-    the newest frame and produced 'RX level very low' advice."""
-    noise = {k: v for k, v in RX_FRAME_NOISE.items() if k != "event"}
-    a = adv.advise([noise] + FRAMES, GET_STATUS_LAST, now=NOW)
-    assert a["sender"] == "N0CALL" and a["level"] == "ok"
-    assert adv.advise([noise], GET_STATUS_LAST, now=NOW)["sender"] is None
-
-
-def test_advice_clean_link_suggests_faster_mode():
-    clean = [{**f, "snr": 22.0, "ber_pct": 0.1} for f in FRAMES]
-    a = adv.advise(clean, {**GET_STATUS_LAST, "crc_errors": 0}, now=NOW)
-    assert a["items"][-1]["sev"] == "ok"
-    assert "qam16_1_2" in a["items"][-1]["text"]
-
-
-def test_advice_marginal_link_suggests_hardier_mode():
-    marginal = [{**f, "snr": 12.0, "ber_pct": 9.0} for f in FRAMES]
-    a = adv.advise(marginal, GET_STATUS_LAST, now=NOW)
-    assert any("rdm_1200" in i["text"] for i in a["items"])
-
-
-def test_advice_stale_and_empty():
-    a = adv.advise(FRAMES, GET_STATUS_LAST, now=NOW + 3600)
-    assert "min old" in a["items"][0]["text"]
-    assert adv.advise([], None)["items"][0]["sev"] == "warn"
-
-
-def test_level_state_zero_means_unknown():
-    # modem73 reports 0.0 when no recent audio block was available.
-    assert adv.level_state(0.0) == "unknown"
-    assert adv.level_state(-17.1) == "ok"
-
-
-def test_frame_mode_key():
-    assert adv.frame_mode_key(FRAMES[0]) == "qpsk_1_2"
-    assert adv.frame_mode_key({"modem": "robust", "mode": "RDM-1200"}) == "rdm_1200"
-    assert adv.frame_mode_key({"modem": "mfsk", "mode": "MFSK-16"}) is None
 
 
 # ── mixer ────────────────────────────────────────────────────────
@@ -351,9 +273,8 @@ def test_build_view_from_real_snapshot():
     assert v["live"]["tx_level"] == 5          # tx_drive 0.05 -> 5 %
     assert v["saved"] == {"mode": "qpsk_1_2", "tx_level": 5, "rx_gain": 20, "tx_gain": 17}
     assert [f["seq"] for f in v["frames"]] == [3, 2, 1]
-    assert v["advice"]["level"] == "ok"
     assert "rdm_1200" in v["modes"]
-    assert v["attempts"] == [] and v["channel_db"] is None and v["channel_age_s"] is None
+    assert v["attempts"] == [] and "advice" not in v
 
 
 def test_test_frame_sends_m73_text_frame(seeded, ctl_calls):

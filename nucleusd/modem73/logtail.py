@@ -1,10 +1,8 @@
-"""Decoder detail from modem73's log, which the control port does not expose.
+"""Frame attempts from modem73's log, incl. CRC failures.
 
-The control port reports a frame only once it decodes. The TUI also shows
-attempts that fail CRC, per-symbol SNR, CFO/SFO and the channel level; modem73
-prints those to stdout (nucleus-modem73.service -> /var/log/modem73.log), so
-they are parsed here. `Parser` is pure (tested on real log lines); `LogTail`
-only tracks the file offset.
+The control port reports a frame only once it decodes; frames that fail CRC
+appear only in modem73's stdout (/var/log/modem73.log), with per-symbol SNR.
+`Parser` is pure (tested on real log lines); `LogTail` tracks the file offset.
 """
 
 from __future__ import annotations
@@ -20,8 +18,7 @@ BACKFILL_BYTES = 64 * 1024
 
 _LINES = [
     ("sync", re.compile(r"Decoder: Sync found")),
-    ("cfo", re.compile(r"Decoder: CFO = (\S+) Hz")),
-    ("sfo", re.compile(r"Decoder: SFO = (\S+) ppm")),
+    ("sfo", re.compile(r"Decoder: SFO = ")),
     ("call", re.compile(r"Decoder: Call sign:\s*(\S*)")),
     ("modulation", re.compile(r"modulation: (\S+)")),
     ("code_rate", re.compile(r"code rate: (\S+)")),
@@ -29,25 +26,15 @@ _LINES = [
     ("crc", re.compile(r"Decoder: CRC failed")),
     ("ok", re.compile(r"Decoder: Frame decoded \d+ bytes, SNR=(\S+) dB, BER=(\S+)%")),
     ("tx", re.compile(r"TX: \d+ bytes")),
-    ("chan", re.compile(r"CSMA: Channel (?:clear|busy) \((\S+) dB")),
 ]
 
 
 class Parser:
-    """modem73 log lines -> frame attempts + last channel level."""
+    """modem73 log lines -> frame attempts."""
 
     def __init__(self) -> None:
         self.attempts: deque = deque(maxlen=MAX_ATTEMPTS)
-        self.channel_db: float | None = None
-        self.channel_ts: float | None = None
         self._cur: dict | None = None
-
-    def _new(self, now: float | None) -> dict:
-        self._cur = {"time": now, "callsign": None, "modulation": None, "code_rate": None,
-                     "cfo_hz": None, "sfo_ppm": None, "syms": [], "ok": None,
-                     "snr": None, "ber_pct": None}
-        self.attempts.append(self._cur)
-        return self._cur
 
     def feed(self, line: str, now: float | None) -> bool:
         """Fold one line in; True if anything changed. `now` None = time unknown."""
@@ -58,21 +45,18 @@ class Parser:
         else:
             return False
         a = self._cur
-        if kind == "chan":
-            self.channel_db, self.channel_ts = float(m[1]), now
-        elif kind == "tx":
+        if kind == "tx":
             self._cur = None  # the TX block's modulation/code rate lines are ours, not RX
-        elif kind == "sync" or (kind == "sfo" and (a is None or a["syms"])):
-            # Back-to-back frames re-sync without a "Sync found" line: SFO starts them.
-            a = self._new(now)
-            if kind == "sfo":
-                a["sfo_ppm"] = float(m[1])
+        elif kind == "sync" or kind == "sfo":
+            # Back-to-back frames start at SFO with no "Sync found" line.
+            if kind == "sfo" and a is not None and not a["syms"]:
+                return False
+            self._cur = {"time": now, "callsign": None, "modulation": None,
+                         "code_rate": None, "syms": [], "ok": None, "snr": None,
+                         "ber_pct": None}
+            self.attempts.append(self._cur)
         elif a is None:
             return False
-        elif kind == "cfo":
-            a["cfo_hz"] = float(m[1])
-        elif kind == "sfo":
-            a["sfo_ppm"] = float(m[1])
         elif kind == "call":
             a["callsign"] = m[1]
         elif kind in ("modulation", "code_rate"):
@@ -84,17 +68,17 @@ class Parser:
         elif kind == "crc":
             a["ok"] = False
         elif kind == "ok":
-            a.update(ok=True, snr=float(m[1]), ber_pct=float(m[2]))
+            a.update(ok=True, snr=round(float(m[1]), 1), ber_pct=float(m[2]))
         return True
 
     def view(self) -> list[dict]:
-        """Attempts newest first; per-symbol SNR reduced to avg/min."""
+        """Attempts newest first. `snr`: modem73's decoded SNR, or for a CRC
+        failure (which has none) the mean per-symbol SNR."""
         out = []
         for a in reversed(self.attempts):
             s = a["syms"]
-            out.append({**{k: v for k, v in a.items() if k != "syms"},
-                        "sym_snr": round(sum(s) / len(s), 1) if s else None,
-                        "sym_snr_min": round(min(s), 1) if s else None})
+            snr = a["snr"] if a["snr"] is not None else (round(sum(s) / len(s), 1) if s else None)
+            out.append({**{k: v for k, v in a.items() if k != "syms"}, "snr": snr})
         return out
 
 

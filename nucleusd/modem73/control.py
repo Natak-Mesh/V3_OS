@@ -107,7 +107,7 @@ class Monitor:
         self.status_ts = 0.0
         self.config: dict | None = None
         self.frames: deque = deque(maxlen=MAX_FRAMES)
-        # Decoder detail the control port lacks (failed attempts, CFO/SFO, channel dB).
+        # Frame attempts incl. CRC failures (the control port reports decodes only).
         self.log = logtail.Parser()
         self._tail = logtail.LogTail()
         # Bumped on every cache change; the WebSocket pushes when it moves.
@@ -134,8 +134,6 @@ class Monitor:
                 "config": dict(self.config) if self.config else None,
                 "frames": list(reversed(self.frames)),  # newest first
                 "attempts": self.log.view(),
-                "channel_db": self.log.channel_db,
-                "channel_ts": self.log.channel_ts,
                 "version": self.version,
             }
 

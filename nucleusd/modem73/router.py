@@ -1,6 +1,6 @@
 """FastAPI router: modem73 live link tuning (mounted under /api/v1/modem73).
 
-Thin HTTP layer over nucleusd.modem73.{control,mixer,advice}. Live changes
+Thin HTTP layer over nucleusd.modem73.{control,logtail,mixer}. Live changes
 (TX level, sound-card gains) take effect immediately and last until the next
 modem73 restart; POST /save writes them (and the mode) to config.yaml and runs
 apply, which re-renders the launch script and restarts modem73 (+ rnsd when
@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field
 from .. import config as cfgio
 from ..apply import apply as apply_config
 from ..schema import MODEM73_MODES, NucleusConfig, modem73_mode_from_live
-from . import advice as adv
 from . import control as ctl
 from . import mixer as mx
 
@@ -84,10 +83,6 @@ def build_view(cfg: NucleusConfig, snap: dict, mixer: dict, now: float | None = 
                   "rx_gain": r.modem73_rx_gain, "tx_gain": r.modem73_tx_gain},
         "frames": snap["frames"],
         "attempts": snap["attempts"],
-        "channel_db": snap["channel_db"],
-        "channel_age_s": round(now - snap["channel_ts"], 1) if snap["channel_ts"] else None,
-        "advice": adv.advise(snap["frames"], snap["status"], now=now,
-                             attempts=snap["attempts"]),
         "modes": MODEM73_MODES,
     }
 
