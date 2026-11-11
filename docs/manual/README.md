@@ -82,7 +82,7 @@ Selectable item types: navigation links, action buttons, and editable fields
 | INTERFACES AND SERVICES | [System](system.md) |
 | RADIOS (RF ON/OFF) | [Radios](radios.md) |
 | HALOW MESH *(only when a HaLow USB radio is plugged in)* | [HaLow Mesh](halow.md) |
-| RETICULUM | [Reticulum](reticulum.md) |
+| RETICULUM | [Reticulum](reticulum.md); MODEM73 LIVE: [modem73](modem73.md) |
 | TAILSCALE (VPN) | *(no dedicated page)* — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
 | RADIO CONFIGURATION | [Config](config.md) |
 | TAK SERVER *(optional)* | [TAK Server](takserver.md) |

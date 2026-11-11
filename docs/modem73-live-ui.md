@@ -2,7 +2,7 @@
 
 Status: **phases 1–4 implemented** on branch `feat/modem73-live` (0.22.0):
 backend `nucleusd/modem73/`, API `/api/v1/modem73` (docs/API.md), page
-RETICULUM › MODEM73 LIVE (docs/manual/reticulum.md). Phase 5 (automatic mode
+RETICULUM › MODEM73 LIVE (docs/manual/modem73.md). Phase 5 (automatic mode
 adaptation) waits for range data.
 
 Decisions taken during implementation:
@@ -68,7 +68,7 @@ TCP JSON, 4-byte big-endian length prefix per message.
 
 - Live receive level (`level_db`), SNR and BER from each `rx_frame`, shown as
   gauges and coloured against the target (Carrier about −20 to −30 dB, per
-  `docs/manual/reticulum.md`).
+  `docs/manual/modem73.md`).
 - Frame history table, plus "last frame N s ago" so stale readings are obvious.
 - **Beacon** button (`send_beacon`) as a lightweight replacement for test
   packets: the far node sees level and SNR.
@@ -119,7 +119,7 @@ browser ──WebSocket──▶ nucleusd modem73 router ──TCP/JSON──▶
 - New page under RETICULUM > INTERFACES (next to CONFIGURE MODEM73), reusing
   the messaging WebSocket and polling-fallback pattern in `app.js`.
 - Document the endpoints in `docs/API.md` and the page in
-  `docs/manual/reticulum.md`.
+  `docs/manual/modem73.md`.
 
 ## Design notes
 
@@ -132,7 +132,7 @@ browser ──WebSocket──▶ nucleusd modem73 router ──TCP/JSON──▶
   nucleusd.
 - **modem73 stopped or missing:** the page shows an offline state and retries.
 - **Tuning flow:** the volume knob stays a manual adjustment (see
-  `docs/manual/reticulum.md`); the UI only provides the feedback.
+  `docs/manual/modem73.md`); the UI only provides the feedback.
 - **Version dependency:** the control port is upstream API. Check the installed
   modem73 version supports the commands used (for example `rx_frame_history`).
 
