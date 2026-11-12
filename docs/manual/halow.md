@@ -25,7 +25,7 @@ Read-only, refreshed every 5s from `GET /api/v1/status` (`.radios.halow`) and
 | Service | `nucleus-halow` systemd unit state (`active` green, else grey). |
 
 The neighbours this node reaches over HaLow are listed on the
-[Monitor](monitor.md) page under **HaLow mesh nodes**.
+[Monitor](monitor.md) page under **HaLow mesh peers**.
 
 ## Settings
 
@@ -68,5 +68,5 @@ ip -br addr show halow0                   # UP with 10.30.1.<id>/24
 iw dev halow0 station dump | grep plink   # mesh plink: ESTAB per peer
 ```
 
-Then the [Monitor](monitor.md) page's **HaLow mesh nodes** table should list the
+Then the [Monitor](monitor.md) page's **HaLow mesh peers** table should list the
 peers.

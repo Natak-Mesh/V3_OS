@@ -96,8 +96,17 @@ curl -s -X POST 'http://localhost:8080/api/v1/apply?dry_run=true'
 Live runtime status: interfaces + addresses, service states, and Babel mesh
 neighbours/routes.
 
-`mesh_nodes` lists every wifi mesh node (direct or multi-hop) seen in the last
-15 min. `reachable` is whether Babel has a route to it right now; `last_seen`
+`wifi_peers` / `halow_peers` are the **direct** 802.11s peers on one radio each
+(`wlan1` / `halow0`): Babel neighbours on that interface joined to
+`iw dev <iface> station dump`. Same fields for both — `ipv4`, `ipv6`, `mac`,
+`link_pct`, `cost`, `signal_avg_dbm`, `plink`, `inactive_ms`, `connected_s`
+(radio fields `null` when the station can't be joined). `link_pct` is the share
+of the neighbour's last 16 Babel hellos received (Babel `reach` bits set / 16;
+~64 s window at the 4 s hello interval). A node linked over both
+radios appears in both lists; a link on one radio never appears in the other's.
+
+`mesh_nodes` lists every mesh node (direct or multi-hop, over any radio — see
+`iface`) seen in the last 15 min. `reachable` is whether Babel has a route to it right now; `last_seen`
 is the epoch time it last did. A lost node keeps its last route (`via`,
 `metric`, `direct`) until it ages out. Babel takes ~1 min to notice a dead
 node. If babeld itself is down, every node is reported lost. History is
