@@ -30,7 +30,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential python3-dev libcodec2-dev \
     babeld smcroute hostapd wpasupplicant iw \
     nftables network-manager systemd-resolved ufw \
-    nginx avahi-daemon avahi-utils openssl iperf3
+    nginx avahi-daemon avahi-utils openssl iperf3 alsa-utils
 # Belt and braces for nodes where iperf3 was installed earlier with the daemon on.
 systemctl disable --now iperf3.service 2>/dev/null || true
 # systemd-resolved carries systemd-networkd's DHCP DNS into /etc/resolv.conf, so

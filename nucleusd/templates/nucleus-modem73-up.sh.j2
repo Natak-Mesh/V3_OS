@@ -7,9 +7,15 @@
 # Reticulum TCPClientInterface (rendered into ~natak/.reticulum/config) attaches
 # to the KISS port. Audio is selected by NAME (stable across reboots/plug order,
 # never a card index); PTT is keyed over the CP210x serial control line at the
-# stable udev symlink {{ modem73_ptt_device }}. The OFDM modulation/code-rate
-# flags come from the selected modem73_mode; the same registry entry sets the
-# RNS interface bitrate so the two sides always agree on the on-air rate.
+# stable udev symlink {{ modem73_ptt_device }}. The mode flags come from the
+# selected modem73_mode; the same registry entry sets the RNS interface bitrate
+# so the two sides always agree on the on-air rate. Every mode's PHY frame holds
+# a full 500 B RNS packet, so modem fragmentation stays off. No registry mode
+# is MFSK, so the 3 always-on MFSK RX decoders are disabled: they cost CPU and
+# produce false "decodes" from receiver hiss (seen live: MFSK-16, SNR -10 dB).
+# The sound-card mixer is pinned before launch (capture/playback gain from
+# config, AGC and the Mic->Speaker monitor loop off) so the radio's volume knob
+# is the only unknown gain in the chain. A mixer failure is logged, not fatal.
 # CSMA is 'sync' (busy = a real modem signal only): radios run squelch-off, and
 # the default 'threshold' mode reads constant receiver hiss as a busy channel,
 # so the node never transmits. CSMA band is fixed to 'vhf' (VHF/UHF timing
@@ -17,14 +23,25 @@
 # ============================================================
 set -euo pipefail
 
+mixer() {
+    amixer -q -c '{{ modem73_alsa_card }}' cset name="$1" "$2" \
+        || echo "nucleus-modem73: mixer '$1' not set on card {{ modem73_alsa_card }}" >&2
+}
+mixer 'Mic Capture Volume' {{ modem73_rx_gain }}
+mixer 'Mic Capture Switch' on
+mixer 'Speaker Playback Volume' {{ modem73_tx_gain }}
+mixer 'Speaker Playback Switch' on
+mixer 'Auto Gain Control' off
+mixer 'Mic Playback Switch' off
+
 exec /usr/bin/modem73 \
     --headless \
     --callsign '{{ modem73_callsign }}' \
     --device '{{ modem73_audio_device }}' \
     --tx-level {{ modem73_tx_level }} \
-    --modem ofdm \
-    --modulation {{ modem73_modulation }} \
-    --rate {{ modem73_code_rate }} \
+    {{ modem73_mode_flags }} \
+    --no-frag \
+    --no-mfsk-rx \
     --port {{ modem73_kiss_port }} \
     --control-port {{ modem73_control_port }} \
     --ptt com \

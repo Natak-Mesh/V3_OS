@@ -151,9 +151,43 @@ def test_modem73_launch_script():
     assert "--control-port 8073" in r
     # Default OFDM mode (qpsk_1_2) is passed explicitly so the on-air rate is known
     # and matches the RNS bitrate rather than relying on the modem's own default.
-    assert "--modem ofdm" in r
-    assert "--modulation QPSK" in r
-    assert "--rate 1/2" in r
+    assert "--modem ofdm --modulation QPSK --rate 1/2" in r
+    # Every registry mode fits a 500 B RNS packet in one frame: no fragmentation.
+    # MFSK isn't a registry mode, so its noise-prone RX decoders are off.
+    assert "--no-frag" in r
+    assert "--no-mfsk-rx" in r
+    # Default callsign is the node short id (node 9 -> 0009), and default TX
+    # level is the bench-tested 5 (100 overdrove the UV-5R).
+    assert "--callsign '0009'" in r
+    assert "--tx-level 5 " in r
+
+
+def test_modem73_mixer_pinned_before_launch():
+    """Sound-card gains are pinned from config before modem73 starts, AGC and
+    the Mic->Speaker monitor loop forced off, so the radio volume knob is the
+    only unknown gain. Mixer lines must come before the exec."""
+    r = rendered()["/opt/nucleus/bin/nucleus-modem73-up.sh"]
+    pre, post = r.split("exec /usr/bin/modem73", 1)
+    assert "amixer -q -c 'Device' cset" in pre
+    assert "mixer 'Mic Capture Volume' 15" in pre
+    assert "mixer 'Speaker Playback Volume' 11" in pre
+    assert "mixer 'Auto Gain Control' off" in pre
+    assert "mixer 'Mic Playback Switch' off" in pre
+    assert "amixer" not in post
+
+
+def test_modem73_robust_mode_flags():
+    cfg = NucleusConfig.model_validate({
+        "node": {"id": 9}, "mesh": {"password": "52235223"}, "ap": {"password": "52235223"},
+        "reticulum": {"modem73_mode": "rdm_1200"},
+    })
+    r = render_all(cfg)
+    script = r["/opt/nucleus/bin/nucleus-modem73-up.sh"]
+    assert "--robust-mode RDM-1200" in script
+    assert "--modem ofdm" not in script
+    assert "bitrate = 1150" in r["/home/natak/.reticulum/config"]
+    # RNS refuses fixed_mtu < 500; every mode keeps 500.
+    assert "fixed_mtu = 500" in r["/home/natak/.reticulum/config"]
 
 
 def test_modem73_mode_selection_matches_bitrate():
@@ -185,15 +219,21 @@ def test_modem73_launch_script_custom():
         "reticulum": {
             "modem73_audio_device": "Some Other Card, USB Audio",
             "modem73_ptt_line": "dtr",
-            "modem73_callsign": "TEST-1",
+            "modem73_callsign": "W1AW/P",
             "modem73_tx_level": 80,
+            "modem73_alsa_card": "CODEC",
+            "modem73_rx_gain": 30,
+            "modem73_tx_gain": 5,
         },
     })
     r = render_all(cfg)["/opt/nucleus/bin/nucleus-modem73-up.sh"]
     assert "--device 'Some Other Card, USB Audio'" in r
     assert "--com-line dtr" in r
-    assert "--callsign 'TEST-1'" in r
+    assert "--callsign 'W1AW/P'" in r
     assert "--tx-level 80" in r
+    assert "amixer -q -c 'CODEC' cset" in r
+    assert "mixer 'Mic Capture Volume' 30" in r
+    assert "mixer 'Speaker Playback Volume' 5" in r
 
 
 def test_modem73_csma_sync_mode():
