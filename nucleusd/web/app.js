@@ -2081,6 +2081,8 @@ const PAGES = {
       }
       h += `</div>`;
       items.push({ type: "content", html: h });
+      if (list.length) items.push({ type: "button", label: "» Clear chat log",
+        onEnter: (S) => rnsClearChat(S, peer, p.host) });
       items.push({ type: "nav",
         label: `${p.host || peer.slice(0, 10)}  ·  ${rnsPathStr(pr, peer)}  ·  contact »`,
         to: "rns_contact",
@@ -2503,6 +2505,19 @@ async function rnsRename(S, peer, cur) {
     "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer), { name: name.trim() });
   if (!ok) return S.msg("rename failed: " + (d.detail || "error"), false);
   S.msg("renamed");
+  return S.reload();
+}
+
+// Clear one conversation's chat log after confirmation. The contact is kept.
+// Transmits nothing.
+async function rnsClearChat(S, peer, who) {
+  if (typeof confirm === "function" &&
+      !confirm("Clear chat log with " + (who || peer) + "?")) return;
+  const { ok, d } = await jsend("DELETE",
+    "/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer));
+  if (!ok) return S.msg("clear failed: " + (d.detail || "error"), false);
+  delete RNS_CACHE[peer];
+  S.msg("chat log cleared");
   return S.reload();
 }
 

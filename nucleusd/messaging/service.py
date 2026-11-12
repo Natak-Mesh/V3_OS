@@ -449,6 +449,8 @@ class MessagingService:
             return self._rns_set_name(req.get("dest", ""), req.get("name", ""))
         if cmd == "rns_remove":
             return self._rns_remove(req.get("dest", ""))
+        if cmd == "rns_clear":
+            return self._rns_clear(req.get("dest", ""))
         if cmd == "rns_announce":
             return self._rns_announce()
         if cmd == "rns_path":
@@ -562,6 +564,15 @@ class MessagingService:
         if removed and self._rns_store:
             self._rns_store.drop(str(dest).lower())
         return {"ok": True, "removed": removed}
+
+    def _rns_clear(self, dest: str) -> dict:
+        """Clear one peer's chat log. The contact is kept. Transmits nothing."""
+        if not (self.rns_enabled and self._rns_store):
+            return {"ok": False, "error": "rns lane not available"}
+        peer = str(dest or "").strip().lower()
+        if not peer:
+            return {"ok": False, "error": "no peer"}
+        return {"ok": True, "cleared": self._rns_store.drop(peer)}
 
     def _rns_heard_list(self) -> dict:
         """lxmf.delivery announces heard on-air (receive-only discovery aid)."""

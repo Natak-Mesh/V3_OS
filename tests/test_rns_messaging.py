@@ -837,3 +837,22 @@ def test_service_remove_contact_drops_its_history(tmp_path):
     assert svc._rns_store.history(USER_HASH) == []
     assert svc._rns_store.peers() == [FIXTURE_LXMF]
 
+
+def test_service_clear_chat_keeps_contact(tmp_path):
+    """Clearing a chat log drops only that peer's history (also on disk);
+    the contact and other conversations are kept."""
+    p = tmp_path / "rns_messages.jsonl"
+    p.write_text(_dm_line(USER_HASH, "still good", 1791672135.49)
+                 + _dm_line(FIXTURE_LXMF, "hi", 1794165677.41))
+    svc = _rns_service()
+    svc._rns_store = ConversationStore(history_limit=10, persist_path=str(p))
+    svc._rns_contacts = ContactStore(persist_path=str(tmp_path / "contacts.json"))
+    svc._rns_contacts.add_inbound(USER_HASH, USER_PUB, ts=1.0)
+    assert svc._handle({"cmd": "rns_clear", "dest": USER_HASH.upper()}) == \
+        {"ok": True, "cleared": True}
+    assert svc._rns_store.history(USER_HASH) == []
+    assert svc._rns_contacts.get(USER_HASH) is not None
+    assert ConversationStore(history_limit=10, persist_path=str(p)).peers() == [FIXTURE_LXMF]
+    assert svc._rns_clear(USER_HASH) == {"ok": True, "cleared": False}
+    assert svc._rns_clear("")["ok"] is False
+
