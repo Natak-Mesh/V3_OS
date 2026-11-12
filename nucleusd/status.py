@@ -119,17 +119,17 @@ def babel_routes(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     return routes
 
 
-def _halow_neigh_mac_to_ipv6() -> dict[str, str]:
-    """Map each halow0 neighbour's MAC -> its link-local IPv6 (fe80::…).
+def _neigh_mac_to_ipv6(iface: str) -> dict[str, str]:
+    """Map each neighbour's MAC on `iface` -> its link-local IPv6 (fe80::…).
 
-    `ip -6 neigh show dev halow0` lists the IPv6 (incl. link-locals Babel peers
+    `ip -6 neigh show dev <iface>` lists the IPv6 (incl. link-locals Babel peers
     on) against the MAC the radio reports in `iw station dump`. We prefer the
     link-local because that is the address Babel keys neighbours by, letting us
     join the radio-link view to the routing view. Best-effort: {} on any error.
     """
     out: dict[str, str] = {}
     try:
-        r = subprocess.run(["ip", "-6", "neigh", "show", "dev", "halow0"],
+        r = subprocess.run(["ip", "-6", "neigh", "show", "dev", iface],
                            capture_output=True, text=True, check=False)
     except FileNotFoundError:
         return out
@@ -144,31 +144,34 @@ def _halow_neigh_mac_to_ipv6() -> dict[str, str]:
     return out
 
 
-def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
-    """HaLow (halow0) 802.11s peers, one row per peer.
+def link_peers(iface: str, port: int = 33123, timeout: float = 2.0) -> list[dict]:
+    """Direct 802.11s peers on ONE mesh radio (`wlan1` or `halow0`), one row each.
 
-    Babel's route list cannot show HaLow-only neighbours when the same node is
-    cheaper over wlan1, so rows come from Babel *neighbours* on halow0 (present
-    regardless of which interface the route is installed on). Each resolves to
-    the node's canonical mesh IPv4 (10.20.1.<id>) from the Babel dump alone —
-    the same source the wifi mesh table uses. Sources (all read-only):
-      * Babel neighbours on halow0 — link-local IPv6, link %, cost, mesh IPv4.
-      * `iw dev halow0 station dump` — MAC, mesh plink state, avg signal (dBm),
+    Strictly per link: a node is listed only if it is a direct neighbour over
+    `iface` itself, never because it is reachable over another radio. A node
+    linked over both radios therefore appears in both interfaces' lists.
+
+    Rows come from Babel *neighbours* on `iface` (present regardless of which
+    interface Babel installs the route on — route selection hides the costlier
+    radio). Each resolves to the node's canonical mesh IPv4 (10.20.1.<id>) from
+    the Babel dump. Sources (all read-only):
+      * Babel neighbours on `iface` — link-local IPv6, link %, cost, mesh IPv4.
+      * `iw dev <iface> station dump` — MAC, mesh plink state, avg signal (dBm),
         inactivity (ms since last frame) and connected time (s).
-      * `ip -6 neigh show dev halow0` — MAC -> link-local IPv6, used only to
-        attach the radio fields to a Babel row. This kernel entry is usually
-        absent (Babel hellos are multicast; no unicast crosses halow0 while
-        wlan1 is cheaper), so radio fields are None when it is missing.
+      * `ip -6 neigh show dev <iface>` — MAC -> link-local IPv6, used only to
+        attach the radio fields to a Babel row. This kernel entry is often
+        absent (Babel hellos are multicast; no unicast crosses a radio whose
+        routes are not installed), so radio fields are None when it is missing.
 
     A station with no Babel neighbour at all (adjacency not yet formed) is
     still reported, keyed by MAC, but only when every Babel row is matched —
     otherwise it is one of the unmatched Babel rows and would duplicate a node.
 
-    Returns [] when halow0 is absent or iw is unavailable; never raises.
+    Returns [] when `iface` is absent or iw is unavailable; never raises.
     """
     peers: list[dict] = []
     try:
-        r = subprocess.run(["iw", "dev", "halow0", "station", "dump"],
+        r = subprocess.run(["iw", "dev", iface, "station", "dump"],
                            capture_output=True, text=True, check=False)
     except FileNotFoundError:
         return peers
@@ -188,7 +191,9 @@ def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
         elif s.startswith("inactive time:"):
             cur["inactive_ms"] = _int_before(s, "ms")
         elif s.startswith("signal avg:"):
-            cur["signal_avg_dbm"] = _int_before(s, "dBm")
+            # Multi-chain radios (wlan1) append per-chain values in brackets:
+            # "signal avg:\t-5 [-5] dBm" — drop them so the combined value parses.
+            cur["signal_avg_dbm"] = _int_before(s.split("[", 1)[0] + " dBm", "dBm")
         elif s.startswith("connected time:"):
             cur["connected_s"] = _int_before(s, "seconds")
         elif s.startswith("mesh plink:"):
@@ -196,14 +201,14 @@ def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
     if cur is not None:
         stations.append(cur)
 
-    mac_to_ipv6 = _halow_neigh_mac_to_ipv6()
+    mac_to_ipv6 = _neigh_mac_to_ipv6(iface)
     station_by_ipv6 = {mac_to_ipv6[s["mac"]]: s for s in stations
                        if s["mac"] in mac_to_ipv6}
     matched_macs: set[str] = set()
     unmatched_babel = 0
 
     for nb in babel_neighbours(port, timeout):
-        if nb.get("if") != "halow0" or not nb.get("address"):
+        if nb.get("if") != iface or not nb.get("address"):
             continue
         ipv6 = nb["address"]
         try:
@@ -246,6 +251,16 @@ def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
             })
     peers.sort(key=lambda p: p.get("ipv4") or p.get("ipv6") or p.get("mac") or "")
     return peers
+
+
+def wifi_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
+    """Direct Wi-Fi mesh (wlan1) peers — see link_peers."""
+    return link_peers("wlan1", port, timeout)
+
+
+def halow_peers(port: int = 33123, timeout: float = 2.0) -> list[dict]:
+    """Direct HaLow mesh (halow0) peers — see link_peers."""
+    return link_peers("halow0", port, timeout)
 
 
 def _int_before(line: str, unit: str) -> int | None:
@@ -546,6 +561,7 @@ def collect() -> dict:
         "neighbour_nodes": neighbour_nodes(nbrs),
         "babel_routes": routes,
         "mesh_nodes": mesh_nodes(),
+        "wifi_peers": wifi_peers(),
         "halow_peers": halow_peers(),
         "meshtastic": {"services": unit_states(
             ("meshtasticd", "cot-bridge", "nucleus-meshtastic-init"))},

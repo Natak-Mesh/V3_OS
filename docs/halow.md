@@ -494,7 +494,9 @@ map to their units; `nucleus-morse.conf` → () (modprobe, no unit).
   is reported separately from `babel_routes` because a node that is also on wlan1
   gets its route installed over wlan1, so it would never show as a HaLow peer in
   the route table even with the link up. `babel_routes` rows now also carry the
-  installing interface (`iface`).
+  installing interface (`iface`). The same join is generic (`status.link_peers`)
+  and also yields `wifi_peers` for `wlan1`, so both radios report identical
+  per-link metrics.
   - Web: a `HALOW MESH` menu entry + dedicated page appear only when
     `radios.halow.present`. The Monitor page gains a **HaLow mesh nodes** table
     (same gate). The page's channel/bandwidth controls read the `_derived`

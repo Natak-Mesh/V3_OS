@@ -436,6 +436,107 @@ def test_halow_peers_ipv4_without_kernel_neigh_entry(monkeypatch):
     assert p["signal_avg_dbm"] is None
 
 
+# ── Per-link peers (wlan1 vs halow0) ──
+# Real-format captures from 0042 <-> 0047 linked over BOTH radios. Babel
+# installs 10.20.47.0/24 over halow0; the wlan1 route is `installed no`.
+# Regression: the Monitor showed the halow0 link as a Wi-Fi mesh node. Each
+# radio's peer list must contain only neighbours on that interface.
+DUAL_BABEL_DUMP = (
+    "BABEL 1.0\n"
+    "ok\n"
+    "add interface wlan1 up true ipv6 fe80::b2a4:1dfc:eb1d:438e ipv4 10.20.1.42\n"
+    "add interface halow0 up true ipv6 fe80::2770:8056:dd56:5968 ipv4 10.30.1.42\n"
+    "add neighbour 55803a3ae0 address fe80::8ae5:2ce0:5629:f96e if wlan1 "
+    "reach ffff ureach 0000 rxcost 256 txcost 256 cost 256\n"
+    "add neighbour 55803a2650 address fe80::be2:5a11:d482:8d72 if halow0 "
+    "reach ffff ureach 0000 rxcost 256 txcost 256 cost 256\n"
+    "add route 55803a14c0 prefix 10.20.47.0/24 from 0.0.0.0/0 installed yes "
+    "id 8a:a2:9e:ff:fe:e1:c8:f2 metric 256 refmetric 0 "
+    "via fe80::be2:5a11:d482:8d72 if halow0\n"
+    "add route 55803a4590 prefix 10.20.47.0/24 from 0.0.0.0/0 installed no "
+    "id 8a:a2:9e:ff:fe:e1:c8:f2 metric 256 refmetric 0 "
+    "via fe80::8ae5:2ce0:5629:f96e if wlan1\n"
+    "ok\n"
+)
+# Only the halow0 neighbour/route (wlan1 has no peer).
+HALOW_ONLY_BABEL_DUMP = (
+    "BABEL 1.0\n"
+    "ok\n"
+    "add interface wlan1 up true ipv6 fe80::b2a4:1dfc:eb1d:438e ipv4 10.20.1.42\n"
+    "add interface halow0 up true ipv6 fe80::2770:8056:dd56:5968 ipv4 10.30.1.42\n"
+    "add neighbour 55803a2650 address fe80::be2:5a11:d482:8d72 if halow0 "
+    "reach ffff ureach 0000 rxcost 256 txcost 309 cost 309\n"
+    "add route 55803a7530 prefix 10.20.47.0/24 from 0.0.0.0/0 installed yes "
+    "id 8a:a2:9e:ff:fe:e1:c8:f2 metric 309 refmetric 0 "
+    "via fe80::be2:5a11:d482:8d72 if halow0\n"
+    "ok\n"
+)
+WLAN1_STATION_DUMP = (
+    "Station 00:c0:ca:bd:11:75 (on wlan1)\n"
+    "\tinactive time:\t688 ms\n"
+    "\trx bytes:\t1070201\n"
+    "\tsignal:  \t-5 [-5] dBm\n"
+    "\tsignal avg:\t-5 [-5] dBm\n"
+    "\tmesh plink:\tESTAB\n"
+    "\tconnected time:\t655 seconds\n"
+)
+WLAN1_NEIGH = "fe80::8ae5:2ce0:5629:f96e lladdr 00:c0:ca:bd:11:75 router REACHABLE \n"
+HALOW0_STATION_DUMP = (
+    "Station 0c:bf:74:00:2f:02 (on halow0)\n"
+    "\tinactive time:\t72 ms\n"
+    "\trx bytes:\t1206975\n"
+    "\tsignal:  \t-5 dBm\n"
+    "\tsignal avg:\t-4 dBm\n"
+    "\tmesh plink:\tESTAB\n"
+    "\tconnected time:\t317 seconds\n"
+)
+HALOW0_NEIGH = "fe80::be2:5a11:d482:8d72 lladdr 0c:bf:74:00:2f:02 router REACHABLE \n"
+
+
+def _fake_dual_run(wlan1_station):
+    def run(cmd, **kw):
+        dev = cmd[cmd.index("dev") + 1] if "dev" in cmd else None
+        if "station" in cmd:
+            out = wlan1_station if dev == "wlan1" else HALOW0_STATION_DUMP
+        elif "neigh" in cmd:
+            out = (WLAN1_NEIGH if wlan1_station else "") if dev == "wlan1" else HALOW0_NEIGH
+        else:
+            out = ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+    return run
+
+
+def test_link_peers_split_by_interface(monkeypatch):
+    monkeypatch.setattr(status.subprocess, "run", _fake_dual_run(WLAN1_STATION_DUMP))
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(DUAL_BABEL_DUMP)())
+    wifi = status.wifi_peers()
+    halow = status.halow_peers()
+    assert len(wifi) == 1 and len(halow) == 1
+    w, h = wifi[0], halow[0]
+    # Same node on both radios, each row carrying its own link's radio fields.
+    assert w["ipv4"] == h["ipv4"] == "10.20.1.47"
+    assert w["ipv6"] == "fe80::8ae5:2ce0:5629:f96e"
+    assert w["mac"] == "00:c0:ca:bd:11:75"
+    assert w["plink"] == "ESTAB"
+    assert w["signal_avg_dbm"] == -5  # "-5 [-5] dBm" per-chain format
+    assert w["link_pct"] == 100 and w["cost"] == 256
+    assert h["ipv6"] == "fe80::be2:5a11:d482:8d72"
+    assert h["mac"] == "0c:bf:74:00:2f:02"
+    assert h["signal_avg_dbm"] == -4
+
+
+def test_halow_only_link_not_reported_as_wifi(monkeypatch):
+    """wlan1 has no peer (empty station dump); the halow0 link must not appear
+    in wifi_peers even though Babel's route list reaches the node."""
+    monkeypatch.setattr(status.subprocess, "run", _fake_dual_run(""))
+    monkeypatch.setattr(status.socket, "create_connection",
+                        lambda *a, **k: _fake_sock_factory(HALOW_ONLY_BABEL_DUMP)())
+    assert status.wifi_peers() == []
+    halow = status.halow_peers()
+    assert len(halow) == 1 and halow[0]["ipv4"] == "10.20.1.47"
+
+
 def test_babel_routes_tags_interface(monkeypatch):
     """Each route carries the interface Babel installed it on, so the UI can
     tell a wlan1-reached node from a halow0-reached one."""

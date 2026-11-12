@@ -260,6 +260,15 @@ def rns_messages(peer: str | None = None, since: float = 0.0) -> dict:
     return _rpc({"cmd": "rns_history", "peer": peer, "since": since})
 
 
+@router.delete("/rns/messages")
+def rns_clear(peer: str) -> dict:
+    """Clear one peer's chat log (contact is kept). Transmits nothing."""
+    res = _rpc({"cmd": "rns_clear", "dest": peer})
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "clear failed"))
+    return res
+
+
 @router.post("/rns/messages")
 def rns_send(body: RnsSendBody) -> dict:
     # The daemon may wait up to rns_lane.LOCAL_PATH_WAIT_SECS (3 s) for rnsd to

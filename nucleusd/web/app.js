@@ -324,6 +324,25 @@ const LT_LINKS = {
 };
 let LT = { link: "wifi", mesh: "", lora: "", rns: "", result: "", busy: false };
 
+// Direct peers on one mesh radio (status wifi_peers / halow_peers), same
+// columns for every radio. Radio fields (signal/seen) are null when the
+// station MAC could not be joined to the Babel row — shown as a neutral "—".
+// plink is not shown: the kernel keeps a silent peer ESTAB for up to
+// mesh_plink_timeout (1800 s), so it read healthy on a dead link.
+function linkPeersTable(peers, emptyMsg) {
+  if (!peers.length) return `<div class="off">${esc(emptyMsg)}</div>`;
+  let h = `<table><tr><th>Node</th><th>Link</th><th>Signal</th><th>Seen</th></tr>`;
+  peers.forEach((p) => {
+    const node = p.ipv4 || p.ipv6 || p.mac;
+    const link = p.link_pct != null ? p.link_pct + "%" : "—";
+    const sig = p.signal_avg_dbm != null ? p.signal_avg_dbm + " dBm" : "—";
+    const seen = p.inactive_ms != null ? ago(Date.now() / 1000 - p.inactive_ms / 1000) : "—";
+    h += `<tr><td>${esc(node)}</td><td>${esc(link)}</td>` +
+      `<td>${esc(sig)}</td><td>${esc(seen)}</td></tr>`;
+  });
+  return h + `</table>`;
+}
+
 // Mesh peers by node id ("0047" -> 47) from Babel routes, neighbours and HaLow
 // radio peers. Every address is 10.20.1.<id> on wlan1, so the id is the host part.
 function ltMeshPeers(st) {
@@ -331,6 +350,7 @@ function ltMeshPeers(st) {
   const add = (ip) => { const m = /^10\.20\.1\.(\d+)$/.exec(ip || ""); if (m) ids.add(+m[1]); };
   (st.mesh_nodes || []).forEach((n) => add(n.node));
   (st.neighbour_nodes || []).forEach((n) => add(n.node));
+  (st.wifi_peers || []).forEach((p) => add(p.ipv4));
   (st.halow_peers || []).forEach((p) => add(p.ipv4));
   const out = {};
   [...ids].sort((a, b) => a - b).forEach((id) => { out[String(id).padStart(4, "0")] = id; });
@@ -534,7 +554,7 @@ const PAGES = {
     },
   },
 
-  // Who's connected: wifi-mesh (Babel) neighbours only. Diagnostic detail
+  // Who's connected: direct peers per radio + whole-mesh routes. Diagnostic detail
   // (interfaces, services) lives on the SYSTEM page.
   monitor: {
     title: "Monitor",
@@ -556,54 +576,45 @@ const PAGES = {
       }
       let h = "";
 
-      h += `<div class="content"><div class="page-title" style="padding-left:0">Wifi mesh nodes</div>`;
+      // Direct peers per radio: each table lists only nodes linked over THAT
+      // interface (Babel neighbour + iw station dump), so a HaLow link never
+      // reads as a Wi-Fi one. A node on both radios appears in both tables.
+      h += `<div class="content"><div class="page-title" style="padding-left:0">Wifi mesh peers</div>`;
       if (meshOff) {
         h += `<div class="warn">Wi-Fi mesh is turned off — no nodes can be seen over wlan1</div>`;
-      } else if (!meshNodes.length) {
-        h += `<div class="off">no nodes — this node does not see any other node over wlan1</div>`;
       } else {
-        h += `<table><tr><th>Node</th><th>Via</th><th>Cost</th><th>Seen</th></tr>`;
+        h += linkPeersTable(st.wifi_peers || [], "no Wi-Fi peers — this node sees no other node over wlan1");
+      }
+      h += `</div>`;
+
+      // HaLow (802.11ah) — only when the halow0 radio is present.
+      const halowRadio = (st.radios && st.radios.halow) || {};
+      if (halowRadio.present) {
+        h += `<div class="content"><div class="page-title" style="padding-left:0">HaLow mesh peers</div>`;
+        h += linkPeersTable(st.halow_peers || [], "no HaLow peers — this node sees no other node over halow0");
+        h += `</div>`;
+      }
+
+      // Whole-mesh routes (direct + multi-hop) over whichever radio Babel
+      // selected. Not a per-radio view — Iface shows the radio actually used.
+      h += `<div class="content"><div class="page-title" style="padding-left:0">Mesh routes</div>`;
+      if (!meshNodes.length) {
+        h += `<div class="off">no routes — this node cannot reach any other mesh node</div>`;
+      } else {
+        h += `<table><tr><th>Node</th><th>Via</th><th>Iface</th><th>Cost</th><th>Seen</th></tr>`;
         meshNodes.forEach((r) => {
           // Lost nodes keep their row (with age) until dropped after 15 min.
           const via = !r.reachable ? "—" : r.direct ? "direct" : esc(r.via || "—");
+          const iface = r.reachable ? (r.iface || "—") : "—";
           const cost = r.reachable ? (r.metric / 256).toFixed(1) : "—";
           const seen = r.reachable ? "now" : ago(r.last_seen);
           h += `<tr><td>${esc(r.node)}</td><td>${via}</td>` +
-            `<td>${esc(cost)}</td>` +
+            `<td>${esc(iface)}</td><td>${esc(cost)}</td>` +
             `<td class="${r.reachable ? "ok" : "warn"}">${esc(seen)}</td></tr>`;
         });
         h += `</table>`;
       }
       h += `</div>`;
-
-      // HaLow (802.11ah) peers — only when the halow0 radio is present. These
-      // are the radio-link neighbours (iw station dump), which Babel's route
-      // list can hide when the same node is cheaper over wlan1.
-      const halowRadio = (st.radios && st.radios.halow) || {};
-      if (halowRadio.present) {
-        const hp = st.halow_peers || [];
-        h += `<div class="content"><div class="page-title" style="padding-left:0">HaLow mesh nodes</div>`;
-        if (!hp.length) {
-          h += `<div class="off">no HaLow peers — this node sees no other node over halow0</div>`;
-        } else {
-          h += `<table><tr><th>Node</th><th>Link</th><th>Signal</th><th>State</th><th>Seen</th></tr>`;
-          hp.forEach((p) => {
-            const node = p.ipv4 || p.ipv6 || p.mac;
-            const link = p.link_pct != null ? p.link_pct + "%" : "—";
-            const sig = p.signal_avg_dbm != null ? p.signal_avg_dbm + " dBm" : "—";
-            // Radio fields (plink/signal/seen) are null when the station MAC
-            // could not be joined to the Babel row — show a neutral "—".
-            const cls = p.plink == null ? "" : p.plink === "ESTAB" ? "ok" : "warn";
-            const seen = p.inactive_ms != null ? ago(Date.now() / 1000 - p.inactive_ms / 1000) : "—";
-            h += `<tr><td>${esc(node)}</td><td>${esc(link)}</td>` +
-              `<td>${esc(sig)}</td>` +
-              `<td class="${cls}">${esc(p.plink || "—")}</td>` +
-              `<td class="${cls}">${esc(seen)}</td></tr>`;
-          });
-          h += `</table>`;
-        }
-        h += `</div>`;
-      }
 
       // LoRa (Meshtastic) nodes heard over RF.
       const { d: md } = await jget(MB + "/nodes");
@@ -2081,6 +2092,8 @@ const PAGES = {
       }
       h += `</div>`;
       items.push({ type: "content", html: h });
+      if (list.length) items.push({ type: "button", label: "» Clear chat log",
+        onEnter: (S) => rnsClearChat(S, peer, p.host) });
       items.push({ type: "nav",
         label: `${p.host || peer.slice(0, 10)}  ·  ${rnsPathStr(pr, peer)}  ·  contact »`,
         to: "rns_contact",
@@ -2503,6 +2516,19 @@ async function rnsRename(S, peer, cur) {
     "/api/v1/messaging/rns/contacts/" + encodeURIComponent(peer), { name: name.trim() });
   if (!ok) return S.msg("rename failed: " + (d.detail || "error"), false);
   S.msg("renamed");
+  return S.reload();
+}
+
+// Clear one conversation's chat log after confirmation. The contact is kept.
+// Transmits nothing.
+async function rnsClearChat(S, peer, who) {
+  if (typeof confirm === "function" &&
+      !confirm("Clear chat log with " + (who || peer) + "?")) return;
+  const { ok, d } = await jsend("DELETE",
+    "/api/v1/messaging/rns/messages?peer=" + encodeURIComponent(peer));
+  if (!ok) return S.msg("clear failed: " + (d.detail || "error"), false);
+  delete RNS_CACHE[peer];
+  S.msg("chat log cleared");
   return S.reload();
 }
 
