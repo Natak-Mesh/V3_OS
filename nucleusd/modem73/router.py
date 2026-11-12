@@ -4,7 +4,9 @@ Thin HTTP layer over nucleusd.modem73.{control,logtail,mixer}. Live changes
 (TX level, sound-card gains) take effect immediately and last until the next
 modem73 restart; POST /save writes them (and the mode) to config.yaml and runs
 apply, which re-renders the launch script and restarts modem73 (+ rnsd when
-the mode, hence the RNS bitrate, changed). Mode changes are save-only so the
+the mode, hence the RNS bitrate, changed). /save also takes the setup keys
+(enabled, callsign), so the one modem73 page has one save path. Audio device
+and PTT line are fixed for the DigiRig and stay config.yaml-only. Mode changes are save-only so the
 RNS bitrate can never disagree with what the modem transmits.
 """
 
@@ -17,7 +19,7 @@ import time
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import config as cfgio
 from ..apply import apply as apply_config
@@ -28,6 +30,8 @@ from . import mixer as mx
 router = APIRouter(prefix="/api/v1/modem73", tags=["modem73"])
 
 ModeKey = Literal[tuple(MODEM73_MODES)]  # type: ignore[valid-type]
+# Keys POST /save may write (reticulum.modem73_<key>); validated by the schema.
+SAVE_KEYS = ("mode", "tx_level", "rx_gain", "tx_gain", "enabled", "callsign")
 MIXER_CACHE_S = 5.0
 WS_TICK_S = 0.5
 _mixer_cache: dict = {"ts": 0.0, "card": None, "rx_gain": None, "tx_gain": None}
@@ -44,10 +48,16 @@ class MixerBody(BaseModel):
 
 
 class SaveBody(BaseModel):
+    # Unknown keys (e.g. audio_device, ptt_line: config.yaml only) are an error,
+    # not silently dropped.
+    model_config = ConfigDict(extra="forbid")
+
     mode: Optional[ModeKey] = None
     tx_level: Optional[int] = Field(None, ge=5, le=100)
     rx_gain: Optional[int] = Field(None, ge=0, le=35)
     tx_gain: Optional[int] = Field(None, ge=0, le=37)
+    enabled: Optional[bool] = None
+    callsign: Optional[str] = None  # "" = clear -> node id
 
 
 def _mixer(card: str, fresh: bool = False) -> dict:
@@ -80,7 +90,8 @@ def build_view(cfg: NucleusConfig, snap: dict, mixer: dict, now: float | None = 
             "tx_gain": mixer["tx_gain"],
         },
         "saved": {"mode": r.modem73_mode, "tx_level": r.modem73_tx_level,
-                  "rx_gain": r.modem73_rx_gain, "tx_gain": r.modem73_tx_gain},
+                  "rx_gain": r.modem73_rx_gain, "tx_gain": r.modem73_tx_gain,
+                  "enabled": r.modem73_enabled, "callsign": r.modem73_callsign},
         "frames": snap["frames"],
         "attempts": snap["attempts"],
         "modes": MODEM73_MODES,
@@ -124,6 +135,13 @@ def send_test() -> dict:
     return {"ok": True, "seq": _test_seq, "bytes": len(text)}
 
 
+@router.post("/clear")
+def clear_frames() -> dict:
+    """Clear the frames-heard list (cache only; /var/log/modem73.log untouched)."""
+    ctl.monitor().clear()
+    return {"ok": True}
+
+
 @router.put("/tx_level")
 def put_tx_level(body: TxLevelBody) -> dict:
     """Live TX level (modem73 tx_drive); not persisted until POST /save."""
@@ -147,10 +165,10 @@ def put_mixer(body: MixerBody) -> dict:
 
 @router.post("/save")
 def save(body: SaveBody) -> dict:
-    """Persist mode/levels to config.yaml and apply (restarts modem73)."""
+    """Persist modem73 settings to config.yaml and apply (restarts modem73)."""
     cfg = cfgio.load()
     data = cfg.model_dump(mode="json", exclude_none=True)
-    for key in ("mode", "tx_level", "rx_gain", "tx_gain"):
+    for key in SAVE_KEYS:
         val = getattr(body, key)
         if val is not None:
             data["reticulum"][f"modem73_{key}"] = val

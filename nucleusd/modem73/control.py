@@ -18,6 +18,7 @@ within IDLE_S); on reconnect it catches up from modem73's own frame history
 from __future__ import annotations
 
 import json
+import os
 import select
 import socket
 import struct
@@ -34,7 +35,9 @@ MAX_MSG = 1024 * 1024
 STATUS_POLL_S = 2.0
 RECONNECT_S = 3.0
 IDLE_S = 120.0
-MAX_FRAMES = 64
+MAX_FRAMES = 10
+# Last CLEAR (time + log offset), so a nucleusd restart doesn't undo it.
+CLEAR_PATH = "/var/lib/nucleus/modem73_clear.json"
 
 
 class Modem73Error(Exception):
@@ -76,16 +79,18 @@ def request(cmd: str, timeout: float = TIMEOUT, **params) -> dict:
         raise Modem73Error(f"modem73 control port unavailable: {e}") from e
 
 
-def _merge_frames(frames: deque, new: list[dict]) -> None:
+def _merge_frames(frames: deque, new: list[dict], after: float = 0.0) -> None:
     """Merge decoded-frame dicts into `frames`, oldest→newest, deduped.
 
     Keyed by decode `time` (not `seq`, which restarts at 1 with modem73), so a
     history catch-up after a modem73 restart never duplicates or drops frames.
+    Frames decoded at or before `after` (the last clear) are skipped, so a
+    history catch-up can't bring cleared frames back.
     """
     merged = list(frames)
     seen = {f.get("time") for f in merged}
     for f in new:
-        if f.get("time") in seen:
+        if f.get("time") in seen or (f.get("time") or 0) <= after:
             continue
         merged.append({k: v for k, v in f.items() if k not in ("event", "age_s")})
         seen.add(f.get("time"))
@@ -97,7 +102,8 @@ def _merge_frames(frames: deque, new: list[dict]) -> None:
 class Monitor:
     """Shared control-port connection + cache. Thread-safe snapshot()."""
 
-    def __init__(self) -> None:
+    def __init__(self, clear_path: str | None = None) -> None:
+        self._clear_path = clear_path or CLEAR_PATH
         self._lock = threading.Lock()
         self._started = False
         self._interest = 0.0
@@ -107,11 +113,31 @@ class Monitor:
         self.status_ts = 0.0
         self.config: dict | None = None
         self.frames: deque = deque(maxlen=MAX_FRAMES)
+        self.cleared_at = 0.0
         # Frame attempts incl. CRC failures (the control port reports decodes only).
         self.log = logtail.Parser()
         self._tail = logtail.LogTail()
         # Bumped on every cache change; the WebSocket pushes when it moves.
         self.version = 0
+        self._load_clear()
+
+    def _load_clear(self) -> None:
+        try:
+            with open(self._clear_path) as f:
+                d = json.load(f)
+            self.cleared_at = float(d["time"])
+            self._tail.resume(int(d["log_pos"]), d.get("log_ino"))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    def _save_clear(self, pos: int, ino: int | None) -> None:
+        tmp = self._clear_path + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"time": self.cleared_at, "log_pos": pos, "log_ino": ino}, f)
+            os.replace(tmp, self._clear_path)
+        except OSError:
+            pass  # clear still holds until the next restart
 
     def start(self) -> None:
         with self._lock:
@@ -137,6 +163,16 @@ class Monitor:
                 "version": self.version,
             }
 
+    def clear(self) -> None:
+        """Drop cached frames and attempts (modem73's own log is untouched)."""
+        with self._lock:
+            self.frames.clear()
+            self.log.clear()
+            pos, ino = self._tail.seek_end()  # old log lines must not backfill back in
+            self.cleared_at = time.time()
+            self.version += 1
+            self._save_clear(pos, ino)
+
     def poll_log(self) -> None:
         """Fold new modem73 log lines into the cache."""
         lines, backfill = self._tail.read()
@@ -154,7 +190,7 @@ class Monitor:
         with self._lock:
             ev = msg.get("event")
             if ev == "rx_frame":
-                _merge_frames(self.frames, [msg])
+                _merge_frames(self.frames, [msg], self.cleared_at)
             elif ev == "config_changed":
                 if not isinstance(msg.get("config"), dict):
                     return
@@ -167,7 +203,7 @@ class Monitor:
             elif pending == "get_config" and msg.get("ok"):
                 self.config = {k: v for k, v in msg.items() if k != "ok"}
             elif pending == "rx_frame_history" and msg.get("ok"):
-                _merge_frames(self.frames, msg.get("frames") or [])
+                _merge_frames(self.frames, msg.get("frames") or [], self.cleared_at)
             else:
                 return
             self.version += 1

@@ -28,6 +28,14 @@ from tests.modem73_fixtures import (
 )
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_state(tmp_path, monkeypatch):
+    """Never read or write the live node's persisted CLEAR state."""
+    monkeypatch.setattr(ctl, "CLEAR_PATH", str(tmp_path / "modem73_clear.json"))
+
+
 CFG = NucleusConfig.model_validate({
     "node": {"id": 42}, "mesh": {"password": "52235223"}, "ap": {"password": "52235223"},
 })
@@ -144,6 +152,86 @@ def test_monitor_keeps_last_max_frames():
     assert frames[0]["seq"] == ctl.MAX_FRAMES + 9
 
 
+def test_monitor_clear_drops_frames_and_blocks_history_replay():
+    """CLEAR empties the list; a reconnect's rx_frame_history catch-up must not
+    bring the cleared frames back, but frames decoded after the clear show."""
+    m = ctl.Monitor()
+    m.handle(RX_FRAME_HISTORY, "rx_frame_history")
+    m.log.feed("Decoder: Sync found at sample 1", 1.0)
+    m.log.feed("Decoder: Call sign:      0047", 1.0)
+    assert m.snapshot()["frames"] and m.snapshot()["attempts"]
+    v = m.snapshot()["version"]
+    m.clear()
+    s = m.snapshot()
+    assert s["frames"] == [] and s["attempts"] == [] and s["version"] == v + 1
+    m.handle(RX_FRAME_HISTORY, "rx_frame_history")       # replayed on reconnect
+    assert m.snapshot()["frames"] == []
+    m.handle({**RX_FRAME_EVENTS[0], "time": m.cleared_at + 1}, None)
+    assert len(m.snapshot()["frames"]) == 1
+
+
+def test_monitor_clear_before_first_log_read_skips_backfill(tmp_path):
+    """Regression: CLEAR right after a nucleusd restart, before the monitor's
+    first log read, was undone by the 64 KiB backfill of old log lines."""
+    log = tmp_path / "modem73.log"
+    log.write_text(LOG_CRC_FAIL)
+    m = ctl.Monitor()
+    m._tail = lt.LogTail(str(log))
+    m.clear()
+    m.poll_log()
+    assert m.snapshot()["attempts"] == []
+    with log.open("a") as fh:                          # a new frame after the clear
+        fh.write("Decoder: Sync found at sample 9\nDecoder: Call sign:      0047\n")
+    m.poll_log()
+    assert [a["callsign"] for a in m.snapshot()["attempts"]] == ["0047"]
+
+
+def test_clear_survives_nucleusd_restart(tmp_path):
+    """Regression: after CLEAR, a nucleusd restart (deploy) re-read the 64 KiB
+    log backfill and history, so RECEIVE showed "3 OK / 7 FAIL" again while
+    the cleared list had been empty."""
+    log = tmp_path / "modem73.log"
+    log.write_text(LOG_CRC_FAIL)
+    m = ctl.Monitor()
+    m._tail = lt.LogTail(str(log))
+    m.poll_log()
+    assert m.snapshot()["attempts"]
+    m.clear()
+    with log.open("a") as fh:                          # a frame heard after the clear
+        fh.write("Decoder: Sync found at sample 9\nDecoder: Call sign:      0047\n")
+    m2 = ctl.Monitor()                                 # restart
+    m2._tail = lt.LogTail(str(log))
+    m2._load_clear()
+    m2.poll_log()
+    assert [a["callsign"] for a in m2.snapshot()["attempts"]] == ["0047"]
+    m2.handle(RX_FRAME_HISTORY, "rx_frame_history")    # pre-clear decodes
+    assert m2.snapshot()["frames"] == []
+
+
+def test_clear_state_ignored_after_log_rotation(tmp_path):
+    log = tmp_path / "modem73.log"
+    log.write_text(LOG_CRC_FAIL)
+    m = ctl.Monitor()
+    m._tail = lt.LogTail(str(log))
+    m.clear()
+    new = tmp_path / "modem73.log.new"
+    new.write_text(LOG_CRC_FAIL)
+    new.replace(log)                                   # rotated: other inode
+    m2 = ctl.Monitor()
+    m2._tail = lt.LogTail(str(log))
+    m2._load_clear()
+    m2.poll_log()
+    assert len(m2.snapshot()["attempts"]) == 3        # stale offset not applied
+
+
+def test_clear_endpoint(monkeypatch):
+    m = ctl.Monitor()
+    m.handle(RX_FRAME_HISTORY, "rx_frame_history")
+    monkeypatch.setattr(ctl, "monitor", lambda: m)
+    assert client.post("/api/v1/modem73/clear").json() == {"ok": True}
+    assert m.snapshot()["frames"] == []
+
+
 # ── log tail (decoder detail the control port lacks) ─────────────
 
 def _parse(text, now=100.0):
@@ -173,6 +261,25 @@ def test_log_crc_failures_are_attempts():
     assert [a["ok"] for a in v] == [None, False, False]   # newest is cut after callsign
     # No decoded SNR on a CRC failure: mean per-symbol SNR instead.
     assert v[2]["snr"] == 16.1 and v[2]["ber_pct"] is None
+
+
+def test_log_noise_syncs_do_not_evict_real_frames():
+    """Hiss syncs (no callsign) are dropped when the next sync starts, so a run
+    of them can't push real frames out of the short MAX_ATTEMPTS list."""
+    p = _parse(LOG_CRC_FAIL)
+    for _ in range(lt.MAX_ATTEMPTS * 2):
+        p.feed("Decoder: Sync found at sample 1", 200.0)
+        p.feed("Decoder: CFO = 1500 Hz", 200.0)
+    v = p.view()
+    assert [a["callsign"] for a in v] == [None, "0047", "0047", "0047"]
+
+
+def test_log_clear_drops_in_progress_attempt():
+    p = _parse(LOG_CRC_FAIL)
+    p.clear()
+    assert p.view() == []
+    p.feed("Decoder: Call sign:      0047", 1.0)      # tail of the cut frame
+    assert p.view() == []
 
 
 def test_logtail_reads_complete_lines_and_backfills(tmp_path):
@@ -271,7 +378,10 @@ def test_build_view_from_real_snapshot():
     # Live modem still on the dropped BPSK mode -> no registry key, raw modulation shown.
     assert v["live"]["mode"] is None and v["live"]["modulation"] == "BPSK"
     assert v["live"]["tx_level"] == 5          # tx_drive 0.05 -> 5 %
-    assert v["saved"] == {"mode": "qpsk_1_2", "tx_level": 5, "rx_gain": 20, "tx_gain": 17}
+    assert {k: v["saved"][k] for k in ("mode", "tx_level", "rx_gain", "tx_gain")} == \
+        {"mode": "qpsk_1_2", "tx_level": 5, "rx_gain": 15, "tx_gain": 11}
+    assert v["saved"]["enabled"] is True and v["saved"]["callsign"] is None
+    assert "audio_device" not in v["saved"] and "ptt_line" not in v["saved"]
     assert [f["seq"] for f in v["frames"]] == [3, 2, 1]
     assert "rdm_1200" in v["modes"]
     assert v["attempts"] == [] and "advice" not in v
@@ -339,3 +449,22 @@ def test_save_persists_and_applies(seeded, monkeypatch):
 def test_save_rejects_unknown_mode(seeded, monkeypatch):
     monkeypatch.setattr(rt, "apply_config", lambda cfg: pytest.fail("must not apply"))
     assert client.post("/api/v1/modem73/save", json={"mode": "bpsk_1_2"}).status_code == 422
+
+
+def test_save_setup_keys(seeded, monkeypatch):
+    """The single modem73 page saves setup through /save too; blank callsign
+    clears it (node id on air), a bad one is rejected before apply."""
+    monkeypatch.setattr(rt, "apply_config", lambda cfg: type(
+        "R", (), {"changed": [], "units_restarted": []})())
+    r = client.post("/api/v1/modem73/save", json={"enabled": False, "callsign": "N42/P"})
+    assert r.status_code == 200
+    s = cfgio.load().reticulum
+    assert (s.modem73_enabled, s.modem73_callsign) == (False, "N42/P")
+    assert s.modem73_mode == "qpsk_1_2"   # untouched keys keep their value
+    assert client.post("/api/v1/modem73/save", json={"callsign": ""}).status_code == 200
+    assert cfgio.load().reticulum.modem73_callsign is None
+    monkeypatch.setattr(rt, "apply_config", lambda cfg: pytest.fail("must not apply"))
+    assert client.post("/api/v1/modem73/save", json={"callsign": "BAD-CALL!"}).status_code == 422
+    # Audio device / PTT line are fixed for the DigiRig: config.yaml only.
+    for body in ({"ptt_line": "dtr"}, {"audio_device": "x"}):
+        assert client.post("/api/v1/modem73/save", json=body).status_code == 422, body

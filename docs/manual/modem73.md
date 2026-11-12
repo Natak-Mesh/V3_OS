@@ -10,8 +10,8 @@ from the `reticulum.modem73_*` keys in `config.yaml` by `nucleusctl apply`.
 | Setting | Value | Why |
 |---------|-------|-----|
 | `reticulum.modem73_tx_level` (config.yaml) | `5` (default) | At `100`, OFDM's high peak-to-average ratio overdrives the UV-5R mic input / deviation limiter. Frames arrive but distorted (SNR ≈3.7 dB, BER 6–10%). |
-| `reticulum.modem73_rx_gain` / `modem73_tx_gain` | `20` / `17` (default) | Sound-card capture / playback steps, pinned by the launch script on every start (AGC and the Mic→Speaker monitor loop forced off), so the radio's volume knob is the only unknown gain. |
-| `reticulum.modem73_callsign` | blank (default) | Blank = the node id (`0042`). Sent in every frame, so the LIVE page shows who it heard. Max 9 chars `A-Z 0-9 /` (modem73 refuses anything else). |
+| `reticulum.modem73_rx_gain` / `modem73_tx_gain` | `15` / `11` (default) | Sound-card capture / playback steps, pinned by the launch script on every start (AGC and the Mic→Speaker monitor loop forced off), so the radio's volume knob is the only unknown gain. |
+| `reticulum.modem73_callsign` | blank (default) | Blank = the node id (`0042`). Sent in every frame, so the modem73 page shows who it heard. Max 9 chars `A-Z 0-9 /` (modem73 refuses anything else). |
 | `--no-frag` (template, fixed) | — | Every offered mode's frame holds a full 500 B RNS packet. With fragmentation off, modem73 truncates oversize frames, which is why sub-512 B modes (BPSK 1/2: 256 B) were dropped. RNS refuses `fixed_mtu` < 500. |
 | `--no-mfsk-rx` (template, fixed) | — | No MFSK mode is offered; its always-on decoders produced false "decodes" from receiver hiss. |
 | `--csma-mode sync` (template, fixed) | `sync` | Radios run squelch-off, so receiver hiss is always present. The default `threshold` mode marks the channel busy above −30 dBFS, so hiss holds it permanently BUSY and the node never transmits. `sync` counts only a detected modem73 signal as busy. |
@@ -22,30 +22,29 @@ Radio setup (manual, both nodes):
 
 - Squelch **0 (off)**. This avoids squelch-open latency truncating the frame
   start.
-- The volume knob is the only gain software can't set. Set it with the LIVE
+- The volume knob is the only gain software can't set. Set it with the modem73
   page (below) and leave it.
 
-## Live tuning page (RETICULUM › NODE STATUS › MODEM73 LIVE)
+## modem73 page (RETICULUM › NODE STATUS & INTERFACES › MODEM73)
 
-Each section is a reading with its target and the control that fixes it:
-
-| Section | Reading (target) | Fix |
+| Section | Readings (target) | Settings |
 |---|---|---|
-| Heard from far node | sender, its mode, last 10 frames OK / CRC FAIL | far node: TX level, then Mode |
-| RX level | dBFS of last decoded frame (−10…−30) | this radio's volume knob, RX gain |
-| Signal quality | SNR (≥ 15 dB), BER (< 1 %) | far node: TX level / TX gain, then Mode |
-| This node TX | frames sent, PTT, mode | TX level, TX gain, Mode, SEND TEST FRAME |
+| RECEIVE | from, mode, last 10 OK / FAIL, level (−10…−30 dBFS), SNR (≥ 15 dB), BER (< 1 %) | RX gain |
+| TRANSMIT | mode | TX level, TX gain, Mode, SEND TEST FRAME |
+| SETUP | — | modem73 on/off, callsign (audio device and PTT line: config.yaml only, fixed for the DigiRig) |
+| FRAMES HEARD | last 10 frames | CLEAR (empties the list; the log file is kept) |
 
 CRC-failed frames come from `/var/log/modem73.log` (the control port reports
 decodes only); their SNR is the mean per-symbol SNR, and they carry no RX
-level. Controls:
+level. Settings show the running values:
 
+- **RX gain / TX level / TX gain**: change at once, lost when modem73
+  restarts unless saved.
+- **Mode, SETUP**: take effect on SAVE + APPLY.
 - **SEND TEST FRAME**: transmits one short frame now (keys the radio). The far
-  node's LIVE page shows its level/SNR/BER. rnsd ignores it.
-- **TX level / RX gain / TX gain — live**: change at once, kept until modem73
-  restarts. The page warns when live values differ from saved ones.
-- **Mode** + **SAVE + APPLY**: writes mode and levels to config.yaml and
-  restarts modem73 (and rnsd when the mode changed).
+  node's modem73 page shows its level/SNR/BER. rnsd ignores it.
+- **SAVE + APPLY**: writes every setting on the page to config.yaml and
+  restarts modem73 (and rnsd when needed).
 
 Tuning order, one end at a time, with someone watching the other end's page:
 
@@ -89,8 +88,8 @@ Two separate TX drive controls, same names everywhere:
 
 | Name | config.yaml | Where it acts | Live control |
 |------|-------------|---------------|--------------|
-| **TX level** | `reticulum.modem73_tx_level` (5-100 %) | modem73 output (`--tx-level`, control port `tx_drive` = TX level / 100) | LIVE page TX level |
-| **TX gain** | `reticulum.modem73_tx_gain` (0-37) | DigiRig ALSA `Speaker Playback Volume` (amixer simple control `Speaker`, card `Device` = `modem73_alsa_card`), step = (TX gain − 37) dB | LIVE page TX gain, or `amixer` below |
+| **TX level** | `reticulum.modem73_tx_level` (5-100 %) | modem73 output (`--tx-level`, control port `tx_drive` = TX level / 100) | modem73 page TX level |
+| **TX gain** | `reticulum.modem73_tx_gain` (0-37) | DigiRig ALSA `Speaker Playback Volume` (amixer simple control `Speaker`, card `Device` = `modem73_alsa_card`), step = (TX gain − 37) dB | modem73 page TX gain, or `amixer` below |
 
 TX level is at its 5 % minimum; raising it makes the TX signal worse. To
 lower TX drive further, lower TX gain on the TX node:
@@ -102,7 +101,7 @@ amixer -c Device sget Speaker             # read back current TX gain
 
 The `amixer` value is live only: every modem73 start resets it to
 `reticulum.modem73_tx_gain`. To keep a TX gain, set that key in config.yaml
-(or use the LIVE page SAVE + APPLY).
+(or use the modem73 page SAVE + APPLY).
 
 Test: TX level 5 % on 0047; only TX gain changed.
 
@@ -116,7 +115,7 @@ TX gain 14 gave the lowest BER. Changing TX gain did not raise SNR.
 
 ## Running the modem73 TUI
 
-The LIVE page replaces this for routine tuning. Use the TUI only for things
+The modem73 page replaces this for routine tuning. Use the TUI only for things
 the page doesn't show (idle carrier level, BUSY detector state).
 
 ```bash
@@ -156,7 +155,7 @@ Last SNR / BER on the other. Restart the RX TUI to clear stats between runs.
 The DigiRig's ALSA controls (card `Device`) are managed by nucleusd:
 `modem73_rx_gain` → `Mic Capture Volume` (0-35, −12…+23 dB) and
 `modem73_tx_gain` → `Speaker Playback Volume` (0-37, −37…0 dB). They are set
-on every modem73 start and adjusted live from the LIVE page.
+on every modem73 start and adjusted live from the modem73 page.
 
 - **RX gain** scales audio after the radio. It can recover the level after a
   bumped volume knob, as long as the knob isn't at zero.

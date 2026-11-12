@@ -169,8 +169,8 @@ def test_modem73_mixer_pinned_before_launch():
     r = rendered()["/opt/nucleus/bin/nucleus-modem73-up.sh"]
     pre, post = r.split("exec /usr/bin/modem73", 1)
     assert "amixer -q -c 'Device' cset" in pre
-    assert "mixer 'Mic Capture Volume' 20" in pre
-    assert "mixer 'Speaker Playback Volume' 17" in pre
+    assert "mixer 'Mic Capture Volume' 15" in pre
+    assert "mixer 'Speaker Playback Volume' 11" in pre
     assert "mixer 'Auto Gain Control' off" in pre
     assert "mixer 'Mic Playback Switch' off" in pre
     assert "amixer" not in post

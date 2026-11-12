@@ -597,11 +597,11 @@ class ReticulumConfig(BaseModel):
         "Device", description="ALSA card id of the modem sound card (see /proc/asound/cards)."
     )
     modem73_rx_gain: int = Field(
-        20, ge=0, le=35,
+        15, ge=0, le=35,
         description="Sound-card capture gain step ('Mic Capture Volume' 0-35 = -12..+23 dB).",
     )
     modem73_tx_gain: int = Field(
-        17, ge=0, le=37,
+        11, ge=0, le=37,
         description="Sound-card playback step ('Speaker Playback Volume' 0-37 = -37..0 dB).",
     )
     # Mode: selects an entry from MODEM73_MODES, which drives BOTH the modem73

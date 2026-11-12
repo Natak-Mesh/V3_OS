@@ -597,11 +597,11 @@ until modem73 restarts; `save` persists. Errors: `503` modem73 / amixer
 unavailable · `502` modem73 rejected the command · `422` bad input.
 
 ### `GET /status`
-Everything the LIVE page shows. `frames` = last 64 decoded frames, newest first
+Everything the modem73 page shows. `frames` = last 10 decoded frames, newest first
 (modem73 `rx_frame` fields: `callsign`, `time`, `level_db` RX audio dBFS, `snr`
 dB, `ber_pct` pre-FEC, `mode`, ...). Frames with an empty `callsign` are noise
 decodes. `live` = what the running modem uses (`mode` is `null` if it is not a
-registry mode); `saved` = config.yaml. `attempts` = last 32 frames heard,
+registry mode); `saved` = config.yaml (levels, mode, `enabled`, `callsign`). `attempts` = last 10 frames heard (callsign-less noise syncs dropped),
 from `/var/log/modem73.log`, incl. CRC failures (the control port reports
 decodes only), newest first: `time` (null if read at startup), `callsign`,
 `modulation`, `code_rate`, `ok` (true / false = CRC fail / null = in
@@ -613,8 +613,8 @@ curl -s http://localhost:8080/api/v1/modem73/status
 #  "status":{"channel_state":"idle","ptt_on":false,"rx_frame_count":3,"crc_errors":0,...},
 #  "status_age_s":1.2,
 #  "live":{"mode":"qpsk_1_2","modulation":"QPSK","code_rate":"1/2","payload_size":512,
-#          "tx_level":5,"rx_gain":20,"tx_gain":17},
-#  "saved":{"mode":"qpsk_1_2","tx_level":5,"rx_gain":20,"tx_gain":17},
+#          "tx_level":5,"rx_gain":15,"tx_gain":11},
+#  "saved":{"mode":"qpsk_1_2","tx_level":5,"rx_gain":15,"tx_gain":11},
 #  "frames":[{"seq":3,"time":1794349203.45,"callsign":"0047","level_db":-12.8,
 #             "snr":4.97,"ber_pct":6.6,"mode":"QPSK 1/2 N",...}],
 #  "attempts":[{"time":1794349203.4,"callsign":"0047","modulation":"QAM256",
@@ -635,6 +635,14 @@ curl -s -X POST http://localhost:8080/api/v1/modem73/test
 # {"ok":true,"seq":1,"bytes":26}
 ```
 
+### `POST /clear`
+Empties `frames` and `attempts` (in-memory only; `/var/log/modem73.log` is
+kept). Frames decoded before the clear don't come back on reconnect.
+```bash
+curl -s -X POST http://localhost:8080/api/v1/modem73/clear
+# {"ok":true}
+```
+
 ### `PUT /tx_level`
 Live modem73 TX level, 5-100 % (`tx_drive` = level/100). Not saved.
 ```bash
@@ -647,7 +655,8 @@ Live sound-card gains (raw ALSA steps): `rx_gain` 0-35 (`Mic Capture Volume`),
 `tx_gain` 0-37 (`Speaker Playback Volume`). Either or both. Not saved.
 
 ### `POST /save`
-Writes any of `mode`, `tx_level`, `rx_gain`, `tx_gain` to config.yaml, then
+Writes any of `mode`, `tx_level`, `rx_gain`, `tx_gain`, `enabled`,
+`callsign` (`""` = node id) to config.yaml (other keys: `422`), then
 applies: modem73 restarts (and rnsd too when the mode, hence the RNS bitrate,
 changed). Mode changes are save-only so the RNS bitrate always matches.
 ```bash

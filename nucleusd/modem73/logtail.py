@@ -12,7 +12,7 @@ import re
 from collections import deque
 
 LOG_PATH = "/var/log/modem73.log"
-MAX_ATTEMPTS = 32
+MAX_ATTEMPTS = 10
 # Larger jumps (first open, rotation) re-read only this tail, with unknown times.
 BACKFILL_BYTES = 64 * 1024
 
@@ -51,6 +51,10 @@ class Parser:
             # Back-to-back frames start at SFO with no "Sync found" line.
             if kind == "sfo" and a is not None and not a["syms"]:
                 return False
+            # A sync that never got a callsign was hiss; drop it so noise
+            # can't push real frames out of the short list.
+            if a is not None and not a["callsign"] and self.attempts and self.attempts[-1] is a:
+                self.attempts.pop()
             self._cur = {"time": now, "callsign": None, "modulation": None,
                          "code_rate": None, "syms": [], "ok": None, "snr": None,
                          "ber_pct": None}
@@ -71,6 +75,11 @@ class Parser:
             a.update(ok=True, snr=round(float(m[1]), 1), ber_pct=float(m[2]))
         return True
 
+    def clear(self) -> None:
+        """Forget all attempts, incl. one in progress."""
+        self.attempts.clear()
+        self._cur = None
+
     def view(self) -> list[dict]:
         """Attempts newest first. `snr`: modem73's decoded SNR, or for a CRC
         failure (which has none) the mean per-symbol SNR."""
@@ -88,6 +97,26 @@ class LogTail:
     def __init__(self, path: str = LOG_PATH) -> None:
         self.path = path
         self._pos: int | None = None
+
+    def seek_end(self) -> tuple[int, int | None]:
+        """Skip everything already in the file (no backfill on the next read).
+        Returns (offset, inode) so the position can be resumed after a restart."""
+        try:
+            st = os.stat(self.path)
+            self._pos, ino = st.st_size, st.st_ino
+        except OSError:
+            self._pos, ino = 0, None
+        return self._pos, ino
+
+    def resume(self, pos: int, ino: int | None) -> None:
+        """Continue from a position saved by seek_end(). Ignored if the log was
+        rotated (other inode) or truncated since; the next read backfills."""
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return
+        if ino is not None and st.st_ino == ino and 0 <= pos <= st.st_size:
+            self._pos = pos
 
     def read(self) -> tuple[list[str], bool]:
         """New lines since the last call, and whether they are a backfill."""

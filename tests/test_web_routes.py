@@ -119,46 +119,66 @@ def test_reticulum_nodes_route_removed():
     assert client.get("/api/v1/reticulum/nodes").status_code == 404
 
 
-def test_modem73_page_wires_mode():
-    """The modem73 config page must expose the mode selector and persist it.
-
-    Node isn't installed on this node, so pin the wiring in the static app.js
-    rather than executing the JS: the page loads modem73_mode into its working
-    copy, renders a 'Mode' dropdown whose options come from the schema
-    contract (enum + per-mode bitrate), and saveModem73 writes the key back.
-    """
+def test_modem73_single_page():
+    """One modem73 page: no separate CONFIGURE page, one nav entry, one save
+    path (POST /api/v1/modem73/save) covering levels, mode and setup."""
     web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
     app_js = (web / "app.js").read_text()
-    # Working copy loads the current mode from the config.
-    assert "mode: r.modem73_mode," in app_js, "modem73 page lost the mode load"
-    # Dropdown is schema-driven (enum + bitrate from the published `modes` meta),
-    # not a hardcoded rate table in the frontend.
-    assert 'label: "Mode",' in app_js, "no mode dropdown on the page"
-    assert "P.modem73_mode" in app_js, "mode dropdown isn't driven by the schema"
-    assert "mo.modes" in app_js, "mode labels don't read bitrate from the contract"
-    # Save persists the selected mode.
-    assert "cfg.reticulum.modem73_mode = MO.mode;" in app_js, \
-        "saveModem73 no longer persists the mode"
-    # Gains persist too; a blank callsign is omitted so the node id applies.
-    assert "cfg.reticulum.modem73_rx_gain = " in app_js
-    assert "cfg.reticulum.modem73_tx_gain = " in app_js
-    assert "delete cfg.reticulum.modem73_callsign" in app_js
-
-
-def test_modem73_live_page_wired():
-    """The modem73 LIVE page is reachable from both modem73 entry points, uses
-    the WS push (with a polling fallback) and the /api/v1/modem73 actions, and
-    closes its socket on leave."""
-    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
-    app_js = (web / "app.js").read_text()
-    assert app_js.count('to: "rns_modem73_live"') == 2
-    assert "rns_modem73_live: {" in app_js
+    assert app_js.count('to: "rns_modem73"') == 1
+    assert "rns_modem73_live" not in app_js
+    for gone in ("saveModem73", "let MO ", "MO."):
+        assert gone not in app_js, gone
+    assert "rns_modem73: {" in app_js
     assert '"/api/v1/modem73/ws"' in app_js
     assert 'jget("/api/v1/modem73/status")' in app_js
     for path in ("/api/v1/modem73/test", "/api/v1/modem73/tx_level",
                  "/api/v1/modem73/mixer", "/api/v1/modem73/save"):
         assert f'"{path}"' in app_js, path
     assert "onLeave: () => { m73WsClose();" in app_js
+    save = app_js[app_js.index("async function m73Save"):app_js.index("function m73WsOpen")]
+    for key in ("mode:", "tx_level:", "rx_gain:", "tx_gain:", "enabled:", "callsign:"):
+        assert key in save, key
+    # Fixed for the DigiRig: config.yaml only, not on the page.
+    for gone in ("audio_device", "ptt_line", '"Audio device"', '"PTT line"'):
+        assert gone not in app_js, gone
+
+
+def test_modem73_page_layout():
+    """RECEIVE (readings, RX gain) -> TRANSMIT (readings, Mode, TX level,
+    TX gain, test) -> SETUP (on/off, callsign) -> SAVE + APPLY
+    -> frames heard. Each setting appears once."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    page = app_js[app_js.index("  rns_modem73: {"):app_js.index("  meshtastic: {")]
+    order = ['m73Head("Receive")', 'label: "RX gain (0-35)"', 'm73Head("Transmit")',
+             'label: "Mode"', 'label: "TX level (%)"', 'label: "TX gain (0-37)"',
+             '"» SEND TEST FRAME"', 'm73Head("Setup")', 'label: "modem73"',
+             'label: "Callsign"',
+             '"» SAVE + APPLY"', 'm73Head("Frames heard")', '"» CLEAR"']
+    idx = [page.index(s) for s in order]
+    assert idx == sorted(idx), "modem73 page sections/settings out of order"
+    for label in order[1:]:
+        if label.startswith("label:"):
+            assert page.count(label) == 1, label
+    sections = app_js[app_js.index("function m73Sections"):app_js.index("async function m73Test")]
+    # tx_frame_count reads 0 regardless of TX; PTT state was clutter.
+    for gone in ("— live", "Revert edits", "not saved", "m73Fix", "tx_frame_count", "ptt_on"):
+        assert gone not in page and gone not in sections, gone
+
+
+def test_refresh_keeps_scroll_position():
+    """Regression: the modem73 page (dynamic + WS push) snapped back to the
+    selected row on every refresh, so the bottom of Frames heard was
+    unreadable. Refresh renders keep the scroll; only cursor moves scroll."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    cli_js = (web / "cli.js").read_text()
+    app_js = (web / "app.js").read_text()
+    assert "function render(keepScroll = false)" in cli_js
+    assert "render(isRefresh);" in cli_js, "build(true) no longer keeps scroll"
+    assert "if (!keepScroll) scrollSelIntoView();" in cli_js
+    assert "view.scrollTop = prevScroll;" in cli_js
+    # CLEAR wired to the endpoint.
+    assert '"/api/v1/modem73/clear"' in app_js and "onEnter: m73Clear" in app_js
 
 
 def test_rns_direct_message_ui_wired():

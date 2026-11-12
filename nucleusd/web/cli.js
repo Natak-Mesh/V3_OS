@@ -33,7 +33,7 @@
     // Repaint the current item model without rebuilding it. For live readouts
     // that mutate an item's html from an async handler while a field is being
     // edited (build(true) is refused mid-edit).
-    redraw() { render(); },
+    redraw() { render(true); },
     // Navigate to another page, optionally passing params (read as
     // state.params in the target page's build()).
     go(pageKey, params = null) { return go(pageKey, true, params); },
@@ -59,7 +59,10 @@
   // ── Rendering ────────────────────────────────────────────────
   const dock = document.getElementById("compose-dock");
 
-  function render() {
+  // keepScroll: a refresh (timer / WS push / reload), not a cursor move. Keep
+  // the viewport where the operator parked it instead of snapping back to the
+  // selected row.
+  function render(keepScroll = false) {
     let html = `<div class="page-title">${(PAGES[state.page] || {}).title || ""}</div>`;
     html += `<div id="shell-msg" class="msg"></div>`;
     let composeIdx = -1;
@@ -123,6 +126,8 @@
     if (stick) {
       if (state.stickJump || wasAtBottom) view.scrollTop = view.scrollHeight;
       else view.scrollTop = prevScroll;
+    } else if (keepScroll) {
+      view.scrollTop = prevScroll;
     }
     state.stickJump = false;
 
@@ -149,7 +154,7 @@
       const inp = document.getElementById("edit-input");
       if (inp) { inp.focus(); inp.select && inp.select(); }
     }
-    scrollSelIntoView();
+    if (!keepScroll) scrollSelIntoView();
   }
 
   // Render the pinned compose dock outside the scrolling viewport. When the
@@ -234,7 +239,7 @@
       } else {
         state.sel = selectable(state.items[prevSel]) ? prevSel : firstSelectable();
       }
-      render();
+      render(isRefresh);
     } catch (e) {
       view.innerHTML = `<div class="content off">page error: ${escHtml(e.message)}</div>`;
     } finally {

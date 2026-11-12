@@ -321,7 +321,7 @@ def test_modem73_callsign_rejects_what_modem73_rejects():
 
 def test_modem73_gain_bounds():
     c = cfg()
-    assert (c.reticulum.modem73_rx_gain, c.reticulum.modem73_tx_gain) == (20, 17)
+    assert (c.reticulum.modem73_rx_gain, c.reticulum.modem73_tx_gain) == (15, 11)
     assert c.reticulum.modem73_tx_level == 5
     with pytest.raises(ValidationError):
         cfg(reticulum={"modem73_rx_gain": 36})
