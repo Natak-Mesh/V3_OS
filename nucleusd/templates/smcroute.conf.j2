@@ -31,7 +31,18 @@ mgroup from {{ halow_iface }} group {{ grp }}
 mroute from {{ halow_iface }} group {{ grp }} to br-lan
 mroute from br-lan group {{ grp }} to {{ halow_iface }}
 {% endif %}
+{% if eth0_mcast_bridge %}
+mgroup from eth0 group {{ grp }}
+mroute from eth0 group {{ grp }} to br-lan
+mroute from br-lan group {{ grp }} to eth0
+{% endif %}
 {% endfor %}
+{% if eth0_mcast_bridge %}
+# eth0 (hard-line node link) <-> br-lan only, one-way each (no-echo). Deliberately
+# NO eth0 <-> radio-mesh mroute: a node on both the wire and a radio mesh would
+# loop multicast between them. Wire->mesh relay is deferred until a loop guard
+# exists. Unicast still crosses via Babel.
+{% endif %}
 {% if halow_enabled %}
 # NOTE: deliberately NO wlan1<->halow0 mroute. Bridging multicast between the two
 # meshes would risk a cross-mesh storm; HaLow<->WiFi multicast relay is deferred

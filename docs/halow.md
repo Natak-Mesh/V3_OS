@@ -403,7 +403,8 @@ Named after their destination, per the repo convention:
    non-persistent `ufw allow in on wlan2` rules currently live on 0042 (wiped by
    the next `ufw --force reset`). (The UFW block lived in `nucleus-mesh-up.sh.j2`
    before it was split into the radio-independent firewall unit.) nftables
-   mcast-TTL mangle stays br-lan-only, in `nucleus-mesh-up.sh.j2`.
+   mcast-TTL bump has no halow0 rule (now in `nucleus-firewall.sh.j2`, br-lan +
+   eth0 ingress only).
 9. **`templates/reticulum-config.j2`** (EXTEND): AutoInterface `devices`
    includes `halow0` when `halow_enabled` (build the device list in
    `render_context`; `reti_auto_device` stays wlan1).

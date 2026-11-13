@@ -45,6 +45,8 @@ eth0:
   mode: wan          # wan = DHCP client / internet gateway; lan = serve DHCP
   dhcp_pool_offset: 10
   dhcp_pool_size: 100
+  babel: true        # Babel routing over eth0 (hard-line node links, fiber/copper)
+  mcast_bridge: true # bridge ATAK multicast eth0 <-> br-lan (not to the radio meshes)
 
 halow:
   # Wi-Fi HaLow (802.11ah) second 802.11s mesh on a Morse MM8108 USB radio

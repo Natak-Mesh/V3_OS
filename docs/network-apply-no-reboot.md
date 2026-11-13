@@ -33,8 +33,9 @@ units "up". The AP stayed unusable until a reboot.
    running. On a re-run that fails and, under `set -euo pipefail`, the script
    aborts before the UFW and multicast-TTL mangle sections. *(Superseded: UFW +
    eth0 NAT have since moved to `nucleus-firewall.sh` / `nucleus-firewall.service`,
-   decoupled from the mesh radio so they apply even when wlan1 is RF-killed. Only
-   the multicast-TTL mangle still lives in `nucleus-mesh-up.sh`.)*
+   decoupled from the mesh radio so they apply even when wlan1 is RF-killed. The
+   multicast-TTL bump followed (`ip nucleus_mcast` table); `nucleus-mesh-up.sh`
+   now only does the wlan1 join + mesh params.)*
 
 3. **Adding wlan0 to br-lan is a race.** Three things touch it: networkd
    (`Bridge=br-lan` in `30-wlan0.network`), hostapd putting wlan0 in AP mode,
@@ -141,8 +142,8 @@ Checks:
 - [ ] `sudo ip -s mroute` shows the local EUD's (S,239.2.3.1) br-lan→wlan1 with
       the packet counters increasing
 - [ ] ATAK EUDs on both nodes see each other
-- [ ] UFW rules and the `nucleus_mcast_ttl` mangle rules are present
-      (`sudo nft list table ip mangle`)
+- [ ] UFW rules and the `nucleus_mcast_ttl` rules are present
+      (`sudo nft list table ip nucleus_mcast`)
 - [ ] Only one wpa_supplicant runs on wlan1 (`pgrep -a wpa_supplicant`)
 - [ ] cot-bridge, messaging, voice and rnsd are active and logging normally
 - [ ] LoRa heartbeats are still received on the far node

@@ -58,6 +58,15 @@ Header: derived br-lan IP.
 | Mode | `wan` (DHCP client, shares internet to the mesh via NAT) or `lan` (static gateway serving DHCP to a directly-connected device). For a direct Pi↔Pi (or fiber) link, flip one node to `lan` so it becomes the DHCP server and the other stays `wan` as its client. |
 | DHCP pool offset | 0–254 (lan mode). |
 | DHCP pool size | 1–254 (lan mode). |
+| Babel routing | `on` (default) / `off`. Runs Babel on eth0 (`type wired`, rxcost 96) so nodes joined by a hard line (fiber/copper, direct or via a switch) exchange routes; the wire is preferred over radio. Opens UDP 6696 on eth0. |
+| ATAK mcast bridge | `on` (default) / `off`. smcroute bridges the ATAK groups eth0 ↔ br-lan (no-echo), and TTL=1 ATAK multicast arriving on eth0 is raised to `mesh.mcast_ttl`. **Not** bridged eth0 ↔ wlan1/halow0 (wire→mesh relay is deferred: a node on both would loop). |
+
+Both work in `wan` and `lan` mode. babeld/smcroute run whenever any of the wlan1
+mesh, HaLow, or these eth0 options needs them — `mesh.enabled: false` no longer
+stops them. eth0 → internal forwarding is limited to Nucleus nets (10.20.0.0/16,
+10.30.1.0/24) and the ATAK groups, and WAN NAT exempts those nets + multicast so
+hard-line traffic keeps its real source. On a shared/home LAN, the bridged ATAK
+multicast is visible to that whole LAN.
 
 In `lan` mode the rendered network config also enables a router-less IPv6
 link-local (`LinkLocalAddressing=ipv6`, `IPv6AcceptRA=no`) so Reticulum's

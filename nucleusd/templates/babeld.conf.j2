@@ -19,6 +19,12 @@ interface wlan1 type wireless link-quality true split-horizon false rxcost 256 h
 # Wired bridge interface (br-lan)
 interface br-lan type wired rxcost 96 hello-interval 4
 
+{% if eth0_babel %}
+# Hard-line node link on eth0 (fiber/copper). Wired cost is far below the radio
+# links, so Babel prefers the wire whenever a peer is reachable both ways.
+interface eth0 type wired rxcost 96 hello-interval 4
+{% endif %}
+
 {% if halow_enabled %}
 # Wi-Fi HaLow (802.11ah) mesh interface (halow0). babeld treats a missing iface
 # as down, so this is harmless on a node without the HaLow radio.

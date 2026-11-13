@@ -171,6 +171,10 @@ def modem73_mode_from_live(cfg: dict) -> Optional[str]:
 # networkd file, supplicant, babeld, smcroute, messaging/voice — uses this name.
 HALOW_IFACE = "halow0"
 
+# ATAK multicast destinations (CoT/SA, GeoChat/discovery, voice) that get the
+# TTL bump and are accepted on eth0. Single source for the firewall template.
+ATAK_MCAST_DSTS: tuple[str, ...] = ("239.2.3.1", "224.10.10.1", "239.255.255.0/24")
+
 # US S1G channel table — single source of truth, transcribed from the Morse
 # driver's dot11ah/s1g_channels_rules.c (us_s1g_channels[]). Keyed by channel
 # bandwidth in MHz; each value is the tuple of valid S1G channel numbers at that
@@ -333,6 +337,20 @@ class Eth0Config(BaseModel):
     static_ip: Optional[str] = None
     dhcp_pool_offset: int = 10
     dhcp_pool_size: int = 100
+    # Hard-line (fiber/copper) node-to-node links over eth0. Both on by default
+    # and independent of eth0 mode (wan or lan).
+    babel: bool = Field(
+        True,
+        description="Run Babel routing on eth0 so nodes joined by a hard line exchange "
+                    "routes over it. Wired cost is lower than radio, so the wire is "
+                    "preferred whenever both paths exist.",
+    )
+    mcast_bridge: bool = Field(
+        True,
+        description="Bridge ATAK multicast (CoT, discovery, voice) between eth0 and "
+                    "br-lan via smcroute. Not bridged eth0<->wlan1/halow0 (no "
+                    "cross-link loop guard yet).",
+    )
 
 
 
@@ -866,6 +884,87 @@ class NucleusConfig(BaseModel):
         return self.eth0.static_ip or f"10.10.{self.node.id}.1"
 
     @property
+    def babeld_enabled(self) -> bool:
+        """babeld runs while ANY routed link needs it: wlan1, HaLow, or eth0."""
+        return self.mesh.enabled or self.halow.enabled or self.eth0.babel
+
+    @property
+    def smcroute_enabled(self) -> bool:
+        """smcroute runs while ANY multicast-bridged link needs it."""
+        return self.mesh.enabled or self.halow.enabled or self.eth0.mcast_bridge
+
+    @property
+    def nucleus_nets(self) -> list[str]:
+        """Every Nucleus-owned IPv4 net: mesh, all nodes' br-lan, HaLow.
+
+        Order-preserving; entries covered by a broader one are dropped (nft
+        rejects overlapping elements in an anonymous set).
+        """
+        nets = [self.mesh.subnet, "10.20.0.0/16", self.br_lan_subnet, "10.30.1.0/24"]
+        parsed = [ipaddress.ip_network(n) for n in dict.fromkeys(nets)]
+        keep = [n for n in parsed
+                if not any(n != o and n.subnet_of(o) for o in parsed)]
+        return [str(n) for n in keep]
+
+    @property
+    def eth0_link_routes(self) -> list[dict]:
+        """UFW forwarding rules for hard-line node links over eth0.
+
+        Each entry is {"in", "out", "src", "dst"}; None = any. Two kinds:
+
+          * routed unicast (eth0.babel): between eth0 and every internal link
+            (br-lan, wlan1, halow0), limited to Nucleus nets — eth0 -> internal
+            by SOURCE, internal -> eth0 by DESTINATION — so upstream WAN hosts
+            still cannot route in and LAN mode gains no generic egress.
+          * bridged ATAK multicast (eth0.mcast_bridge): eth0 <-> br-lan only, to
+            the ATAK groups, any source (matches what smcroute forwards).
+
+        In WAN mode `<iface> -> eth0` is already allowed (any destination) by
+        the internet-egress rules, so that direction is only added in LAN mode.
+        """
+        rules: list[dict] = []
+        lan = self.eth0.mode != "wan"
+        if self.eth0.babel:
+            for iface in ["br-lan", "wlan1"] + ([HALOW_IFACE] if self.halow.enabled else []):
+                for net in self.nucleus_nets:
+                    rules.append({"in": "eth0", "out": iface, "src": net, "dst": None})
+                if lan:
+                    for net in self.nucleus_nets:
+                        rules.append({"in": iface, "out": "eth0", "src": None, "dst": net})
+        if self.eth0.mcast_bridge:
+            for grp in ATAK_MCAST_DSTS:
+                rules.append({"in": "eth0", "out": "br-lan", "src": None, "dst": grp})
+                if lan:
+                    rules.append({"in": "br-lan", "out": "eth0", "src": None, "dst": grp})
+        return rules
+
+    @property
+    def nat_exempt_dsts(self) -> list[str]:
+        """Destinations never masqueraded out eth0 in WAN mode.
+
+        Nucleus nets reached over a hard line and multicast keep their real
+        source, so Babel routing and ATAK bridging across eth0 stay symmetric
+        and the eth0 -> internal source filter (eth0_link_routes) matches.
+        """
+        return self.nucleus_nets + ["224.0.0.0/4"]
+
+    @property
+    def mcast_ttl_ingress(self) -> list[dict]:
+        """Ingress interfaces whose ATAK multicast gets its TTL raised to mcast_ttl.
+
+        ATAK emits TTL=1, which the kernel will not forward. br-lan is bumped
+        unconditionally (as before). eth0 is bumped only when TTL==1 (an EUD
+        directly on the wire); packets a peer node already forwarded with
+        headroom keep their decremented TTL.
+        """
+        if self.mesh.mcast_ttl == 0:
+            return []
+        rules = [{"iface": "br-lan", "only_ttl1": False}]
+        if self.eth0.mcast_bridge:
+            rules.append({"iface": "eth0", "only_ttl1": True})
+        return rules
+
+    @property
     def mesh_ipv6_ll(self) -> str:
         return _ll_from_seed(f"{self.node.hostname}-mesh")
 
@@ -1023,6 +1122,13 @@ class NucleusConfig(BaseModel):
             "eth0_static_ip": self.eth0_lan_ip,
             "eth0_dhcp_offset": self.eth0.dhcp_pool_offset,
             "eth0_dhcp_size": self.eth0.dhcp_pool_size,
+            "eth0_babel": self.eth0.babel,
+            "eth0_mcast_bridge": self.eth0.mcast_bridge,
+            "eth0_link_routes": self.eth0_link_routes,
+            "mcast_ttl_ingress": self.mcast_ttl_ingress,
+            "atak_mcast_dsts": list(ATAK_MCAST_DSTS),
+            "atak_mcast_dsts_nft": ", ".join(ATAK_MCAST_DSTS),
+            "nat_exempt_dsts_nft": ", ".join(self.nat_exempt_dsts),
             "mesh_enabled": self.meshtastic.enabled,
             "mesh_region": self.meshtastic.region,
             "mesh_hat": self.meshtastic.hat,

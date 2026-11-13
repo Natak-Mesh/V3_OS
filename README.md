@@ -113,19 +113,24 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
 2. **`nucleus-mesh.service`** runs `nucleus-mesh-up.sh`:
    - `wlan1` into 802.11s mesh mode, SAE/WPA3 join (`wpa_supplicant-mesh.conf`),
    - **HWMP off** (`mesh_fwding=0`) — Babel owns all L3 routing,
-   - `mesh_ttl`/`mesh_element_ttl` and RTS threshold,
-   - multicast-TTL mangle rule (nftables).
+   - `mesh_ttl`/`mesh_element_ttl` and RTS threshold.
 3. **`nucleus-firewall.service`** runs `nucleus-firewall.sh` — the host firewall,
    **decoupled from the mesh radio** (ordered only after networkd, no wlan1
    dependency) so it applies even when wlan1 is RF-killed:
-   - eth0 WAN NAT masquerade (WAN mode),
+   - eth0 WAN NAT masquerade (WAN mode; Nucleus nets + multicast exempt),
+   - ATAK multicast-TTL bump (nftables, `ip nucleus_mcast`): br-lan ingress, and
+     eth0 ingress (TTL=1 only) when `eth0.mcast_bridge`,
    - UFW rebuilt every run (`ufw --force reset`, then rules from config;
      `firewall.enabled: false` disables it). Includes the eth0 Reticulum UDP
      ports for wired peering; TAK/OpenTAKServer/MediaMTX ports on eth0 are opened
-     only if those are installed (checked at run time). The mangle/Tailscale
+     only if those are installed (checked at run time). The NAT/mcast-TTL/Tailscale
      nftables rules are untouched. See [Firewall](docs/manual/firewall.md).
-4. **babeld** — unicast routes (mesh + br-lan subnets + default route).
-5. **smcroute** — multicast between `wlan1` and `br-lan`.
+4. **babeld** — unicast routes (mesh + br-lan subnets + default route) over
+   wlan1, halow0, and eth0 (`eth0.babel`, wired cost — hard-line node links).
+5. **smcroute** — ATAK multicast between `br-lan` and each of `wlan1`,
+   `halow0`, `eth0` (`eth0.mcast_bridge`). Never between two links (no
+   wlan1↔halow0, no eth0↔radio). babeld/smcroute run whenever any of
+   wlan1 / HaLow / eth0 needs them, independent of `mesh.enabled`.
 6. **hostapd** — 5 GHz AP on `wlan0`.
 7. **brlan-setup** — enslaves `wlan0` into `br-lan` (networkd can't while
    hostapd owns it). `apply` re-runs it whenever networkd or hostapd bounce.
@@ -146,7 +151,9 @@ localhost) don't.
 - **802.11s does multi-hop multicast natively** (RMC dedup), so `mesh_ttl` is
   the hop limit. Kernel default 31 is far too high; we use 8.
 - **Multicast TTL bump on br-lan ingress.** ATAK sends TTL=1; nftables raises it
-  to `mesh.mcast_ttl` on br-lan ingress only so it can be forwarded.
+  to `mesh.mcast_ttl` on br-lan ingress so it can be forwarded. On eth0 ingress
+  only TTL=1 packets are raised (an EUD on the wire); traffic already forwarded
+  by a peer node keeps its decremented TTL.
 
 ---
 

@@ -5,9 +5,9 @@
 #
 # systemd-networkd owns the DECLARATIVE bits (br-lan, addresses, DHCP). This
 # script does only the IMPERATIVE bits that networkd cannot express: putting
-# wlan1 into 802.11s mesh mode, the SAE join, kernel mesh params, and the
-# nftables multicast-TTL mangle rule. The host firewall (UFW) and eth0 WAN NAT
-# live in nucleus-firewall.sh / nucleus-firewall.service, decoupled from this
+# wlan1 into 802.11s mesh mode, the SAE join and kernel mesh params. The host
+# firewall (UFW), eth0 WAN NAT and the multicast-TTL bump live in
+# nucleus-firewall.sh / nucleus-firewall.service, decoupled from this
 # radio-dependent unit so they apply even when wlan1 is RF-killed.
 # ============================================================
 set -euo pipefail
@@ -21,8 +21,8 @@ done
 
 # --- Make this script safe to re-run (apply without reboot) -----------------
 # A stale wpa_supplicant still bound to wlan1 makes the join below fail, which
-# under `set -euo pipefail` aborts the script before the multicast-TTL mangle
-# section. Kill any existing instance, wait for it to release the interface,
+# under `set -euo pipefail` aborts the script before the mesh params are set.
+# Kill any existing instance, wait for it to release the interface,
 # and drop its control socket so the fresh -B launch starts clean.
 pkill -f 'wpa_supplicant .*-i wlan1' || true
 for _ in $(seq 1 10); do
@@ -75,18 +75,7 @@ MESH_PHY=$(iw dev wlan1 info | awk '/wiphy/{print "phy"$2}')
 iw phy "$MESH_PHY" set rts {{ mesh_rts_threshold }}
 {% endif %}
 
-{% if mesh_mcast_ttl > 0 %}
-# Bump multicast TTL on br-lan ingress. ATAK emits CoT/discovery/voice with
-# TTL=1; the kernel won't forward multicast unless TTL>1, so smcroute could not
-# bridge br-lan -> wlan1 without this. Only br-lan ingress is mangled; traffic
-# arriving from the mesh on wlan1 already has adequate TTL.
-nft list table ip mangle 2>/dev/null | grep -q 'nucleus_mcast_ttl' || {
-    nft add table ip mangle 2>/dev/null || true
-    nft 'add chain ip mangle PREROUTING { type filter hook prerouting priority -150 ; }' 2>/dev/null || true
-    nft add rule ip mangle PREROUTING iifname "br-lan" ip daddr 239.2.3.1 ip ttl set {{ mesh_mcast_ttl }} comment \"nucleus_mcast_ttl\"
-    nft add rule ip mangle PREROUTING iifname "br-lan" ip daddr 224.10.10.1 ip ttl set {{ mesh_mcast_ttl }} comment \"nucleus_mcast_ttl\"
-    nft add rule ip mangle PREROUTING iifname "br-lan" ip daddr 239.255.255.0/24 ip ttl set {{ mesh_mcast_ttl }} comment \"nucleus_mcast_ttl\"
-}
-{% endif %}
+# The ATAK multicast-TTL bump moved to nucleus-firewall.sh: it must apply with
+# wlan1 off too (the eth0 hard line needs it), and this script aborts first.
 
 echo "nucleus-mesh: wlan1 mesh up ({{ mesh_ssid }} ch {{ mesh_channel }}, ip {{ mesh_ip }})"
