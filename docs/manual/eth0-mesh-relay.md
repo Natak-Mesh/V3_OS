@@ -21,7 +21,7 @@ Unicast across the link is unaffected: Babel routes it over eth0 in every mode.
 
 | Node | `eth0.mcast_mode` | Radios | Config change |
 |------|-------------------|--------|---------------|
-| A (RF-silent) | `br_lan` (default) | `mesh.enabled: false`, `halow.enabled: false`, `meshtastic.tx_enabled: false` | radios off only |
+| A (RF-silent) | `br_lan` (default) | off | `mesh.enabled: false`, `halow.enabled: false`, `meshtastic.tx_enabled: false` |
 | B (RF relay) | `mesh_relay` | on | `mcast_mode: mesh_relay`, `mcast_source_node_ids: [<A's id>]` |
 
 Both nodes need `eth0.babel: true` (default). The schema rejects `mesh_relay`
@@ -45,26 +45,48 @@ apply rewrites it to `mcast_mode`.
 
 ## Setup
 
-On **node B only**, either:
+Both nodes need a config change. Apply on each node after editing.
 
-- Web UI → RADIO CONFIGURATION → eth0:
-  1. **ATAK mcast mode** → `mesh_relay`
-  2. **Relay source node IDs** → A's node ID. The ID is the number in A's
-     hostname: `0017-nucleus` → `17`. Comma-separate multiple IDs.
-  3. **Save**, **Dry-run apply** (expect `/etc/smcroute.conf` and
-     `nucleus-firewall.sh` changed), **Apply**.
-- or `/etc/nucleus/config.yaml`, then `sudo nucleusctl apply`:
-  ```yaml
-  eth0:
-    mcast_mode: mesh_relay
-    mcast_source_node_ids: [17]
-  ```
+### Node A (RF-silent)
 
-On node A: switch off all radio TX (RADIOS page, or `mesh.enabled: false`,
-`halow.enabled: false`, `meshtastic.tx_enabled: false`) and apply.
+Turn off all radio TX (RADIOS page, or `config.yaml`):
 
-To disable: set B back to `br_lan` and apply. `mcast_source_node_ids` is kept
-but has no effect outside `mesh_relay`.
+```yaml
+mesh:
+  enabled: false
+halow:
+  enabled: false
+meshtastic:
+  tx_enabled: false
+```
+
+Leave `eth0.mcast_mode` at `br_lan` (default).
+
+### Node B (RF relay)
+
+Web UI → RADIO CONFIGURATION → eth0:
+
+1. **ATAK mcast mode** → `mesh_relay`
+2. **Relay source node IDs** → A's node ID: the number in A's hostname
+   (`0017-nucleus` → `17`). Comma-separate multiple IDs.
+3. **Save** → **Dry-run apply** (expect `/etc/smcroute.conf` and
+   `nucleus-firewall.sh` changed) → **Apply**.
+
+Or `config.yaml`, then `sudo nucleusctl apply`:
+
+```yaml
+eth0:
+  mcast_mode: mesh_relay
+  mcast_source_node_ids: [17]
+```
+
+Without A's ID in **Relay source node IDs**, A's CoT is forwarded to wlan1 and
+halow0 but **not transmitted on LoRa**.
+
+### Disable
+
+Set B's **ATAK mcast mode** back to `br_lan` and apply. `mcast_source_node_ids`
+is kept but has no effect outside `mesh_relay`.
 
 ## Forwarding paths
 
