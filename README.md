@@ -134,7 +134,10 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
    `wpa_supplicant-halow.conf`), joined to Babel. Inert unless the radio is
    present; auto-starts on plug-in. See [docs/halow.md](docs/halow.md).
 
-nginx fronts the UI on :80/:443 (self-signed cert, `<hostname>.local` via avahi);
+nginx fronts the UI on :80/:443 (self-signed cert, `<serial>.local` and
+`<hostname>.local` via avahi + `nucleus-mdns-alias`). br-lan DHCP hands out the
+node as DNS (`nucleus-dns`, dnsmasq DNS-only), which answers both names with no
+internet and forwards the rest to `br_lan.dns`;
 requests over eth0 need HTTP Basic auth, trusted nets (mesh, br-lan, Tailscale,
 localhost) don't.
 

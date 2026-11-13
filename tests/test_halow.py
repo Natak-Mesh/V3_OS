@@ -234,7 +234,8 @@ def _apply_group_bounce(monkeypatch, tmp_path, *, halow_enabled, present):
         ("systemd-networkd", "brlan-setup"))])
     monkeypatch.setattr(apply, "_restart", lambda units: restarted.extend(units))
     for name in ("_reconcile_rf", "_reconcile_halow", "_reconcile_meshtastic",
-                 "_reconcile_modem73", "_reconcile_reticulum", "_reconcile_eth0_nm"):
+                 "_reconcile_modem73", "_reconcile_reticulum", "_reconcile_eth0_nm",
+                 "_reconcile_local_names"):
         monkeypatch.setattr(apply, name, lambda *a, **k: [])
     for name in ("_reconcile_meshtastic_tx", "_chown_reticulum", "_reload_nginx",
                  "_reload_udev"):

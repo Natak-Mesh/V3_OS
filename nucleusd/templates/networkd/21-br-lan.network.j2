@@ -14,5 +14,7 @@ DHCPServer=yes
 PoolOffset={{ br_lan_dhcp_offset }}
 PoolSize={{ br_lan_dhcp_size }}
 EmitDNS=yes
-DNS={{ br_lan_dns }}
+# Clients use this node's DNS (nucleus-dns), which answers the node's .local
+# names offline and forwards the rest to br_lan.dns.
+DNS={{ br_lan_ip }}
 EmitRouter=yes

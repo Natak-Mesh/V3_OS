@@ -1,0 +1,14 @@
+[Unit]
+Description=Nucleus DNS for br-lan clients (answers <serial>.local offline)
+# Config is rendered by `nucleusctl apply`; apply restarts this unit on change.
+ConditionPathExists=/etc/nucleus/dnsmasq-nucleus.conf
+After=systemd-networkd.service
+Wants=systemd-networkd.service
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/nucleus/dnsmasq-nucleus.conf --pid-file=
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
