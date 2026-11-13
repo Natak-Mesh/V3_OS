@@ -1,15 +1,16 @@
 [Unit]
-Description=Nucleus mDNS short name (<serial>.local)
+Description=Nucleus mDNS short name (<serial>.local) on br-lan + eth0
 # avahi-daemon keeps announcing the system hostname (<serial>-nucleus.local);
-# this adds the short name. -R: no reverse record (the hostname owns it).
+# this adds the short name with each interface's own IPv4 (nucleusd.mdns_alias).
 ConditionPathExists=/etc/nucleus/mdns-alias.env
-After=avahi-daemon.service
+After=avahi-daemon.service network-online.target
 Requires=avahi-daemon.service
 
 [Service]
-DynamicUser=yes
+User=natak
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/nucleus/mdns-alias.env
-ExecStart=/usr/bin/avahi-publish -a -R ${NUCLEUS_MDNS_NAME} ${NUCLEUS_MDNS_ADDR}
+ExecStart=/opt/nucleus/venv/bin/python -m nucleusd.mdns_alias
 Restart=always
 RestartSec=5
 

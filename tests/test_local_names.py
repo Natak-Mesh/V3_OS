@@ -58,7 +58,27 @@ def test_dhcp_hands_out_node_as_dns():
 def test_mdns_alias_env():
     e = render_all(cfg(42))[ALIAS]
     assert "NUCLEUS_MDNS_NAME=0042.local\n" in e
-    assert "NUCLEUS_MDNS_ADDR=10.20.42.1\n" in e
+
+
+# Real `ip -4 -o addr show scope global` output from node 42.
+IP_OUT = (
+    "2: eth0    inet 10.0.0.14/24 metric 1024 brd 10.0.0.255 scope global dynamic eth0\\"
+    "       valid_lft 144020sec preferred_lft 144020sec\n"
+    "4: wlan1    inet 10.20.1.42/24 brd 10.20.1.255 scope global wlan1\\"
+    "       valid_lft forever preferred_lft forever\n"
+    "5: br-lan    inet 10.20.42.1/24 brd 10.20.42.255 scope global br-lan\\"
+    "       valid_lft forever preferred_lft forever\n"
+    "7: tailscale0    inet 100.120.252.105/32 scope global tailscale0\\"
+    "       valid_lft forever preferred_lft forever\n"
+)
+
+
+def test_mdns_alias_uses_each_interface_ip():
+    # Regression: the alias pointed only at the br-lan IP, so a PC on eth0
+    # never resolved <serial>.local to an address it could reach.
+    from nucleusd.mdns_alias import iface_ipv4s
+    assert iface_ipv4s(IP_OUT) == {"eth0": "10.0.0.14", "br-lan": "10.20.42.1"}
+    assert iface_ipv4s("") == {}
 
 
 def test_nginx_serves_both_names():
