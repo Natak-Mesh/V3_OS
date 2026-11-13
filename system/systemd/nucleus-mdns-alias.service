@@ -1,0 +1,17 @@
+[Unit]
+Description=Nucleus mDNS short name (<serial>.local)
+# avahi-daemon keeps announcing the system hostname (<serial>-nucleus.local);
+# this adds the short name. -R: no reverse record (the hostname owns it).
+ConditionPathExists=/etc/nucleus/mdns-alias.env
+After=avahi-daemon.service
+Requires=avahi-daemon.service
+
+[Service]
+DynamicUser=yes
+EnvironmentFile=/etc/nucleus/mdns-alias.env
+ExecStart=/usr/bin/avahi-publish -a -R ${NUCLEUS_MDNS_NAME} ${NUCLEUS_MDNS_ADDR}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

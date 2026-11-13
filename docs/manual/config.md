@@ -49,7 +49,7 @@ Header: derived br-lan IP.
 | Subnet prefix (blank=auto) | Optional. |
 | DHCP pool offset | 0–254. |
 | DHCP pool size | 1–254. |
-| DNS | Upstream DNS (default 8.8.8.8). |
+| DNS | Upstream DNS (default 8.8.8.8). Clients get the node as DNS; it answers `<serial>.local` / `<serial>-nucleus.local` and forwards the rest here. |
 
 ## eth0
 
