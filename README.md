@@ -119,7 +119,7 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
    dependency) so it applies even when wlan1 is RF-killed:
    - eth0 WAN NAT masquerade (WAN mode; Nucleus nets + multicast exempt),
    - ATAK multicast-TTL bump (nftables, `ip nucleus_mcast`): br-lan ingress, and
-     eth0 ingress (TTL=1 only) when `eth0.mcast_bridge`,
+     eth0 ingress (TTL=1 only) when `eth0.mcast_mode` is not `off`,
    - UFW rebuilt every run (`ufw --force reset`, then rules from config;
      `firewall.enabled: false` disables it). Includes the eth0 Reticulum UDP
      ports for wired peering; TAK/OpenTAKServer/MediaMTX ports on eth0 are opened
@@ -128,9 +128,13 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
 4. **babeld** — unicast routes (mesh + br-lan subnets + default route) over
    wlan1, halow0, and eth0 (`eth0.babel`, wired cost — hard-line node links).
 5. **smcroute** — ATAK multicast between `br-lan` and each of `wlan1`,
-   `halow0`, `eth0` (`eth0.mcast_bridge`). Never between two links (no
-   wlan1↔halow0, no eth0↔radio). babeld/smcroute run whenever any of
-   wlan1 / HaLow / eth0 needs them, independent of `mesh.enabled`.
+   `halow0`, `eth0` (`eth0.mcast_mode: br_lan`, default). Never
+   wlan1↔halow0. eth0↔wlan1/halow0 only with `eth0.mcast_mode: mesh_relay`
+   (opt-in, one node per eth0 segment, other wired nodes RF-silent; the CoT
+   bridge then also sends to LoRa from `eth0.mcast_source_node_ids`' br-lan
+   subnets; see [eth0 mesh relay](docs/manual/eth0-mesh-relay.md)).
+   babeld/smcroute run whenever any of wlan1 / HaLow / eth0 needs them,
+   independent of `mesh.enabled`.
 6. **hostapd** — 5 GHz AP on `wlan0`.
 7. **brlan-setup** — enslaves `wlan0` into `br-lan` (networkd can't while
    hostapd owns it). `apply` re-runs it whenever networkd or hostapd bounce.

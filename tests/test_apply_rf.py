@@ -76,7 +76,7 @@ def test_reconcile_rf_mesh_disabled_blocks_and_stops_units(monkeypatch):
     # No other link needs routing (HaLow + eth0 hard line off) -> all stop.
     rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
     apply._reconcile_rf(cfg(mesh={"enabled": False}, halow={"enabled": False},
-                            eth0={"babel": False, "mcast_bridge": False}))
+                            eth0={"babel": False, "mcast_mode": "off"}))
     assert (rf.MESH_IFACE, True) in rfkill  # phy1 blocked
     assert services == [("nucleus-mesh", False), ("babeld", False), ("smcroute", False)]
     assert restarts == []
@@ -96,15 +96,15 @@ def test_reconcile_rf_mesh_disabled_keeps_routing_for_eth0(monkeypatch):
 def test_reconcile_rf_mesh_disabled_keeps_routing_for_halow(monkeypatch):
     rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
     apply._reconcile_rf(cfg(mesh={"enabled": False}, halow={"enabled": True},
-                            eth0={"babel": False, "mcast_bridge": False}))
+                            eth0={"babel": False, "mcast_mode": "off"}))
     assert services == [("nucleus-mesh", False), ("babeld", True), ("smcroute", True)]
 
 
 def test_reconcile_rf_routing_units_split(monkeypatch):
-    # babeld follows eth0.babel, smcroute follows eth0.mcast_bridge.
+    # babeld follows eth0.babel, smcroute follows eth0.mcast_mode.
     rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
     apply._reconcile_rf(cfg(mesh={"enabled": False}, halow={"enabled": False},
-                            eth0={"babel": True, "mcast_bridge": False}))
+                            eth0={"babel": True, "mcast_mode": "off"}))
     assert services == [("nucleus-mesh", False), ("babeld", True), ("smcroute", False)]
 
 

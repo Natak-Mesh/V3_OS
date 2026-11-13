@@ -1801,9 +1801,12 @@ const PAGES = {
         { type: "fselect", label: "Babel routing", options: ["on", "off"],
           value: eth0.babel !== false ? "on" : "off",
           onChange: (v) => eth0.babel = (v === "on") },
-        { type: "fselect", label: "ATAK mcast bridge", options: ["on", "off"],
-          value: eth0.mcast_bridge !== false ? "on" : "off",
-          onChange: (v) => eth0.mcast_bridge = (v === "on") },
+        { type: "fselect", label: "ATAK mcast mode", options: ["off", "br_lan", "mesh_relay"],
+          value: eth0.mcast_mode || "br_lan", onChange: (v) => eth0.mcast_mode = v },
+        { type: "ftext", label: "Relay source node IDs (comma-sep)",
+          value: (eth0.mcast_source_node_ids || []).join(","),
+          onChange: (v) => eth0.mcast_source_node_ids = v.split(",")
+            .map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n)) },
 
         head("Meshtastic Radio"),
         { type: "fselect", label: "Enabled", options: ["on", "off"],

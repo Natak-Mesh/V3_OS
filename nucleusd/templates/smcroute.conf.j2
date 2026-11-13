@@ -36,12 +36,20 @@ mgroup from eth0 group {{ grp }}
 mroute from eth0 group {{ grp }} to br-lan
 mroute from br-lan group {{ grp }} to eth0
 {% endif %}
+{% for radio in eth0_mcast_relay_ifaces %}
+mroute from eth0 group {{ grp }} to {{ radio }}
+mroute from {{ radio }} group {{ grp }} to eth0
 {% endfor %}
-{% if eth0_mcast_bridge %}
-# eth0 (hard-line node link) <-> br-lan only, one-way each (no-echo). Deliberately
-# NO eth0 <-> radio-mesh mroute: a node on both the wire and a radio mesh would
-# loop multicast between them. Wire->mesh relay is deferred until a loop guard
-# exists. Unicast still crosses via Babel.
+{% endfor %}
+{% if eth0_mcast_mode == "br_lan" %}
+# eth0 (hard-line node link) <-> br-lan only, one-way each (no-echo). No
+# eth0 <-> radio-mesh mroute (eth0.mcast_mode: br_lan). Unicast still crosses
+# via Babel.
+{% elif eth0_mcast_mode == "mesh_relay" %}
+# eth0.mcast_mode: mesh_relay — this node relays eth0 <-> {{ eth0_mcast_relay_ifaces | join(", ") }}
+# (no-echo, one-way each) for RF-silent nodes on the wire. Constraint: at most
+# ONE mesh_relay node per eth0 segment, and nodes on the wire must not transmit
+# on the same radio mesh, else multicast loops wire <-> mesh until TTL expiry.
 {% endif %}
 {% if halow_enabled %}
 # NOTE: deliberately NO wlan1<->halow0 mroute. Bridging multicast between the two

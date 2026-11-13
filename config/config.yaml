@@ -46,7 +46,10 @@ eth0:
   dhcp_pool_offset: 10
   dhcp_pool_size: 100
   babel: true        # Babel routing over eth0 (hard-line node links, fiber/copper)
-  mcast_bridge: true # bridge ATAK multicast eth0 <-> br-lan (not to the radio meshes)
+  # ATAK multicast over eth0: off | br_lan (eth0 <-> br-lan) | mesh_relay (also
+  # eth0 <-> wlan1/halow0, for RF-silent nodes on the wire; ONE per eth0 segment)
+  mcast_mode: br_lan
+  mcast_source_node_ids: []  # mesh_relay: ids of the RF-silent nodes (LoRa TX sources)
 
 halow:
   # Wi-Fi HaLow (802.11ah) second 802.11s mesh on a Morse MM8108 USB radio

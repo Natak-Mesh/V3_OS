@@ -59,7 +59,16 @@ Header: derived br-lan IP.
 | DHCP pool offset | 0–254 (lan mode). |
 | DHCP pool size | 1–254 (lan mode). |
 | Babel routing | `on` (default) / `off`. Runs Babel on eth0 (`type wired`, rxcost 96) so nodes joined by a hard line (fiber/copper, direct or via a switch) exchange routes; the wire is preferred over radio. Opens UDP 6696 on eth0. |
-| ATAK mcast bridge | `on` (default) / `off`. smcroute bridges the ATAK groups eth0 ↔ br-lan (no-echo), and TTL=1 ATAK multicast arriving on eth0 is raised to `mesh.mcast_ttl`. **Not** bridged eth0 ↔ wlan1/halow0 (wire→mesh relay is deferred: a node on both would loop). |
+| ATAK mcast mode | `eth0.mcast_mode`. `br_lan` (default): smcroute bridges the ATAK groups eth0 ↔ br-lan (no-echo), and TTL=1 ATAK multicast arriving on eth0 is raised to `mesh.mcast_ttl`. `mesh_relay`: also eth0 ↔ wlan1 and eth0 ↔ halow0 (if HaLow enabled), so an RF-silent node on the wire reaches the radio meshes through this node. Requires Babel routing on. `off`: no eth0 multicast. |
+| Relay source node IDs | `eth0.mcast_source_node_ids`, `mesh_relay` only. Node IDs (hostname `NNNN-nucleus` → `NNNN`) of the RF-silent nodes on the wire. Their br-lan subnets (`10.20.<id>.0/24`) are accepted by the CoT bridge as multicast → LoRa sources. |
+
+**`mesh_relay` constraints:** at most one `mesh_relay` node per eth0 segment, and
+the other nodes on the wire must have no radio TX (`mesh.enabled`, HaLow,
+`meshtastic.tx_enabled` off). Otherwise ATAK multicast loops wire ↔ mesh, or goes
+out over the air twice, until TTL expiry. Set on the relay node only:
+`mcast_mode: mesh_relay`, enter the RF-silent node IDs, then Save and Apply.
+Full reference — paths, TTL, LoRa filter, loop analysis, verification:
+[eth0 mesh relay](eth0-mesh-relay.md).
 
 Both work in `wan` and `lan` mode. babeld/smcroute run whenever any of the wlan1
 mesh, HaLow, or these eth0 options needs them — `mesh.enabled: false` no longer

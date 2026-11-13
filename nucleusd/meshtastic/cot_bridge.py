@@ -136,6 +136,13 @@ mcast_send_sock = None
 iface = None
 my_node_num = None
 local_subnet = None  # br-lan subnet — only bridge multicast from local ATAK devices
+# br-lan subnets of RF-silent nodes on the eth0 wire (eth0.mcast_mode: mesh_relay,
+# eth0.mcast_source_node_ids). Also accepted as multicast -> LoRa TX sources.
+# Re-read from config.yaml each main-loop pass — see _apply_mcast_source_subnets().
+relay_subnets = []
+# br-lan gateway IPs (10.20.<id>.1) of those nodes: their own cot-bridge injects
+# received LoRa CoT from this address, so it is never re-sent to LoRa here.
+relay_exclude_ips = set()
 
 # LoRa voice relay state (initialized in main; None = voice relay disabled)
 voice_portnum = None      # int app port for voice packets (VOICE_LORA_PORTNUM)
@@ -259,6 +266,10 @@ def _read_mesh_conf():
     # Per-UID TX rate limit (schema always provides it; surfaced so the live
     # _apply_tx_min_interval picks up changes without a restart).
     cfg["TX_MIN_INTERVAL"] = str(m.tx_min_interval_secs)
+    # eth0 mesh_relay: br-lan subnets of RF-silent nodes on the wire, accepted
+    # as multicast -> LoRa TX sources. Empty string unless mesh_relay.
+    cfg["MCAST_SOURCE_SUBNETS"] = ",".join(full.eth0_mcast_source_subnets)
+    cfg["MCAST_SOURCE_EXCLUDE_IPS"] = ",".join(full.eth0_mcast_source_exclude_ips)
     return cfg
 
 
@@ -643,6 +654,63 @@ def tx_allowed():
     return TX_ENABLED
 
 
+def _apply_mcast_source_subnets(cfg):
+    """Update relay_subnets from a _read_mesh_conf() dict.
+
+    A missing key leaves the current list unchanged (unreadable config). Logs
+    at INFO only when the list changes, so the ~10s main-loop poll stays quiet.
+    """
+    global relay_subnets, relay_exclude_ips
+    if "MCAST_SOURCE_SUBNETS" not in cfg:
+        return
+    new = []
+    for s in cfg["MCAST_SOURCE_SUBNETS"].split(","):
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            new.append(ipaddress.ip_network(s, strict=False))
+        except ValueError:
+            logger.warning(f"ignoring invalid relay source subnet: {s!r}")
+    excl = set()
+    for s in cfg.get("MCAST_SOURCE_EXCLUDE_IPS", "").split(","):
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            excl.add(ipaddress.ip_address(s))
+        except ValueError:
+            logger.warning(f"ignoring invalid relay exclude ip: {s!r}")
+    if new != relay_subnets or excl != relay_exclude_ips:
+        logger.info("TX relay source subnets: "
+                    f"{', '.join(map(str, new)) or 'none'}; excluded: "
+                    f"{', '.join(sorted(map(str, excl))) or 'none'}")
+        relay_subnets = new
+        relay_exclude_ips = excl
+
+
+def _tx_source_ok(src_ip):
+    """True if multicast from src_ip may be bridged to LoRa.
+
+    Accepts this node's br-lan subnet plus the relay_subnets of RF-silent nodes
+    on the eth0 wire (mesh_relay), minus relay_exclude_ips (those nodes' own
+    cot-bridge LoRa injections). Everything else (Wi-Fi/HaLow mesh traffic,
+    which other nodes already carry) is skipped. No br-lan subnet detected =
+    filter disabled (accept all), as before.
+    """
+    if local_subnet is None:
+        return True
+    try:
+        ip = ipaddress.ip_address(src_ip)
+    except ValueError:
+        return False
+    if ip in local_subnet:
+        return True
+    if ip in relay_exclude_ips:
+        return False
+    return any(ip in n for n in relay_subnets)
+
+
 def _tx_rate_ok(uid):
     """Check if we're allowed to TX this UID (rate limiting)."""
     now = time.time()
@@ -734,12 +802,11 @@ def _mcast_listener_loop(sock, name):
         except OSError:
             break
 
-        # Only bridge multicast from local ATAK devices (not WiFi mesh traffic)
-        if local_subnet is not None:
-            src_ip = addr[0]
-            if ipaddress.ip_address(src_ip) not in local_subnet:
-                logger.debug(f"TX skip (non-local src {src_ip}): {name}")
-                continue
+        # Only bridge multicast from local ATAK devices and RF-silent nodes on
+        # the eth0 wire (not WiFi/HaLow mesh traffic)
+        if not _tx_source_ok(addr[0]):
+            logger.debug(f"TX skip (non-local src {addr[0]}): {name}")
+            continue
 
         try:
             _tx_process_packet(data)
@@ -1583,6 +1650,7 @@ def main():
     # Pick up the receive-only gate at startup too, so the bridge honours it
     # immediately instead of only after the first main-loop pass.
     _apply_tx_enabled(cfg)
+    _apply_mcast_source_subnets(cfg)
 
     # ── Open radio interface (TCP or serial) ─────────────────
     if _use_tcp:
@@ -1820,6 +1888,8 @@ def main():
                 _apply_tx_min_interval(_hb)
                 # Live receive-only gate (same read): flip TX on/off without a restart.
                 _apply_tx_enabled(_hb)
+                # Live eth0 mesh_relay source subnets (same read).
+                _apply_mcast_source_subnets(_hb)
                 if _hb.get("HEARTBEAT_ENABLED", "true").lower() in ("true", "1", "yes"):
                     try:
                         _hb_iv = max(60, int(_hb.get("HEARTBEAT_INTERVAL", "300")))
