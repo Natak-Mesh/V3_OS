@@ -49,6 +49,7 @@ def _capture_rf(monkeypatch, was_blocked=False):
     monkeypatch.setattr(apply, "_set_service",
                         lambda unit, on: services.append((unit, on)))
     monkeypatch.setattr(apply, "_restart", lambda units: restarts.extend(units))
+    monkeypatch.setattr(apply, "_unit_active", lambda unit: True)
     return rfkill, services, restarts
 
 
@@ -134,6 +135,69 @@ def test_group_bounce_mesh_off_restarts_routing_not_mesh(monkeypatch, tmp_path):
                     eth0={"babel": True, "mcast_mode": "br_lan"}))
     assert "nucleus-mesh" not in restarted
     assert restarted[-2:] == ["babeld", "smcroute"]
+
+
+# --- mesh re-enable primes the IPv6 neighbour table ---------------------------
+
+# Regression (node 0042): after a UI mesh off/on, `ip -6 neigh` on wlan1 stayed
+# empty (Babel is multicast-only), so the wifi peer row showed no signal/seen.
+# Real babeld dump lines from 0042: a wlan1 neighbour plus an eth0 one.
+_DUMP = (
+    "BABEL 1.0\nok\n"
+    "add neighbour 55a20a8670 address fe80::8ae5:2ce0:5629:f96e if wlan1 "
+    "reach dfff ureach 0000 rxcost 341 txcost 260 cost 346\n"
+    "add neighbour 55a20a7c70 address fe80::8aa2:9eff:fee1:c8f2 if eth0 "
+    "reach ffff ureach 0000 rxcost 96 txcost 96 cost 96\n"
+    "ok\n"
+).encode()
+
+
+def test_prime_pings_only_wlan1_neighbours_once(monkeypatch):
+    pings = []
+
+    def _run(cmd, **kw):
+        pings.append(cmd)
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(apply.status, "_babel_dump", lambda *a, **k: _DUMP)
+    monkeypatch.setattr(apply.subprocess, "run", _run)
+    monkeypatch.setattr(apply.time, "sleep", lambda s: None)
+    clock = iter([0, 1, 2, 3, 99])
+    monkeypatch.setattr(apply.time, "monotonic", lambda: next(clock))
+    apply._prime_mesh_neighbours(timeout=30)
+    # Pinged once (success recorded), eth0 neighbour never pinged.
+    assert pings == [["ping", "-6", "-c1", "-W1", "fe80::8ae5:2ce0:5629:f96e%wlan1"]]
+
+
+def test_prime_no_neighbours_no_pings(monkeypatch):
+    pings = []
+    monkeypatch.setattr(apply.status, "_babel_dump", lambda *a, **k: b"")
+    monkeypatch.setattr(apply.subprocess, "run", lambda cmd, **kw: pings.append(cmd))
+    monkeypatch.setattr(apply.time, "sleep", lambda s: None)
+    clock = iter([0, 1, 99])
+    monkeypatch.setattr(apply.time, "monotonic", lambda: next(clock))
+    apply._prime_mesh_neighbours(timeout=30)
+    assert pings == []
+
+
+def _capture_prime(monkeypatch, mesh_active):
+    rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
+    monkeypatch.setattr(apply, "_unit_active", lambda unit: mesh_active)
+    primed = []
+    monkeypatch.setattr(apply, "_prime_mesh_neighbours", lambda: primed.append(True))
+    return primed
+
+
+def test_reconcile_rf_mesh_reenable_primes_neighbours(monkeypatch):
+    primed = _capture_prime(monkeypatch, mesh_active=False)
+    apply._reconcile_rf(cfg(mesh={"enabled": True}))
+    assert primed == [True]
+
+
+def test_reconcile_rf_steady_state_does_not_prime(monkeypatch):
+    primed = _capture_prime(monkeypatch, mesh_active=True)
+    apply._reconcile_rf(cfg(mesh={"enabled": True}))
+    assert primed == []
 
 
 # --- _reconcile_meshtastic_tx ------------------------------------------------

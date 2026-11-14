@@ -14,6 +14,8 @@ from __future__ import annotations
 import pwd
 import re
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -58,7 +60,7 @@ _NETPLAN_ETH0_RE = re.compile(r"^[ \t]+eth0:[ \t]*$", re.MULTILINE)
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from . import rf
+from . import rf, status
 from .schema import HALOW_IFACE, NucleusConfig
 
 # Meshtastic daemon exposes its API on localhost; the CLI drives it the same way
@@ -252,6 +254,33 @@ def _unwanted_net_units(cfg: NucleusConfig) -> set[str]:
     return {u for u, on in _routing_units_wanted(cfg).items() if not on}
 
 
+def _unit_active(unit: str) -> bool:
+    return subprocess.run(["systemctl", "is-active", "--quiet", f"{unit}.service"],
+                          check=False).returncode == 0
+
+
+def _prime_mesh_neighbours(timeout: float = 30) -> None:
+    """Ping each Babel wlan1 neighbour's link-local once after the mesh is re-enabled.
+
+    Babel talks multicast only, so after a mesh off/on nothing sends unicast IPv6
+    to peers and `ip -6 neigh` stays empty; status can then not join the `iw`
+    signal/seen to the Babel row. One ping per peer creates the entry. Polls for
+    `timeout` seconds so peers that rejoin a little later are caught too.
+    """
+    done: set[str] = set()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for nb in status.babel_neighbours():
+            addr = nb.get("address")
+            if nb.get("if") != rf.MESH_IFACE or not addr or addr in done:
+                continue
+            r = subprocess.run(["ping", "-6", "-c1", "-W1", f"{addr}%{rf.MESH_IFACE}"],
+                               capture_output=True, check=False)
+            if r.returncode == 0:
+                done.add(addr)
+        time.sleep(2)
+
+
 def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
     """Reconcile the wlan1 mesh RF + units to match config. Idempotent.
 
@@ -279,11 +308,15 @@ def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
         # Unblock the radio first, then (re)start the mesh units. On a real
         # off->on transition restart them so the join + link-local come back;
         # otherwise just ensure they are enabled and running (idempotent).
+        mesh_was_off = not _unit_active(MESH_RADIO_UNIT)
         rf.set_iface_blocked(rf.MESH_IFACE, blocked=False)
         for unit in MESH_UNITS:
             _set_service(unit, wanted[unit])
         if was_blocked:
             _restart([u for u in NET_GROUP_ORDER if u in MESH_UNITS])
+        if mesh_was_off:
+            # Non-daemon: lets a CLI apply finish priming before it exits.
+            threading.Thread(target=_prime_mesh_neighbours).start()
     else:
         # Stop the wlan1 join (and any routing no other link needs) before the
         # radio goes away, then block the phy. babeld/smcroute keep running

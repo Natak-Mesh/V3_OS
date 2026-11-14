@@ -607,10 +607,16 @@ const PAGES = {
           const via = !r.reachable ? "—" : r.direct ? "direct" : esc(r.via || "—");
           const iface = r.reachable ? (r.iface || "—") : "—";
           const cost = r.reachable ? (r.metric / 256).toFixed(1) : "—";
-          const seen = r.reachable ? "now" : ago(r.last_seen);
+          // Seen = the next hop's radio Seen from the per-link peer table (same
+          // value as the Wi-Fi/HaLow tables); "—" where none exists (eth0).
+          const hop = r.direct ? r.node : r.via;
+          const peers = { wlan1: st.wifi_peers, halow0: st.halow_peers }[r.iface] || [];
+          const p = peers.find((x) => x.ipv4 === hop || x.ipv6 === hop);
+          const seen = !r.reachable ? ago(r.last_seen)
+            : p && p.inactive_ms != null ? ago(Date.now() / 1000 - p.inactive_ms / 1000) : "—";
           h += `<tr><td>${esc(r.node)}</td><td>${via}</td>` +
             `<td>${esc(iface)}</td><td>${esc(cost)}</td>` +
-            `<td class="${r.reachable ? "ok" : "warn"}">${esc(seen)}</td></tr>`;
+            `<td class="${r.reachable ? "" : "warn"}">${esc(seen)}</td></tr>`;
         });
         h += `</table>`;
       }
