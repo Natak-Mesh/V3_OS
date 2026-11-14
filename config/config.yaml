@@ -89,6 +89,13 @@ messaging:
     announce_mode: manual  # manual = never auto-announce (share contact cards instead); auto = re-announce on a timer
     announce_interval_secs: 1800  # auto mode only: re-announce lxmf.delivery every N s
     propagation_node: false       # run an LXMF store-and-forward node (extra memory/disk)
+  atak_notify:             # node notifications -> local ATAK device as a direct GeoChat (unicast only)
+    enabled: true
+    link_loss: true        # notify when a mesh neighbour link is lost / restored
+    link_ifaces: [wlan1, halow0]  # links to watch: wlan1 | halow0 | eth0
+    link_hold_secs: 30     # link must stay down/up this long before notifying (anti-flap)
+    rns_message: true      # notify on inbound Reticulum message (sender name only, never the text)
+    device_stale_secs: 120 # forget the ATAK device after this long without its SA
 
 web:
   # Web UI access control. The UI needs NO password from the mesh, the AP, the

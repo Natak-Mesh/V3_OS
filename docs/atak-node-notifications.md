@@ -1,6 +1,24 @@
 # ATAK node notifications
 
-Status: planned; not implemented. Work on `feature/atak-node-notifications`.
+Status: implemented (stage 1) in `nucleusd/messaging/atak_notify.py`, run by
+nucleus-messaging; config `messaging.atak_notify`; state at
+`GET /api/v1/messaging/atak-notify`. Decisions taken:
+
+- **Transport:** discovery from SA on 239.2.3.1:6969 (br-lan subnet only, never
+  the node's own IP); unicast to the SA's `contact endpoint` (tcp → ip:port,
+  srctcp → src ip:port, udp → ip:17012, stcp ignored). Verified: ATAK-CIV 5.4
+  advertises `<ip>:4242:tcp`; a direct GeoChat over TCP 4242 shows as a 1:1 chat
+  from the node callsign. No multicast fallback.
+- **Sender identity:** uid `NUCLEUS-<id:04d>`, callsign `<id:04d> Nucleus notifications`.
+- **Undeliverable:** no fresh device (`device_stale_secs`) or send error → drop
+  + counter/log. In-memory queue only, entries expire after 60 s.
+- **Link loss:** per (iface, neighbour) Babel link on `link_ifaces`
+  (default wlan1, halow0); missing or infinite cost = down; `link_hold_secs`
+  debounce; startup/new links adopted silently; "restored" only after a
+  reported loss; incomplete babeld dumps (`babel_neighbours_checked() is None`)
+  are skipped.
+- **Reticulum:** inbound `_on_rns_message` only; text is the sender display
+  name only — message content is never forwarded or logged.
 
 ## Goal
 
