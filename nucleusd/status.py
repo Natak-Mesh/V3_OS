@@ -281,9 +281,33 @@ def _int_before(line: str, unit: str) -> int | None:
 
 
 def babel_neighbours(port: int = 33123, timeout: float = 2.0) -> list[dict]:
-    """Parse Babel's local read-only monitor socket for current neighbours."""
-    neighbours: list[dict] = []
+    """Parse Babel's local read-only monitor socket for current neighbours.
+
+    Returns [] both when there are no neighbours and when the dump failed; use
+    babel_neighbours_checked() where those two must be told apart.
+    """
+    return _parse_neighbours(_babel_dump(port, timeout))
+
+
+def _dump_complete(buf: bytes) -> bool:
+    """True if a dump holds the header "ok" AND the end-of-dump "ok".
+
+    A refused/timed-out/truncated read lacks the second "ok"; treating that as
+    an empty neighbour table would look like every link dropping at once.
+    """
+    return sum(1 for ln in buf.split(b"\n") if ln.strip() == b"ok") >= 2
+
+
+def babel_neighbours_checked(port: int = 33123, timeout: float = 2.0) -> list[dict] | None:
+    """Like babel_neighbours(), but None when the dump failed or was incomplete."""
     buf = _babel_dump(port, timeout)
+    if not _dump_complete(buf):
+        return None
+    return _parse_neighbours(buf)
+
+
+def _parse_neighbours(buf: bytes) -> list[dict]:
+    neighbours: list[dict] = []
     if not buf:
         return neighbours
 

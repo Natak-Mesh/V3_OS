@@ -61,6 +61,12 @@ def status() -> dict:
     return _rpc({"cmd": "status"})
 
 
+@router.get("/atak-notify")
+def atak_notify_status() -> dict:
+    """ATAK node-notification state: discovered device(s), counters, last error."""
+    return _rpc({"cmd": "atak_notify_status"})
+
+
 class NameBody(BaseModel):
     name: str = ""             # "" resets to the hostname
 

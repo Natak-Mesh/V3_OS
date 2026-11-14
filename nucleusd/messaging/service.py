@@ -137,9 +137,32 @@ def load_config() -> dict:
         "rns_announce_interval_secs": m.rns.announce_interval_secs,
         "rns_propagation_node": m.rns.propagation_node,
         "mesh_ifaces": cfg.mesh_ifaces,
+        "atak_notify": m.atak_notify.enabled,
+        "br_lan_ip": cfg.br_lan_ip,
+        "br_lan_subnet": cfg.br_lan_subnet,
         "_cfg": cfg,
     })
     return out
+
+
+def build_atak_notifier(cfg: dict):
+    """AtakNotifier from load_config() output, or None when off/unconfigured."""
+    model = cfg.get("_cfg")
+    if not cfg.get("atak_notify") or model is None:
+        return None
+    from .atak_notify import AtakNotifier
+    a = model.messaging.atak_notify
+    return AtakNotifier(
+        node_id=int(cfg["node_id"]),
+        callsign=model.atak_notify_callsign,
+        br_lan_ip=cfg["br_lan_ip"],
+        br_lan_subnet=cfg["br_lan_subnet"],
+        link_loss=a.link_loss,
+        link_ifaces=list(a.link_ifaces),
+        link_hold_secs=a.link_hold_secs,
+        rns_message=a.rns_message,
+        device_stale_secs=a.device_stale_secs,
+    )
 
 
 class MessagingService:
@@ -181,6 +204,8 @@ class MessagingService:
         # its message is stored (msg_id -> state).
         self._rns_state_lock = threading.Lock()
         self._rns_early_state: dict[str, str] = {}
+        # Node notifications -> local ATAK device (direct GeoChat, unicast only).
+        self._atak = build_atak_notifier(cfg)
         if self.rns_enabled:
             from .rns_store import ConversationStore
             from .rns_contacts import ContactStore
@@ -429,6 +454,9 @@ class MessagingService:
             }
         if cmd == "set_name":
             return self._set_name(req.get("name", ""))
+        if cmd == "atak_notify_status":
+            atak = getattr(self, "_atak", None)
+            return {"ok": True, "atak_notify": atak.status() if atak else {"enabled": False}}
         # ── Reticulum/LXMF direct-message commands ───────────────
         if cmd == "rns_contacts":
             return self._rns_contacts_list()
@@ -696,6 +724,19 @@ class MessagingService:
             self._rns_contacts.add_inbound(peer_hex, pubkey_hex, ts=ts)
         msg = self._rns_store.add(peer_hex, text, "in", ts=ts)
         self._notify_rns(msg)
+        self._atak_rns_notify(peer_hex)
+
+    def _atak_rns_notify(self, peer_hex: str) -> None:
+        """ATAK notification for an inbound DM: sender name only, never the text."""
+        atak = getattr(self, "_atak", None)
+        if atak is None:
+            return
+        try:
+            from .rns_contacts import display_name
+            contact = self._rns_contacts.get(peer_hex) if self._rns_contacts else None
+            atak.on_rns_message(display_name(contact or {"lxmf_hash": peer_hex}))
+        except Exception as e:  # a notification must never break message intake
+            log(f"atak notify error: {e}")
 
     def _notify_rns(self, msg: dict) -> None:
         """Push a new DM to live subscribers (same channel as broadcast)."""
@@ -751,6 +792,8 @@ class MessagingService:
             threads.append(threading.Thread(target=self._rns_setup_loop, daemon=True))
         for t in threads:
             t.start()
+        if self._atak is not None:
+            self._atak.start(self._stop)
         log(f"messaging up as sender={self.sender!r} "
             f"(wifi={self.wifi_group}:{self.wifi_port}, lora={self.lora_enabled}, "
             f"rns={self.rns_enabled})")

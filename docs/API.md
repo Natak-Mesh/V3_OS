@@ -370,6 +370,18 @@ curl -s http://localhost:8080/api/v1/messaging/status
 #  "wifi_port":17020,"lora":true,"count":12}
 ```
 
+### `GET /atak-notify`
+ATAK node notifications (`messaging.atak_notify`): discovered local ATAK
+device(s), delivery counters, last send error.
+```bash
+curl -s http://localhost:8080/api/v1/messaging/atak-notify
+# {"ok":true,"atak_notify":{"enabled":true,"sender_uid":"NUCLEUS-0042",
+#  "callsign":"0042 Nucleus notifications","devices":[{"uid":"ANDROID-...","callsign":"0033",
+#  "endpoint":"10.20.42.55:4242/tcp","age_secs":3.1}],
+#  "stats":{"queued":2,"sent":2,"failed":0,"dropped_no_device":0,...},
+#  "last_error":null,"last_sent":1763112345.6}}
+```
+
 ### `GET /messages?since=<ts>`
 Message history. `since` is a Unix timestamp (float); `0` = everything.
 ```bash

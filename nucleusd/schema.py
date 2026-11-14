@@ -525,6 +525,7 @@ class MessagingConfig(BaseModel):
                     "announces. Blank = the hostname.",
     )
     rns: "RnsMessagingConfig" = Field(default_factory=lambda: RnsMessagingConfig())
+    atak_notify: "AtakNotifyConfig" = Field(default_factory=lambda: AtakNotifyConfig())
 
     @field_validator("display_name", mode="before")
     @classmethod
@@ -578,6 +579,40 @@ class RnsMessagingConfig(BaseModel):
     propagation_node: bool = Field(
         False,
         description="Run an LXMF propagation node (store-and-forward for offline peers). Extra memory/disk; off by default.",
+    )
+
+
+AtakNotifyIface = Literal["wlan1", "halow0", "eth0"]
+
+
+class AtakNotifyConfig(BaseModel):
+    """Node notifications pushed to the local ATAK device as direct GeoChat.
+
+    Runs in nucleus-messaging. The device is discovered from its SA multicast on
+    br-lan and messaged by unicast only (its advertised TCP/UDP contact
+    endpoint) — never multicast. With no device heard within
+    ``device_stale_secs`` a notification is dropped, not queued.
+    """
+
+    enabled: bool = Field(True, description="Send node notifications to the local ATAK device.")
+    link_loss: bool = Field(
+        True, description="Notify when an individual mesh neighbour link is lost (and restored).",
+    )
+    link_ifaces: list[AtakNotifyIface] = Field(
+        default_factory=lambda: ["wlan1", "halow0"],
+        description="Interfaces whose Babel neighbour links are monitored (wlan1 | halow0 | eth0).",
+    )
+    link_hold_secs: int = Field(
+        30, ge=0, le=600,
+        description="A link must stay down (or back up) this long before notifying (anti-flap).",
+    )
+    rns_message: bool = Field(
+        True,
+        description="Notify on each inbound Reticulum/LXMF message (sender name only; never the text).",
+    )
+    device_stale_secs: int = Field(
+        120, ge=30, le=3600,
+        description="Forget the ATAK device if no SA is heard from it for this long.",
     )
 
 
@@ -905,6 +940,11 @@ class NucleusConfig(BaseModel):
     def messaging_name(self) -> str:
         """Name this node uses in chat + LXMF announces (display_name, else hostname)."""
         return self.messaging.display_name or self.node.hostname
+
+    @property
+    def atak_notify_callsign(self) -> str:
+        """Sender name of node notifications in ATAK chat, e.g. '0042 Nucleus notifications'."""
+        return f"{self.node.id:04d} Nucleus notifications"
 
     # ---- Derived addressing (computed, never hand-entered) ----------------
     @property

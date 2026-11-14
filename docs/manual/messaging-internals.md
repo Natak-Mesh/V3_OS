@@ -112,8 +112,18 @@ rnsd (shared instance) ◄──── lxmf.delivery  ───────► C
 
 `enabled`, `wifi_group`, `wifi_port`, `lora`, `dedupe_window_secs`,
 `history_limit`, and `rns:` (`enabled`, `announce_mode` [`manual`/`auto`],
-`announce_interval_secs`, `propagation_node`). Validated by
-`nucleusd.schema.MessagingConfig` / `RnsMessagingConfig`.
+`announce_interval_secs`, `propagation_node`), and `atak_notify:` (`enabled`,
+`link_loss`, `link_ifaces`, `link_hold_secs`, `rns_message`,
+`device_stale_secs`). Validated by `nucleusd.schema.MessagingConfig` /
+`RnsMessagingConfig` / `AtakNotifyConfig`.
+
+## ATAK node notifications
+
+`atak_notify.py` sends node events to the ATAK device on this node's br-lan as
+a direct GeoChat from `NUCLEUS-<id>` (callsign `<id:04d> Nucleus notifications`): mesh neighbour
+link lost/restored, and inbound Reticulum message (sender name only, never the
+text). Unicast only to the device's advertised endpoint; dropped (and counted)
+when no device is known. Details: [atak-node-notifications.md](../atak-node-notifications.md).
 
 ## Limitations
 
