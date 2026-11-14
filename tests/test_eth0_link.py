@@ -22,7 +22,8 @@ MESH_UP = "/opt/nucleus/bin/nucleus-mesh-up.sh"
 ATAK_GROUPS = ("239.2.3.1", "224.10.10.1", "239.255.255.1", "239.255.255.2", "239.255.255.12")
 
 # Node 0042's config.yaml at the time of the bug (no eth0.babel/mcast_mode
-# keys yet — they must default ON). Trimmed to the sections the schema needs.
+# keys yet — they default OFF; node42() turns them on as an opted-in wired
+# node). Trimmed to the sections the schema needs.
 NODE42_YAML = textwrap.dedent("""\
     node:
       id: 42
@@ -61,21 +62,53 @@ NODE42_YAML = textwrap.dedent("""\
 """)
 
 
+def node42_defaults():
+    """0042's config exactly as on disk (eth0 link keys absent -> defaults)."""
+    return NucleusConfig.model_validate(yaml.safe_load(NODE42_YAML))
+
+
 def node42(**eth0):
+    """0042 opted in to the wired node link (babel on, mcast br_lan) + overrides."""
     d = yaml.safe_load(NODE42_YAML)
+    d["eth0"]["babel"] = True
+    if "mcast_bridge" not in eth0:  # let the legacy-key migration decide
+        d["eth0"]["mcast_mode"] = "br_lan"
     d["eth0"].update(eth0)
     return NucleusConfig.model_validate(d)
 
 
 # --- schema ------------------------------------------------------------------
 
-def test_defaults_on_for_legacy_config():
-    c = node42()
-    assert c.eth0.babel is True
-    assert c.eth0.mcast_mode == "br_lan"
-    # mesh off must NOT take routing/multicast down with it.
+def test_defaults_off_for_legacy_config():
+    c = node42_defaults()
+    assert c.eth0.babel is False
+    assert c.eth0.mcast_mode == "off"
+    # HaLow is on in this fixture, so routing/multicast still run for it.
     assert c.babeld_enabled is True
     assert c.smcroute_enabled is True
+
+
+def test_opted_in_keeps_routing_with_mesh_off():
+    # Regression: mesh off must NOT take routing/multicast down for eth0.
+    d = yaml.safe_load(NODE42_YAML)
+    d["halow"]["enabled"] = False
+    d["eth0"].update(babel=True, mcast_mode="br_lan")
+    c = NucleusConfig.model_validate(d)
+    assert c.babeld_enabled is True
+    assert c.smcroute_enabled is True
+
+
+def test_defaults_render_no_eth0_link():
+    # Default config: merging the eth0 link feature changes nothing on eth0
+    # until the operator opts in (babeld, smcroute, TTL bump, UFW).
+    r = render_all(node42_defaults())
+    assert "interface eth0" not in r[BABELD]
+    assert "eth0" not in r[SMCROUTE]
+    f = r[FIREWALL]
+    assert 'iifname "eth0" ip daddr' not in f
+    assert "port 6696" not in f
+    assert "atak multicast over ethernet" not in f
+    assert "eth0 node link" not in f
 
 
 def test_routing_off_only_when_every_link_off():
@@ -92,8 +125,8 @@ def test_normalize_persists_new_eth0_keys(tmp_path):
     p.write_text(NODE42_YAML)
     assert cfgio.normalize(p) is True
     on_disk = yaml.safe_load(p.read_text())
-    assert on_disk["eth0"]["babel"] is True
-    assert on_disk["eth0"]["mcast_mode"] == "br_lan"
+    assert on_disk["eth0"]["babel"] is False
+    assert on_disk["eth0"]["mcast_mode"] == "off"
     assert "mcast_bridge" not in on_disk["eth0"]
     assert on_disk["eth0"]["mode"] == "wan"  # operator value preserved
 
@@ -249,8 +282,8 @@ def test_legacy_mcast_bridge_bool_migrates():
 
 
 def test_mesh_relay_not_default():
-    c = node42()
-    assert c.eth0.mcast_mode == "br_lan"
+    c = node42_defaults()
+    assert c.eth0.mcast_mode == "off"
     assert c.eth0_mcast_relay_ifaces == []
     assert c.eth0_mcast_source_subnets == []
 
@@ -293,7 +326,7 @@ def test_smcroute_mesh_relay_routes_no_echo():
 def test_smcroute_mesh_relay_wlan1_only_without_halow():
     d = yaml.safe_load(NODE42_YAML)
     d["halow"]["enabled"] = False
-    d["eth0"]["mcast_mode"] = "mesh_relay"
+    d["eth0"].update(babel=True, mcast_mode="mesh_relay")
     s = render_all(NucleusConfig.model_validate(d))[SMCROUTE]
     assert "mroute from eth0 group 239.2.3.1 to wlan1\n" in s
     assert "halow0" not in s

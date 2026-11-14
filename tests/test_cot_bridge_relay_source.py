@@ -43,7 +43,7 @@ def _conf(tmp_path, monkeypatch, eth0):
 
 def test_read_mesh_conf_relay_subnets(tmp_path, monkeypatch):
     cfg = _conf(tmp_path, monkeypatch,
-                "  mcast_mode: mesh_relay\n  mcast_source_node_ids: [47]\n")
+                "  babel: true\n  mcast_mode: mesh_relay\n  mcast_source_node_ids: [47]\n")
     assert cfg["MCAST_SOURCE_SUBNETS"] == "10.20.47.0/24"
     assert cfg["MCAST_SOURCE_EXCLUDE_IPS"] == "10.20.47.1"
 

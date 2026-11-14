@@ -87,7 +87,8 @@ def test_reconcile_rf_mesh_disabled_keeps_routing_for_eth0(monkeypatch):
     # also disabled babeld + smcroute, so ATAK multicast never crossed the eth0
     # fiber link. Only nucleus-mesh may follow mesh.enabled now.
     rfkill, services, restarts = _capture_rf(monkeypatch, was_blocked=False)
-    apply._reconcile_rf(cfg(mesh={"enabled": False}, halow={"enabled": False}))
+    apply._reconcile_rf(cfg(mesh={"enabled": False}, halow={"enabled": False},
+                            eth0={"babel": True, "mcast_mode": "br_lan"}))
     assert (rf.MESH_IFACE, True) in rfkill
     assert services == [("nucleus-mesh", False), ("babeld", True), ("smcroute", True)]
     assert restarts == []
@@ -129,7 +130,8 @@ def test_group_bounce_mesh_off_restarts_routing_not_mesh(monkeypatch, tmp_path):
     monkeypatch.setattr(apply, "NGINX_DEFAULT", tmp_path / "nginx-default")
     monkeypatch.setattr(apply.rf, "set_iface_blocked", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(apply.rf, "iface_present", lambda iface, **kw: False)
-    apply.apply(cfg(mesh={"enabled": False}, halow={"enabled": False}))
+    apply.apply(cfg(mesh={"enabled": False}, halow={"enabled": False},
+                    eth0={"babel": True, "mcast_mode": "br_lan"}))
     assert "nucleus-mesh" not in restarted
     assert restarted[-2:] == ["babeld", "smcroute"]
 

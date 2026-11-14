@@ -340,18 +340,19 @@ class Eth0Config(BaseModel):
     static_ip: Optional[str] = None
     dhcp_pool_offset: int = 10
     dhcp_pool_size: int = 100
-    # Hard-line (fiber/copper) node-to-node links over eth0. Both on by default
-    # and independent of eth0 mode (wan or lan).
+    # Hard-line (fiber/copper) node-to-node links over eth0. Both OFF by default
+    # (opt-in per node: docs/manual/config.md "Wired node link") and independent
+    # of eth0 mode (wan or lan).
     babel: bool = Field(
-        True,
+        False,
         description="Run Babel routing on eth0 so nodes joined by a hard line exchange "
                     "routes over it. Wired cost is lower than radio, so the wire is "
-                    "preferred whenever both paths exist.",
+                    "preferred whenever both paths exist. Off by default.",
     )
     mcast_mode: Eth0McastMode = Field(
-        "br_lan",
+        "off",
         description="ATAK multicast (CoT, discovery, voice) over eth0 via smcroute. "
-                    "off = none; br_lan = eth0<->br-lan only; mesh_relay = also "
+                    "off (default) = none; br_lan = eth0<->br-lan only; mesh_relay = also "
                     "eth0<->wlan1/halow0, so an RF-silent node on the wire reaches "
                     "the radio meshes through this node. At most ONE mesh_relay node "
                     "per eth0 segment (two loop multicast wire<->mesh).",

@@ -15,24 +15,26 @@ Unicast across the link is unaffected: Babel routes it over eth0 in every mode.
      │                                                       ▲
   br-lan ── Node A ── eth0 ══ fiber ══ eth0 ── Node B ───────┘
            RF-silent                          RF relay
-           mcast_mode: br_lan (default)       mcast_mode: mesh_relay
+           mcast_mode: br_lan                 mcast_mode: mesh_relay
            no radio TX                        mcast_source_node_ids: [A]
 ```
 
 | Node | `eth0.mcast_mode` | Radios | Config change |
 |------|-------------------|--------|---------------|
-| A (RF-silent) | `br_lan` (default) | off | `mesh.enabled: false`, `halow.enabled: false`, `meshtastic.tx_enabled: false` |
-| B (RF relay) | `mesh_relay` | on | `mcast_mode: mesh_relay`, `mcast_source_node_ids: [<A's id>]` |
+| A (RF-silent) | `br_lan` | off | `babel: true`, `mcast_mode: br_lan`, `mesh.enabled: false`, `halow.enabled: false`, `meshtastic.tx_enabled: false` |
+| B (RF relay) | `mesh_relay` | on | `babel: true`, `mcast_mode: mesh_relay`, `mcast_source_node_ids: [<A's id>]` |
 
-Both nodes need `eth0.babel: true` (default). The schema rejects `mesh_relay`
-without it.
+**Prerequisite:** the wired node link is off by default (`eth0.babel: false`,
+`eth0.mcast_mode: off`). Turn it on on both nodes first — see
+[Config → Wired node link](config.md#wired-node-link-eth0--turning-it-on).
+Both nodes need `eth0.babel: true`; the schema rejects `mesh_relay` without it.
 
 ## Modes
 
 | `eth0.mcast_mode` | smcroute routes involving eth0 | Default |
 |-------------------|--------------------------------|---------|
-| `off` | none | |
-| `br_lan` | eth0 → br-lan, br-lan → eth0 | yes |
+| `off` | none | yes |
+| `br_lan` | eth0 → br-lan, br-lan → eth0 | |
 | `mesh_relay` | `br_lan` routes + eth0 → wlan1, wlan1 → eth0, and eth0 → halow0, halow0 → eth0 when `halow.enabled` | |
 
 The routes cover every ATAK group: 239.2.3.1 (CoT/SA), 224.10.10.1
@@ -60,7 +62,8 @@ meshtastic:
   tx_enabled: false
 ```
 
-Leave `eth0.mcast_mode` at `br_lan` (default).
+Set the wired node link on (`eth0.babel: true`, `eth0.mcast_mode: br_lan`) per
+[Config → Wired node link](config.md#wired-node-link-eth0--turning-it-on).
 
 ### Node B (RF relay)
 

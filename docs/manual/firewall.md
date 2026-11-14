@@ -51,8 +51,8 @@ With the firewall enabled, the following rules are applied, in this order:
 | default deny routed | No forwarding unless a route rule below allows it. |
 | allow in on eth0 port 22/tcp | **ssh over ethernet — always allowed.** Added first, right after the reset, so ethernet admin access is never left dangling by a later bad rule. |
 | allow in on eth0 port 29716/29717/42671 udp | Reticulum AutoInterface over eth0 (wired/fiber peering): discovery, unicast discovery and data. Required or Reticulum peers never form over the wire. Always present. |
-| allow in on eth0 port 6696 udp | Babel over eth0 (hard-line node links). Only when `eth0.babel: true` (default). |
-| allow in on eth0 to 239.2.3.1, 224.10.10.1, 239.255.255.0/24 | ATAK multicast over eth0. Only when `eth0.mcast_mode` is not `off` (default `br_lan`). |
+| allow in on eth0 port 6696 udp | Babel over eth0 (hard-line node links). Only when `eth0.babel: true` (default off). |
+| allow in on eth0 to 239.2.3.1, 224.10.10.1, 239.255.255.0/24 | ATAK multicast over eth0. Only when `eth0.mcast_mode` is not `off` (default `off`). |
 | allow in on wlan1 | Trust the 802.11s mesh (WPA3-encrypted). |
 | allow in on br-lan | Trust the local wired LAN / AP bridge. |
 | allow in on tailscale0 | Trust Tailscale. |

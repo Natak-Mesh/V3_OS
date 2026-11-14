@@ -126,9 +126,10 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
      only if those are installed (checked at run time). The NAT/mcast-TTL/Tailscale
      nftables rules are untouched. See [Firewall](docs/manual/firewall.md).
 4. **babeld** — unicast routes (mesh + br-lan subnets + default route) over
-   wlan1, halow0, and eth0 (`eth0.babel`, wired cost — hard-line node links).
+   wlan1, halow0, and eth0 (`eth0.babel`, default off, wired cost — hard-line
+   node links).
 5. **smcroute** — ATAK multicast between `br-lan` and each of `wlan1`,
-   `halow0`, `eth0` (`eth0.mcast_mode: br_lan`, default). Never
+   `halow0`, `eth0` (`eth0.mcast_mode: br_lan`; default `off`). Never
    wlan1↔halow0. eth0↔wlan1/halow0 only with `eth0.mcast_mode: mesh_relay`
    (opt-in, one node per eth0 segment, other wired nodes RF-silent; the CoT
    bridge then also sends to LoRa from `eth0.mcast_source_node_ids`' br-lan
