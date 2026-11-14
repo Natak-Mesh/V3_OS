@@ -28,10 +28,14 @@ with the mesh radio down.
 
 The reset only clears UFW's own rules. It does **not** touch:
 
-- the nftables NAT/masquerade rule — eth0 WAN internet sharing, set up at the top
-  of `nucleus-firewall.sh` (same script, separate nftables table),
-- the multicast-TTL mangle rules (`nucleus_mcast_ttl`), set up by
-  `nucleus-mesh-up.sh`,
+- the nftables NAT/masquerade rule (`table ip nucleus_nat`) — eth0 WAN internet
+  sharing, set up at the top of `nucleus-firewall.sh`. Nucleus nets
+  (10.20.0.0/16, 10.30.1.0/24) and multicast are exempt, so hard-line node
+  traffic over eth0 keeps its real source,
+- the ATAK multicast-TTL rules (`table ip nucleus_mcast`, comment
+  `nucleus_mcast_ttl`), also set up at the top of `nucleus-firewall.sh`: TTL
+  raised to `mesh.mcast_ttl` on br-lan ingress, and on eth0 ingress for TTL=1
+  packets when `eth0.mcast_mode` is not `off`,
 - Tailscale's own firewall chains.
 
 Those live in separate nftables tables (or in Tailscale) and are unaffected.
@@ -47,6 +51,8 @@ With the firewall enabled, the following rules are applied, in this order:
 | default deny routed | No forwarding unless a route rule below allows it. |
 | allow in on eth0 port 22/tcp | **ssh over ethernet — always allowed.** Added first, right after the reset, so ethernet admin access is never left dangling by a later bad rule. |
 | allow in on eth0 port 29716/29717/42671 udp | Reticulum AutoInterface over eth0 (wired/fiber peering): discovery, unicast discovery and data. Required or Reticulum peers never form over the wire. Always present. |
+| allow in on eth0 port 6696 udp | Babel over eth0 (hard-line node links). Only when `eth0.babel: true` (default off). |
+| allow in on eth0 to 239.2.3.1, 224.10.10.1, 239.255.255.0/24 | ATAK multicast over eth0. Only when `eth0.mcast_mode` is not `off` (default `off`). |
 | allow in on wlan1 | Trust the 802.11s mesh (WPA3-encrypted). |
 | allow in on br-lan | Trust the local wired LAN / AP bridge. |
 | allow in on tailscale0 | Trust Tailscale. |
@@ -56,6 +62,8 @@ With the firewall enabled, the following rules are applied, in this order:
 | allow in on eth0 port 8554 tcp, 8000/8001/8890 udp | MediaMTX RTSP + SRT video over ethernet. Only present when `mediamtx.service` is enabled — checked at run time with `systemctl is-enabled`, not from config. Open to any source; see [TAK Server](takserver.md#mediamtx). |
 | route allow br-lan/wlan1 → eth0 | Internet egress for clients. Only in eth0 WAN mode. |
 | route allow br-lan ↔ wlan1 | Mesh ↔ LAN forwarding, always. |
+| route allow eth0 → br-lan/wlan1/halow0 from 10.20.0.0/16, 10.30.1.0/24 | Babel-routed unicast over a hard-line node link. Source-limited so upstream WAN hosts can't route in. `eth0.babel`. In LAN mode also the reverse direction, destination-limited to the same nets. |
+| route allow eth0 → br-lan to the ATAK groups | Bridged ATAK multicast. `eth0.mcast_mode` `br_lan`/`mesh_relay`. In `mesh_relay` also eth0 → wlan1/halow0. In LAN mode also the reverse direction(s). |
 
 The raw app port (8080) is never opened on eth0 — only the nginx proxy (80/443)
 is exposed there, and only when `eth0_access` is on. See [Config](config.md) for

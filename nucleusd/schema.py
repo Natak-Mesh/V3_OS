@@ -171,6 +171,10 @@ def modem73_mode_from_live(cfg: dict) -> Optional[str]:
 # networkd file, supplicant, babeld, smcroute, messaging/voice — uses this name.
 HALOW_IFACE = "halow0"
 
+# ATAK multicast destinations (CoT/SA, GeoChat/discovery, voice) that get the
+# TTL bump and are accepted on eth0. Single source for the firewall template.
+ATAK_MCAST_DSTS: tuple[str, ...] = ("239.2.3.1", "224.10.10.1", "239.255.255.0/24")
+
 # US S1G channel table — single source of truth, transcribed from the Morse
 # driver's dot11ah/s1g_channels_rules.c (us_s1g_channels[]). Keyed by channel
 # bandwidth in MHz; each value is the tuple of valid S1G channel numbers at that
@@ -332,6 +336,9 @@ class ApConfig(BaseModel):
     name: Optional[str] = Field(None, description="SSID; defaults to '<id:04d>-nucleus-ap'.")
 
 
+Eth0McastMode = Literal["off", "br_lan", "mesh_relay"]
+
+
 class Eth0Config(BaseModel):
     """eth0 defaults to WAN (DHCP client / internet gateway)."""
 
@@ -339,6 +346,58 @@ class Eth0Config(BaseModel):
     static_ip: Optional[str] = None
     dhcp_pool_offset: int = 10
     dhcp_pool_size: int = 100
+    # Hard-line (fiber/copper) node-to-node links over eth0. Both OFF by default
+    # (opt-in per node: docs/manual/config.md "Wired node link") and independent
+    # of eth0 mode (wan or lan).
+    babel: bool = Field(
+        False,
+        description="Run Babel routing on eth0 so nodes joined by a hard line exchange "
+                    "routes over it. Wired cost is lower than radio, so the wire is "
+                    "preferred whenever both paths exist. Off by default.",
+    )
+    mcast_mode: Eth0McastMode = Field(
+        "off",
+        description="ATAK multicast (CoT, discovery, voice) over eth0 via smcroute. "
+                    "off (default) = none; br_lan = eth0<->br-lan only; mesh_relay = also "
+                    "eth0<->wlan1/halow0, so an RF-silent node on the wire reaches "
+                    "the radio meshes through this node. At most ONE mesh_relay node "
+                    "per eth0 segment (two loop multicast wire<->mesh).",
+    )
+    mcast_source_node_ids: list[int] = Field(
+        default_factory=list,
+        description="mesh_relay only: node ids of the RF-silent nodes on the wire. "
+                    "Their br-lan subnets (10.20.<id>.0/24) are accepted as sources "
+                    "for the CoT bridge's multicast -> LoRa TX.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_mcast_bridge(cls, data):
+        # Legacy bool `mcast_bridge` (<= feat/eth0-fiber-link first cut) maps to
+        # mcast_mode: true -> br_lan, false -> off. An explicit mcast_mode wins.
+        if isinstance(data, dict) and "mcast_bridge" in data:
+            data = dict(data)
+            legacy = str(data.pop("mcast_bridge")).strip().lower()
+            data.setdefault("mcast_mode",
+                            "br_lan" if legacy in ("true", "1", "yes", "on") else "off")
+        return data
+
+    @field_validator("mcast_source_node_ids")
+    @classmethod
+    def _valid_source_ids(cls, v: list[int]) -> list[int]:
+        for n in v:
+            if not 1 <= n <= 254:
+                raise ValueError(f"mcast_source_node_ids: {n} not in 1-254")
+        return sorted(set(v))
+
+    @property
+    def mcast_bridge(self) -> bool:
+        """True when any eth0 ATAK multicast bridging is on (br_lan or mesh_relay)."""
+        return self.mcast_mode != "off"
+
+    @property
+    def mcast_mesh_relay(self) -> bool:
+        return self.mcast_mode == "mesh_relay"
 
 
 
@@ -872,6 +931,124 @@ class NucleusConfig(BaseModel):
         return self.eth0.static_ip or f"10.10.{self.node.id}.1"
 
     @property
+    def babeld_enabled(self) -> bool:
+        """babeld runs while ANY routed link needs it: wlan1, HaLow, or eth0."""
+        return self.mesh.enabled or self.halow.enabled or self.eth0.babel
+
+    @property
+    def smcroute_enabled(self) -> bool:
+        """smcroute runs while ANY multicast-bridged link needs it."""
+        return self.mesh.enabled or self.halow.enabled or self.eth0.mcast_bridge
+
+    @property
+    def nucleus_nets(self) -> list[str]:
+        """Every Nucleus-owned IPv4 net: mesh, all nodes' br-lan, HaLow.
+
+        Order-preserving; entries covered by a broader one are dropped (nft
+        rejects overlapping elements in an anonymous set).
+        """
+        nets = [self.mesh.subnet, "10.20.0.0/16", self.br_lan_subnet, "10.30.1.0/24"]
+        parsed = [ipaddress.ip_network(n) for n in dict.fromkeys(nets)]
+        keep = [n for n in parsed
+                if not any(n != o and n.subnet_of(o) for o in parsed)]
+        return [str(n) for n in keep]
+
+    @property
+    def eth0_link_routes(self) -> list[dict]:
+        """UFW forwarding rules for hard-line node links over eth0.
+
+        Each entry is {"in", "out", "src", "dst"}; None = any. Two kinds:
+
+          * routed unicast (eth0.babel): between eth0 and every internal link
+            (br-lan, wlan1, halow0), limited to Nucleus nets — eth0 -> internal
+            by SOURCE, internal -> eth0 by DESTINATION — so upstream WAN hosts
+            still cannot route in and LAN mode gains no generic egress.
+          * bridged ATAK multicast (eth0.mcast_mode != off): eth0 <-> br-lan, plus
+            eth0 <-> wlan1/halow0 in mesh_relay, to the ATAK groups, any source
+            (matches what smcroute forwards).
+
+        In WAN mode `<iface> -> eth0` is already allowed (any destination) by
+        the internet-egress rules, so that direction is only added in LAN mode.
+        """
+        rules: list[dict] = []
+        lan = self.eth0.mode != "wan"
+        if self.eth0.babel:
+            for iface in ["br-lan", "wlan1"] + ([HALOW_IFACE] if self.halow.enabled else []):
+                for net in self.nucleus_nets:
+                    rules.append({"in": "eth0", "out": iface, "src": net, "dst": None})
+                if lan:
+                    for net in self.nucleus_nets:
+                        rules.append({"in": iface, "out": "eth0", "src": None, "dst": net})
+        if self.eth0.mcast_bridge:
+            for iface in ["br-lan"] + (self.mesh_ifaces if self.eth0.mcast_mesh_relay else []):
+                for grp in ATAK_MCAST_DSTS:
+                    rules.append({"in": "eth0", "out": iface, "src": None, "dst": grp})
+                    if lan:
+                        rules.append({"in": iface, "out": "eth0", "src": None, "dst": grp})
+        return rules
+
+    @property
+    def eth0_mcast_relay_ifaces(self) -> list[str]:
+        """Radio-mesh interfaces smcroute relays eth0 ATAK multicast to/from.
+
+        Empty unless eth0.mcast_mode == mesh_relay. wlan1 always, halow0 when
+        HaLow is enabled (same set messaging/voice fan out over).
+        """
+        return self.mesh_ifaces if self.eth0.mcast_mesh_relay else []
+
+    @property
+    def eth0_mcast_source_subnets(self) -> list[str]:
+        """br-lan subnets of the RF-silent nodes listed in eth0.mcast_source_node_ids.
+
+        Assumes those nodes use the default br-lan scheme (10.20.<id>.0/24).
+        Empty unless mesh_relay. Consumed by cot-bridge's multicast -> LoRa
+        source filter.
+        """
+        if not self.eth0.mcast_mesh_relay:
+            return []
+        return [f"10.20.{n}.0/24" for n in self.eth0.mcast_source_node_ids]
+
+    @property
+    def eth0_mcast_source_exclude_ips(self) -> list[str]:
+        """br-lan gateway IPs (10.20.<id>.1) of the RF-silent source nodes.
+
+        Excluded from the cot-bridge's multicast -> LoRa sources. A source node's
+        own cot-bridge injects the LoRa CoT it receives on its br-lan from this
+        address; without the exclusion this node would re-transmit that CoT on
+        LoRa. EUDs get DHCP leases from the pool, never .1. Empty unless
+        mesh_relay.
+        """
+        if not self.eth0.mcast_mesh_relay:
+            return []
+        return [f"10.20.{n}.1" for n in self.eth0.mcast_source_node_ids]
+
+    @property
+    def nat_exempt_dsts(self) -> list[str]:
+        """Destinations never masqueraded out eth0 in WAN mode.
+
+        Nucleus nets reached over a hard line and multicast keep their real
+        source, so Babel routing and ATAK bridging across eth0 stay symmetric
+        and the eth0 -> internal source filter (eth0_link_routes) matches.
+        """
+        return self.nucleus_nets + ["224.0.0.0/4"]
+
+    @property
+    def mcast_ttl_ingress(self) -> list[dict]:
+        """Ingress interfaces whose ATAK multicast gets its TTL raised to mcast_ttl.
+
+        ATAK emits TTL=1, which the kernel will not forward. br-lan is bumped
+        unconditionally (as before). eth0 is bumped only when TTL==1 (an EUD
+        directly on the wire); packets a peer node already forwarded with
+        headroom keep their decremented TTL.
+        """
+        if self.mesh.mcast_ttl == 0:
+            return []
+        rules = [{"iface": "br-lan", "only_ttl1": False}]
+        if self.eth0.mcast_bridge:
+            rules.append({"iface": "eth0", "only_ttl1": True})
+        return rules
+
+    @property
     def mesh_ipv6_ll(self) -> str:
         return _ll_from_seed(f"{self.node.hostname}-mesh")
 
@@ -965,6 +1142,20 @@ class NucleusConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _eth0_mcast_relay_gate(self) -> "NucleusConfig":
+        # mcast_source_node_ids may stay set with another mode (kept for the next
+        # switch back to mesh_relay); it is only consumed in mesh_relay.
+        e = self.eth0
+        if e.mcast_mesh_relay:
+            if not e.babel:
+                raise ValueError("eth0.mcast_mode: mesh_relay requires eth0.babel: true")
+            if self.node.id in e.mcast_source_node_ids:
+                raise ValueError(
+                    f"eth0.mcast_source_node_ids must not contain this node's id ({self.node.id})"
+                )
+        return self
+
+    @model_validator(mode="after")
     def _halow_country_gate(self) -> "NucleusConfig":
         # Only the US S1G regulatory tables are defined (HALOW_CHANNELS /
         # HALOW_OP_CLASS). Fail fast rather than bring up a mesh on the wrong
@@ -1030,6 +1221,17 @@ class NucleusConfig(BaseModel):
             "eth0_static_ip": self.eth0_lan_ip,
             "eth0_dhcp_offset": self.eth0.dhcp_pool_offset,
             "eth0_dhcp_size": self.eth0.dhcp_pool_size,
+            "eth0_babel": self.eth0.babel,
+            "eth0_mcast_bridge": self.eth0.mcast_bridge,
+            "eth0_mcast_mode": self.eth0.mcast_mode,
+            "eth0_mcast_relay_ifaces": self.eth0_mcast_relay_ifaces,
+            "eth0_mcast_source_subnets": self.eth0_mcast_source_subnets,
+            "eth0_mcast_source_exclude_ips": self.eth0_mcast_source_exclude_ips,
+            "eth0_link_routes": self.eth0_link_routes,
+            "mcast_ttl_ingress": self.mcast_ttl_ingress,
+            "atak_mcast_dsts": list(ATAK_MCAST_DSTS),
+            "atak_mcast_dsts_nft": ", ".join(ATAK_MCAST_DSTS),
+            "nat_exempt_dsts_nft": ", ".join(self.nat_exempt_dsts),
             "mesh_enabled": self.meshtastic.enabled,
             "mesh_region": self.meshtastic.region,
             "mesh_hat": self.meshtastic.hat,

@@ -12,13 +12,48 @@
 # ============================================================
 set -euo pipefail
 
+# --- eth0 WAN NAT (nftables) ------------------------------------------------
+# Own table, rebuilt every run so a mode/config change takes effect. Traffic to
+# Nucleus nets and multicast is NOT masqueraded: it crosses eth0 as a hard-line
+# node link (Babel-routed / smcroute-bridged) and must keep its real source.
+nft delete table ip nucleus_nat 2>/dev/null || true
+# Drop the legacy unconditional masquerade earlier releases put in `ip nat`.
+for h in $(nft -a list chain ip nat POSTROUTING 2>/dev/null | awk '/oifname "eth0" masquerade/{print $NF}'); do
+    nft delete rule ip nat POSTROUTING handle "$h" || true
+done
 {% if eth0_mode == "wan" %}
 # NAT for internet gateway sharing (WAN mode).
-nft list chain ip nat POSTROUTING 2>/dev/null | grep -q 'oifname "eth0" masquerade' || {
-    nft add table ip nat 2>/dev/null || true
-    nft 'add chain ip nat POSTROUTING { type nat hook postrouting priority 100 ; }' 2>/dev/null || true
-    nft add rule ip nat POSTROUTING oifname "eth0" masquerade
+nft -f - <<'EOF' || echo "nucleus-firewall: WARNING: eth0 NAT rules failed to load" >&2
+table ip nucleus_nat {
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+        oifname "eth0" ip daddr != { {{ nat_exempt_dsts_nft }} } masquerade comment "nucleus_wan_nat"
+    }
 }
+EOF
+{% endif %}
+
+# --- ATAK multicast TTL bump (nftables) -------------------------------------
+# ATAK emits CoT/discovery/voice with TTL=1; the kernel won't forward multicast
+# unless TTL>1, so smcroute could not bridge it without this. Lives here (not in
+# nucleus-mesh-up.sh) so it applies with the wlan1 mesh off — the eth0 hard line
+# needs it too. Own table, rebuilt every run so a config change takes effect.
+nft delete table ip nucleus_mcast 2>/dev/null || true
+# Drop the legacy rules nucleus-mesh-up.sh used to add to `ip mangle`.
+for h in $(nft -a list chain ip mangle PREROUTING 2>/dev/null | awk '/nucleus_mcast_ttl/{print $NF}'); do
+    nft delete rule ip mangle PREROUTING handle "$h" || true
+done
+{% if mcast_ttl_ingress %}
+nft -f - <<'EOF' || echo "nucleus-firewall: WARNING: multicast TTL rules failed to load" >&2
+table ip nucleus_mcast {
+    chain prerouting {
+        type filter hook prerouting priority -150; policy accept;
+{% for r in mcast_ttl_ingress %}
+        iifname "{{ r.iface }}" ip daddr { {{ atak_mcast_dsts_nft }} }{% if r.only_ttl1 %} ip ttl 1{% endif %} ip ttl set {{ mesh_mcast_ttl }} comment "nucleus_mcast_ttl"
+{% endfor %}
+    }
+}
+EOF
 {% endif %}
 
 # --- Host firewall (UFW) ----------------------------------------------------
@@ -26,10 +61,10 @@ nft list chain ip nat POSTROUTING 2>/dev/null | grep -q 'oifname "eth0" masquera
 # config.yaml is the single source of truth: reset first so the live ruleset is
 # rebuilt from the current config on every run and never accumulates stale rules
 # from an earlier apply. `ufw --force reset` only clears UFW's own rules — the
-# nftables NAT masquerade, the multicast-TTL mangle rules (mangle set up by
-# nucleus-mesh-up.sh), and Tailscale's chains live in separate tables and are
-# untouched. Reset leaves timestamped backups of the rule files behind; drop
-# them so /etc/ufw does not fill up over time.
+# nftables NAT masquerade, the multicast-TTL table (ip nucleus_mcast, above),
+# and Tailscale's chains live in separate tables and are untouched. Reset
+# leaves timestamped backups of the rule files behind; drop them so /etc/ufw
+# does not fill up over time.
 ufw --force reset
 rm -f /etc/ufw/*.rules.[0-9]*_[0-9]*
 # Trust internal interfaces (WPA3 mesh + local LAN + tailscale); default-deny
@@ -45,6 +80,16 @@ ufw allow in on eth0 to any port 22 proto tcp comment 'ssh over ethernet'
 ufw allow in on eth0 to any port 29716 proto udp comment 'reticulum autointerface discovery'
 ufw allow in on eth0 to any port 29717 proto udp comment 'reticulum autointerface unicast discovery'
 ufw allow in on eth0 to any port 42671 proto udp comment 'reticulum autointerface data'
+{% if eth0_babel %}
+# Babel over eth0 (hard-line node link): hellos/updates on UDP 6696.
+ufw allow in on eth0 to any port 6696 proto udp comment 'babel over ethernet'
+{% endif %}
+{% if eth0_mcast_bridge %}
+# ATAK multicast arriving over eth0 (hard-line node link), any port.
+{% for dst in atak_mcast_dsts %}
+ufw allow in on eth0 to {{ dst }} comment 'atak multicast over ethernet'
+{% endfor %}
+{% endif %}
 ufw allow in on wlan1
 ufw allow in on br-lan
 ufw allow in on tailscale0
@@ -110,6 +155,15 @@ ufw route allow in on wlan1 out on br-lan
 {% if halow_enabled %}
 ufw route allow in on br-lan out on {{ halow_iface }}
 ufw route allow in on {{ halow_iface }} out on br-lan
+{% endif %}
+{% if eth0_link_routes %}
+# Hard-line node link over eth0: Babel-routed unicast between eth0 and the
+# internal links (Nucleus nets only, so upstream WAN hosts stay out) and bridged
+# ATAK multicast eth0 <-> br-lan. In WAN mode `<iface> -> eth0` is already
+# allowed above, so only the inbound direction is listed.
+{% for r in eth0_link_routes %}
+ufw route allow in on {{ r.in }} out on {{ r.out }}{% if r.src %} from {{ r.src }}{% endif %}{% if r.dst %} to {{ r.dst }}{% endif %} comment 'eth0 node link'
+{% endfor %}
 {% endif %}
 ufw --force enable
 {% else %}

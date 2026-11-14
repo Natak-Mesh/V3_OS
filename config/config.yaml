@@ -45,6 +45,14 @@ eth0:
   mode: wan          # wan = DHCP client / internet gateway; lan = serve DHCP
   dhcp_pool_offset: 10
   dhcp_pool_size: 100
+  # Wired node link (fiber/copper) — OFF by default. To link nodes over eth0 set
+  # babel: true + mcast_mode: br_lan on EVERY node on the wire
+  # (docs/manual/config.md "Wired node link").
+  babel: false       # Babel routing over eth0 (hard-line node links, fiber/copper)
+  # ATAK multicast over eth0: off | br_lan (eth0 <-> br-lan) | mesh_relay (also
+  # eth0 <-> wlan1/halow0, for RF-silent nodes on the wire; ONE per eth0 segment)
+  mcast_mode: "off"
+  mcast_source_node_ids: []  # mesh_relay: ids of the RF-silent nodes (LoRa TX sources)
 
 halow:
   # Wi-Fi HaLow (802.11ah) second 802.11s mesh on a Morse MM8108 USB radio

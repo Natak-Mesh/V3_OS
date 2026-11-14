@@ -66,9 +66,12 @@ from .schema import HALOW_IFACE, NucleusConfig
 import sys as _sys
 MESHTASTIC_CLI = [_sys.executable, "-m", "meshtastic", "--host", "localhost"]
 
-# Mesh units whose lifecycle is owned by mesh.enabled (RF reconcile), not by a
-# plain restart. nucleus-mesh brings wlan1 up; babeld/smcroute route over it.
+# Mesh units restarted together on a wlan1 blocked->unblocked transition.
+# nucleus-mesh brings wlan1 up; babeld/smcroute route over it.
 MESH_UNITS = ["nucleus-mesh", "babeld", "smcroute"]
+# Only nucleus-mesh is owned by mesh.enabled. babeld/smcroute also serve HaLow
+# and the eth0 hard line, so their on/off comes from _routing_units_wanted().
+MESH_RADIO_UNIT = "nucleus-mesh"
 
 # HaLow service, enable/disable-driven by halow.enabled (like meshtasticd/rnsd).
 # It's in NET_GROUP_ORDER so the group bounce restarts it when its inputs change,
@@ -230,12 +233,32 @@ def _reconcile_meshtastic(cfg: NucleusConfig) -> list[str]:
     return touched
 
 
+def _routing_units_wanted(cfg: NucleusConfig) -> dict[str, bool]:
+    """Desired on/off for each MESH_UNITS member.
+
+    nucleus-mesh follows mesh.enabled alone. babeld/smcroute stay up while any
+    link needs them (wlan1, HaLow, or the eth0 hard line), so turning the wlan1
+    mesh off no longer takes routing/multicast down for the other links.
+    """
+    return {
+        MESH_RADIO_UNIT: cfg.mesh.enabled,
+        "babeld": cfg.babeld_enabled,
+        "smcroute": cfg.smcroute_enabled,
+    }
+
+
+def _unwanted_net_units(cfg: NucleusConfig) -> set[str]:
+    """MESH_UNITS that must NOT be (re)started by the network-group bounce."""
+    return {u for u, on in _routing_units_wanted(cfg).items() if not on}
+
+
 def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
-    """Reconcile the wlan1 mesh RF + units to match mesh.enabled. Idempotent.
+    """Reconcile the wlan1 mesh RF + units to match config. Idempotent.
 
     Two coupled actions, matching nucleus-rf.service's boot behaviour:
       * rfkill phy1 (via rf.py) to block/unblock the mesh radio, and
-      * enable/disable the mesh units (nucleus-mesh, babeld, smcroute).
+      * enable/disable nucleus-mesh to match mesh.enabled, and babeld/smcroute
+        to match whether any link (wlan1, HaLow, eth0) still needs them.
 
     Turning the mesh back ON is NOT just an unblock. rfkill-down drops wlan1's
     IPv6 link-local and leaves wpa_supplicant disconnected, so the radio comes
@@ -249,6 +272,7 @@ def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
     (README §4) and is not touched here. Returns the units whose state was set.
     """
     enabled = cfg.mesh.enabled
+    wanted = _routing_units_wanted(cfg)
     was_blocked = rf.is_blocked(rf.phy_for_iface(rf.MESH_IFACE) or "")
 
     if enabled:
@@ -257,13 +281,15 @@ def _reconcile_rf(cfg: NucleusConfig) -> list[str]:
         # otherwise just ensure they are enabled and running (idempotent).
         rf.set_iface_blocked(rf.MESH_IFACE, blocked=False)
         for unit in MESH_UNITS:
-            _set_service(unit, True)
+            _set_service(unit, wanted[unit])
         if was_blocked:
             _restart([u for u in NET_GROUP_ORDER if u in MESH_UNITS])
     else:
-        # Stop routing before the radio goes away, then block the phy.
+        # Stop the wlan1 join (and any routing no other link needs) before the
+        # radio goes away, then block the phy. babeld/smcroute keep running
+        # for HaLow / eth0 when those are enabled.
         for unit in MESH_UNITS:
-            _set_service(unit, False)
+            _set_service(unit, wanted[unit])
         rf.set_iface_blocked(rf.MESH_IFACE, blocked=True)
     return list(MESH_UNITS)
 
@@ -555,12 +581,11 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # this set, but discard defensively (same posture as rnsd/halow above).
     units_to_restart.discard(MODEM73_UNIT)
 
-    # When the mesh is disabled its units are stopped by _reconcile_rf below and
-    # must NOT be (re)started by the network-group bounce, or a disabled mesh
-    # would come straight back up. Drop them from the restart set, mirroring the
-    # meshtasticd/rnsd enable-driven handling above.
-    if not cfg.mesh.enabled:
-        units_to_restart -= set(MESH_UNITS)
+    # Mesh units that config turns off are stopped by _reconcile_rf below and
+    # must NOT be (re)started by the network-group bounce, or a disabled unit
+    # would come straight back up. With the mesh off, only nucleus-mesh is
+    # dropped while babeld/smcroute still serve HaLow / the eth0 hard line.
+    units_to_restart -= _unwanted_net_units(cfg)
 
     if dry_run:
         return result
@@ -581,9 +606,9 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
             ordered = list(NET_GROUP_ORDER)
         else:
             ordered = [u for u in NET_GROUP_ORDER if u in units_to_restart]
-        # Never start mesh units while the mesh is disabled (see the discard above).
-        if not cfg.mesh.enabled:
-            ordered = [u for u in ordered if u not in MESH_UNITS]
+        # Never start mesh units that config turns off (see the discard above).
+        unwanted = _unwanted_net_units(cfg)
+        ordered = [u for u in ordered if u not in unwanted]
         # Never (re)start nucleus-halow from the group bounce when HaLow is
         # disabled or its radio isn't plugged in: restarting a device-bound unit
         # with halow0 absent blocks on the device job until systemd's timeout.
@@ -609,8 +634,8 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # bounce so br-lan exists when dnsmasq binds to it.
     result.units_restarted += _reconcile_local_names(result.changed)
 
-    # Reconcile the wlan1 mesh RF + units to match mesh.enabled every apply
-    # (idempotent): rfkill phy1 and enable/disable nucleus-mesh/babeld/smcroute.
+    # Reconcile the wlan1 mesh RF + units every apply (idempotent): rfkill phy1,
+    # nucleus-mesh per mesh.enabled, babeld/smcroute per any link needing them.
     result.units_restarted += _reconcile_rf(cfg)
 
     # Reconcile the HaLow service to match halow.enabled every apply (idempotent),

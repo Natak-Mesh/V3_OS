@@ -114,3 +114,12 @@ updates for a UID inside the window to keep the airwaves clear.
 
 - **TX rate limit (s)** — 0–3600. `0` disables the limit.
 - **Save TX rate limit** — active within one bridge cycle (~10s).
+
+## CoT TX source filter
+
+The CoT bridge transmits ATAK multicast on LoRa only when its source is this
+node's br-lan subnet, so Wi-Fi mesh traffic other nodes already carry is not
+retransmitted. With `eth0.mcast_mode: mesh_relay`, the br-lan subnets of the
+RF-silent nodes in `eth0.mcast_source_node_ids` are accepted too, except their
+`.1` gateway address (their own cot-bridge's LoRa injections, never re-sent).
+Read live, ~10s. See [eth0 mesh relay](eth0-mesh-relay.md).

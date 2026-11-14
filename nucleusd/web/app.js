@@ -1798,6 +1798,15 @@ const PAGES = {
           min: 0, max: 254, onChange: (v) => eth0.dhcp_pool_offset = v },
         { type: "fnum", label: "DHCP pool size", value: eth0.dhcp_pool_size ?? 100,
           min: 1, max: 254, onChange: (v) => eth0.dhcp_pool_size = v },
+        { type: "fselect", label: "Babel routing", options: ["on", "off"],
+          value: eth0.babel === true ? "on" : "off",
+          onChange: (v) => eth0.babel = (v === "on") },
+        { type: "fselect", label: "ATAK mcast mode", options: ["off", "br_lan", "mesh_relay"],
+          value: eth0.mcast_mode || "off", onChange: (v) => eth0.mcast_mode = v },
+        { type: "ftext", label: "Relay source node IDs (comma-sep)",
+          value: (eth0.mcast_source_node_ids || []).join(","),
+          onChange: (v) => eth0.mcast_source_node_ids = v.split(",")
+            .map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n)) },
 
         head("Meshtastic Radio"),
         { type: "fselect", label: "Enabled", options: ["on", "off"],

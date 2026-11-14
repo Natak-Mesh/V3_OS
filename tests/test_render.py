@@ -342,10 +342,14 @@ def test_firewall_script_header():
 
 
 def test_firewall_wan_nat_moved_here():
-    # The eth0 WAN NAT masquerade moved out of mesh-up into the firewall script,
-    # kept adjacent to the `ufw route ... out on eth0` rules it backs.
+    # The eth0 WAN NAT masquerade lives in the firewall script, ahead of the
+    # `ufw route ... out on eth0` rules it backs. It now sits in its own table
+    # and exempts Nucleus nets + multicast (hard-line node link traffic must
+    # keep its real source across eth0).
     f = rendered()[FIREWALL_PATH]
-    assert 'nft add rule ip nat POSTROUTING oifname "eth0" masquerade' in f
+    assert ('oifname "eth0" ip daddr != { 10.20.0.0/16, 10.30.1.0/24, 224.0.0.0/4 } '
+            'masquerade comment "nucleus_wan_nat"') in f
+    assert "table ip nucleus_nat {" in f
     assert f.index("masquerade") < f.index("ufw route allow in on br-lan out on eth0")
 
 
@@ -492,9 +496,10 @@ def test_firewall_no_wan_route_in_lan_mode():
         "eth0": {"mode": "lan", "static_ip": "10.10.9.1"},
     })
     m = render_all(cfg)[FIREWALL_PATH]
-    # No internet egress routing when eth0 is a LAN port, but ssh + mesh<->lan
-    # forwarding still apply.
-    assert "ufw route allow in on br-lan out on eth0" not in m
+    # No internet egress routing when eth0 is a LAN port (only the scoped
+    # eth0 node-link rules), but ssh + mesh<->lan forwarding still apply.
+    assert "ufw route allow in on br-lan out on eth0\n" not in m
+    assert "ufw route allow in on wlan1 out on eth0\n" not in m
     assert "ufw allow in on eth0 to any port 22 proto tcp" in m
     assert "ufw route allow in on br-lan out on wlan1" in m
 
