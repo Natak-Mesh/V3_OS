@@ -274,6 +274,12 @@ class NodeConfig(BaseModel):
     def short(self) -> str:
         return f"{self.id:04d}"
 
+    @property
+    def local_names(self) -> list[str]:
+        """.local names that reach this node's UI: <serial>.local (short) and
+        <hostname>.local (avahi's own name)."""
+        return [f"{self.short}.local", f"{self.hostname}.local"]
+
 
 class MeshConfig(BaseModel):
     """802.11s wireless mesh on wlan1 + Babel/multicast tuning."""
@@ -1170,6 +1176,7 @@ class NucleusConfig(BaseModel):
         """
         return {
             "hostname": self.node.hostname,
+            "local_names": self.node.local_names,
             "node_id": self.node.id,
             "node_short": self.node.short,
             "mesh_ssid": self.mesh.ssid,

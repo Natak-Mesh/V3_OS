@@ -16,7 +16,7 @@ def rendered():
 
 def test_all_targets_render():
     r = rendered()
-    assert len(r) == 21
+    assert len(r) == 23
     assert all(v.strip() for v in r.values())
 
 

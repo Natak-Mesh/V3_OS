@@ -35,6 +35,13 @@ USB_UDEV_RULE = Path("/etc/udev/rules.d/60-nucleus-usb.rules")
 HALOW_SUPPLICANT_CONF = Path("/etc/wpa_supplicant/wpa_supplicant-halow.conf")
 HALOW_UP_SCRIPT = Path("/opt/nucleus/bin/nucleus-halow-up.sh")
 HALOW_MODPROBE_CONF = Path("/etc/modprobe.d/nucleus-morse.conf")
+# Local names: DNS for br-lan clients (answers <serial>.local offline) and the
+# extra mDNS short name. Both units are static (system/systemd); apply enables
+# them and restarts each when its rendered config changes.
+DNSMASQ_CONF = Path("/etc/nucleus/dnsmasq-nucleus.conf")
+DNS_UNIT = "nucleus-dns"
+MDNS_ALIAS_ENV = Path("/etc/nucleus/mdns-alias.env")
+MDNS_ALIAS_UNIT = "nucleus-mdns-alias"
 CERT_DIR = Path("/etc/nucleus/certs")
 CERT_CRT = CERT_DIR / "nucleus-web.crt"
 CERT_KEY = CERT_DIR / "nucleus-web.key"
@@ -130,6 +137,9 @@ TARGETS: list[Target] = [
     Target("nginx-nucleus.conf.j2", NGINX_VHOST, ()),
     # HTTP Basic credentials for web UI over eth0 — reload nginx on change.
     Target("nucleus.htpasswd.j2", NGINX_HTPASSWD, ()),
+    # Local names — enable/restart handled in apply() via _reconcile_local_names.
+    Target("dnsmasq-nucleus.conf.j2", DNSMASQ_CONF, ()),
+    Target("nucleus-mdns-alias.env.j2", MDNS_ALIAS_ENV, ()),
 ]
 
 
@@ -453,9 +463,23 @@ def _global_ipv4s() -> list[str]:
     return ips
 
 
-def _wanted_sans(hostname: str) -> list[str]:
-    """SAN set for the web cert: the .local name plus every global IPv4."""
-    sans = [f"DNS:{hostname}.local"]
+def _reconcile_local_names(changed: list[str]) -> list[str]:
+    """Keep nucleus-dns + nucleus-mdns-alias enabled and running; restart a
+    unit when its rendered config changed. Idempotent."""
+    restarted: list[str] = []
+    for unit, conf in ((DNS_UNIT, DNSMASQ_CONF), (MDNS_ALIAS_UNIT, MDNS_ALIAS_ENV)):
+        if str(conf) in changed:
+            subprocess.run(["systemctl", "enable", f"{unit}.service"], check=False)
+            _restart([unit])
+            restarted.append(unit)
+        else:
+            _set_service(unit, True)
+    return restarted
+
+
+def _wanted_sans(names: list[str]) -> list[str]:
+    """SAN set for the web cert: every .local name plus every global IPv4."""
+    sans = [f"DNS:{n}" for n in names]
     sans += [f"IP:{ip}" for ip in _global_ipv4s()]
     return sans
 
@@ -483,13 +507,13 @@ def _cert_sans(path: Path) -> list[str]:
     return sans
 
 
-def _ensure_web_cert(hostname: str) -> bool:
+def _ensure_web_cert(names: list[str]) -> bool:
     """Generate the self-signed web cert when missing or when SANs changed.
 
     Idempotent: leaves an up-to-date cert untouched. Returns True if it
     (re)generated the cert (so nginx should reload).
     """
-    wanted = _wanted_sans(hostname)
+    wanted = _wanted_sans(names)
     if CERT_CRT.exists() and CERT_KEY.exists():
         if sorted(_cert_sans(CERT_CRT)) == sorted(wanted):
             return False
@@ -500,7 +524,7 @@ def _ensure_web_cert(hostname: str) -> bool:
             "-days", "3650",
             "-keyout", str(CERT_KEY),
             "-out", str(CERT_CRT),
-            "-subj", f"/CN={hostname}.local",
+            "-subj", f"/CN={names[0]}",
             "-addext", "subjectAltName=" + ",".join(wanted),
         ],
         check=False,
@@ -606,6 +630,10 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
         _restart([FIREWALL_UNIT])
         result.units_restarted.append(FIREWALL_UNIT)
 
+    # Local names: br-lan DNS (nucleus-dns) + mDNS short name. After the group
+    # bounce so br-lan exists when dnsmasq binds to it.
+    result.units_restarted += _reconcile_local_names(result.changed)
+
     # Reconcile the wlan1 mesh RF + units every apply (idempotent): rfkill phy1,
     # nucleus-mesh per mesh.enabled, babeld/smcroute per any link needing them.
     result.units_restarted += _reconcile_rf(cfg)
@@ -644,7 +672,7 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     # nginx reverse proxy: ensure the self-signed cert matches current SANs,
     # enable our vhost, drop the stock default site, and reload if anything
     # changed. All idempotent.
-    cert_changed = _ensure_web_cert(cfg.node.hostname)
+    cert_changed = _ensure_web_cert(cfg.node.local_names)
     NGINX_ENABLED.parent.mkdir(parents=True, exist_ok=True)
     symlink_changed = False
     if not NGINX_ENABLED.is_symlink() or NGINX_ENABLED.resolve() != NGINX_VHOST:

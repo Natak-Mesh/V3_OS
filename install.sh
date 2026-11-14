@@ -30,7 +30,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential python3-dev libcodec2-dev \
     babeld smcroute hostapd wpasupplicant iw \
     nftables network-manager systemd-resolved ufw \
-    nginx avahi-daemon avahi-utils openssl iperf3 alsa-utils
+    nginx avahi-daemon avahi-utils openssl iperf3 alsa-utils dnsmasq-base
 # Belt and braces for nodes where iperf3 was installed earlier with the daemon on.
 systemctl disable --now iperf3.service 2>/dev/null || true
 # systemd-resolved carries systemd-networkd's DHCP DNS into /etc/resolv.conf, so
@@ -117,6 +117,8 @@ install -m 644 "$REPO/system/systemd/nucleus-messaging.service" /etc/systemd/sys
 install -m 644 "$REPO/system/systemd/nucleus-voice.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/rnsd.service" /etc/systemd/system/
 install -m 644 "$REPO/system/systemd/nucleus-modem73.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-dns.service" /etc/systemd/system/
+install -m 644 "$REPO/system/systemd/nucleus-mdns-alias.service" /etc/systemd/system/
 # The USB udev rule (/etc/udev/rules.d/60-nucleus-usb.rules) is a generated
 # artifact of `nucleusctl apply`, not a static file. Remove the obsolete
 # Meshtastic rule it supersedes if an older install left it behind.
@@ -247,7 +249,9 @@ if ! grep -q '^DAEMON_CONF="/etc/hostapd/hostapd.conf"' /etc/default/hostapd 2>/
     sed -i '/^DAEMON_CONF=/d' /etc/default/hostapd 2>/dev/null || true
     echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> /etc/default/hostapd
 fi
-# avahi advertises <serial>-nucleus.local over mDNS; nginx reverse-proxies
+# avahi advertises <serial>-nucleus.local over mDNS (nucleus-mdns-alias adds
+# <serial>.local; nucleus-dns answers both offline — enabled by `nucleusctl
+# apply` once their config is rendered); nginx reverse-proxies
 # :80/:443 -> the uvicorn web UI on :8080 (rendered by `nucleusctl apply`).
 systemctl enable avahi-daemon nginx
 systemctl enable systemd-networkd nucleus-rf.service nucleus-mesh.service nucleus-firewall.service nucleus-halow.service babeld smcroute hostapd brlan-setup.service nucleusd.service nucleus-messaging.service nucleus-voice.service rnsd.service
