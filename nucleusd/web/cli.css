@@ -206,6 +206,16 @@ html, body {
 #hdr .up { color: var(--ok); }
 #hdr .down { color: var(--off); }
 #hdr .warn { color: var(--warn); }
+/* ? help key: top-right of the fixed header, kept out of the control bar so
+   the bottom controls stay even. 44px min tap target for phones. */
+#c-help {
+  margin-left: auto;
+  min-width: 44px; min-height: 44px; margin-top: -6px; margin-bottom: -6px;
+  background: transparent; color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 0;
+  font-family: inherit; font-size: calc(18px * var(--fscale)); cursor: pointer;
+}
+#c-help:active { background: var(--accent); color: var(--on-accent); }
 #hdr .title {
   font-weight: bold;
   letter-spacing: .12em;
@@ -459,16 +469,6 @@ html, body {
 #c-back {
   grid-area: back; border-top: 1px solid var(--border-color);
   font-size: calc(14px * var(--fscale)); letter-spacing: .1em; color: var(--text-secondary);
-}
-/* Shell control bar with the ? help key beside BACK (index.html only; the
-   standalone voice handset keeps the plain BACK-only bar). */
-#ctrl.has-help {
-  grid-template-columns: 1fr .35fr .65fr 1fr;
-  grid-template-areas: "up enter enter down" "up help back down";
-}
-#c-help {
-  grid-area: help; border-top: 1px solid var(--border-color);
-  font-size: calc(14px * var(--fscale)); color: var(--text-secondary);
 }
 
 /* Help panel (? key): the manual's Quick help for the current page. */

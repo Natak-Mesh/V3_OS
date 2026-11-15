@@ -7,14 +7,19 @@ read-modify-write `PUT /api/v1/config`.
 
 ## Quick help
 
-All node settings, grouped by section.
+All node settings. Most are set at install and rarely changed.
 
-- Edit fields, then **Save (not applied)** — nothing changes on the node yet.
-- **Dry-run apply** — shows what would change.
-- **Apply** — makes it live; restarts only what changed.
-- **Reload** — throw away unsaved edits.
-- Mesh SSID, channel and password must match on every node.
-- Default web login is `admin` / `52235223` — change it.
+- **Save** stores edits; **Apply** makes them live (restarts only what changed). **Dry-run apply** previews; **Reload** drops unsaved edits.
+- Mesh SSID, channel and password must match on every node. Default web login is `admin` / `52235223` — change it.
+
+### Settings you may change
+- **eth0 Mode** — `wan`: plug into a router or modem; the node gets internet from it and shares it with the mesh. `lan`: the node acts as the router for whatever is plugged in and hands it an address. Cable between two nodes: one `lan`, the other `wan`.
+- **Babel routing** — `on` lets nodes joined by a cable send mesh traffic over it instead of the radio. Turn it on for every node on the cable.
+- **ATAK mcast mode** — `off`: ATAK does not use the cable. `br_lan`: ATAK users on nodes joined by the cable see each other. `mesh_relay`: also passes the cable's ATAK traffic onto this node's radios, for nodes on the cable that don't transmit. Only one `mesh_relay` node per cable; needs Babel routing on.
+- **Relay source node IDs** — `mesh_relay` only: IDs of the non-transmitting nodes on the cable (e.g. `7,12`), so their ATAK traffic also goes out over LoRa.
+- **mcast TTL** — how many hops ATAK traffic can travel across the mesh. Raise it if distant nodes don't see each other's ATAK users. `0` keeps ATAK on this node only.
+- **CoT bridge** — the link between ATAK and the LoRa radio. Off stops ATAK over LoRa, and Meshtastic chats and the heartbeat too (they all go through it).
+- **Allow web UI over ethernet** — `off` blocks this web UI from the ethernet port; reach it over the AP, mesh or Tailscale instead.
 
 ## Node
 

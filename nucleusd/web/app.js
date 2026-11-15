@@ -1702,7 +1702,7 @@ const PAGES = {
   // CoT TX rate limit (node config, not radio) — cot-bridge reads it live.
   mt_txrate: {
     title: "CoT TX Rate Limit",
-    help: "meshtastic",
+    help: "meshtastic#TX rate limit",
     async build() {
       if (TXR === null) {
         const { d: cfg } = await jget("/api/v1/config");

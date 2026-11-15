@@ -152,6 +152,36 @@ def test_shell_help_control_wired():
     assert "if (state.help) { state.help = false; render(true); return; }" in CLI_JS
 
 
+def test_config_quick_help_explains_commonly_changed_settings():
+    """Regression: config `?` help only covered Save/Apply, not what the
+    non-obvious settings do. Each commonly changed field (label as shown in
+    app.js) gets a plain note in config.md's Quick help."""
+    body = manual.section((MANUAL / "config.md").read_text())
+    cfg_page = APP_JS[APP_JS.index("  config: {"):APP_JS.index("  update: {")]
+    for label in ["Babel routing", "ATAK mcast mode", "Relay source node IDs",
+                  "mcast TTL", "CoT bridge", "Allow web UI over ethernet"]:
+        assert f'label: "{label}' in cfg_page, f"{label} not on the config page"
+        assert f"**{label}**" in body, f"config Quick help has no note for {label}"
+    assert "**eth0 Mode**" in body
+    # TX rate limit lives on its own page; its ? shows that manual section.
+    assert _page_help_keys()["mt_txrate"] == "meshtastic#TX rate limit"
+
+
+def test_help_button_in_header_not_control_bar():
+    """Regression: ? in the control bar split BACK and made the bottom controls
+    uneven on phones. It belongs in the header; the bar keeps exactly
+    ▲ ENTER ▼ BACK in the original even 3-column grid."""
+    html = (WEB / "index.html").read_text()
+    css = (WEB / "cli.css").read_text()
+    hdr = re.search(r'<div id="hdr">(.*?)\n    </div>', html, re.S).group(1)
+    ctrl = re.search(r'<div id="ctrl">(.*?)\n    </div>', html, re.S).group(1)
+    assert 'id="c-help"' in hdr
+    assert 'id="c-help"' not in ctrl
+    assert re.findall(r'<button id="([^"]+)"', ctrl) == ["c-up", "c-enter", "c-down", "c-back"]
+    assert "has-help" not in html and "has-help" not in css
+    assert 'grid-template-areas: "up enter down" "up back down";' in css
+
+
 def test_help_markdown_is_escaped_before_formatting():
     """Manual text goes through escHtml before the inline markup is added."""
     inline = CLI_JS[CLI_JS.index("function mdInline"):CLI_JS.index("function mdToHtml")]

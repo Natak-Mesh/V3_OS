@@ -116,9 +116,12 @@ nodes (names absent) still list the sender by hardware id.
 
 ## TX rate limit
 
-Node config (not radio) — read live by the CoT bridge, so no radio reboot.
-Minimum seconds between LoRa transmissions of the same CoT UID; drops repeat
-updates for a UID inside the window to keep the airwaves clear.
+How often the same ATAK user or marker can be sent over LoRa. ATAK repeats
+positions often; LoRa is slow and shared, so updates for the same item that come
+within this many seconds of the last one are dropped. Raise it if LoRa is
+congested; lower it for fresher positions. Saved live — no radio reboot.
+
+Node config (not radio) — read live by the CoT bridge. Applies per CoT UID.
 
 - **TX rate limit (s)** — 0–3600. `0` disables the limit.
 - **Save TX rate limit** — active within one bridge cycle (~10s).
