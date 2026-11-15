@@ -1074,7 +1074,16 @@ const PAGES = {
       items.push({ type: "content", html: `<div class="content">` +
         `<div class="hint" style="padding-left:0;word-break:break-all">` +
         (m.address ? `address <b>${esc(m.address)}</b>` : `address not ready — lane starting`) +
-        ` · announce ${esc(m.announce_mode || "manual")}</div></div>` });
+        ` · announce ${esc(m.announce_mode || "auto")}</div></div>` });
+      // Radios in access_point mode never carry automatic announces; these are
+      // the only way ours goes out on them. Shown only when configured in rnsd.
+      const cfgIfaces = rnsdUp ? (rs.d.interfaces || []).map((i) => i.short_name) : [];
+      for (const [key, name, label] of RNS_ANNOUNCE_RADIOS) {
+        if (cfgIfaces.includes(name)) {
+          items.push({ type: "button", label: `» ANNOUNCE OVER ${label}`,
+            onEnter: (S) => rnsAnnounceOn(S, key, label) });
+        }
+      }
 
       // ── contacts ─────────────────────────────────────────────
       const [cr, lr] = await Promise.all([
@@ -1134,8 +1143,10 @@ const PAGES = {
       } else {
         const t = s.transport || {};
         // Hide the internal Shared Instance row.
+        // Hide the Nucleus Control plugin too (not a link).
         const ifaces = (s.interfaces || []).filter((i) =>
-          !(i.short_name || i.name || "").startsWith("Shared Instance"));
+          !(i.short_name || i.name || "").startsWith("Shared Instance") &&
+          !(i.name || "").startsWith("NucleusCtlInterface["));
         let h = `<div class="content">` +
           `<div class="kv"><span>rnsd <b class="ok">up</b></span>` +
           `<span>uptime <b>${t.uptime != null ? fmtDur(t.uptime) : "—"}</b></span>` +
@@ -2420,6 +2431,20 @@ async function rnsAnnounce(S) {
   const { ok, d } = await jsend("POST", "/api/v1/messaging/rns/announce", {});
   if (!ok) return S.msg("announce failed: " + (d.detail || "error"), false);
   return S.msg("announced");
+}
+
+// Manual-announce radios: [API key, rnsd interface short_name, UI label].
+const RNS_ANNOUNCE_RADIOS = [
+  ["rnode", "RNode LoRa", "RNODE"],
+  ["modem73", "MODEM73 Soundmodem", "MODEM73"],
+];
+
+// Announce once, then push it out on one access_point radio (RNode/modem73).
+async function rnsAnnounceOn(S, iface, label) {
+  const { ok, d } = await jsend("POST",
+    "/api/v1/messaging/rns/announce/" + encodeURIComponent(iface), {});
+  if (!ok) return S.msg(label + " announce failed: " + (d.detail || "error"), false);
+  return S.msg("announced over " + label);
 }
 
 // Emit ONE path request for a contact (announces off → this is how we find it).

@@ -61,6 +61,15 @@ HEARD_MAX = 64
 # request from its table over the local socket only; measured live at ~0.3 s.
 LOCAL_PATH_WAIT_SECS = 3.0
 
+# Manual-announce radios (access_point mode in reticulum-config.j2, so rnsd
+# never announces on them by itself): UI key -> rnsd interface name. The names
+# must match the [[...]] section names in the template (pinned by tests).
+ANNOUNCE_IFACES = {"rnode": "RNode LoRa", "modem73": "MODEM73 Soundmodem"}
+
+# How long announce_on() waits after our announce for rnsd to store it before
+# asking the control plugin to re-send it (local socket round trip ~0.3 s).
+ANNOUNCE_ON_WAIT_SECS = 1.0
+
 
 def log(msg: str) -> None:
     print(f"[messaging.rns] {msg}", flush=True)
@@ -117,7 +126,7 @@ class RnsLane:
 
     def __init__(self, display_name: str,
                  node_id: Optional[int] = None,
-                 announce_mode: str = "manual",
+                 announce_mode: str = "auto",
                  announce_interval_secs: int = 1800,
                  propagation_node: bool = False,
                  contacts=None,
@@ -223,8 +232,9 @@ class RnsLane:
         self._preload_contacts()
 
         self._started = True
-        # Only run the announce timer in auto mode. In manual mode (the default)
-        # nothing is ever broadcast until announce() is called explicitly.
+        # Announce timer in auto mode (the default). In manual mode nothing is
+        # broadcast until announce() is called explicitly. Either way rnsd keeps
+        # these off the access_point radios (RNode/modem73).
         if self.announce_mode == "auto":
             self._announce_thread = threading.Thread(target=self._announce_loop, daemon=True)
             self._announce_thread.start()
@@ -367,6 +377,30 @@ class RnsLane:
         except Exception as e:
             log(f"lxmf.delivery announce error: {e}")
             return False
+
+    def announce_on(self, iface: str) -> dict:
+        """Announce lxmf.delivery, then push it out on one access_point radio.
+
+        RNode / modem73 run in access_point mode, so rnsd never broadcasts
+        announces on them. This does a normal announce (wifi/eth/halow), waits
+        for rnsd to store it, then asks rnsd's Nucleus Control plugin to re-send
+        that stored announce on the chosen radio only.
+        """
+        name = ANNOUNCE_IFACES.get(iface)
+        if name is None:
+            return {"ok": False, "error": f"unknown interface {iface!r}"}
+        if not self._started:
+            return {"ok": False, "error": "rns lane not started"}
+        if not self.announce():
+            return {"ok": False, "error": "announce failed"}
+        time.sleep(ANNOUNCE_ON_WAIT_SECS)
+        try:
+            res = reti.announce_on(name, self._delivery_hash.hex())
+        except reti.ReticulumError as e:
+            return {"ok": False, "error": str(e)}
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error", "announce failed")}
+        return {"ok": True, "interface": iface}
 
     # ── path discovery (explicit, operator-driven) ──────────────
     def request_path(self, dest_hash_hex: str) -> dict:

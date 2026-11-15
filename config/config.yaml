@@ -86,8 +86,8 @@ messaging:
   # display_name: Alpha    # this node's name in chat + Reticulum announces (blank = hostname)
   rns:                     # Reticulum/LXMF direct-message lane (per-node DMs via rnsd)
     enabled: true          # on by default; loads RNS/LXMF (~27 MB)
-    announce_mode: manual  # manual = never auto-announce (share contact cards instead); auto = re-announce on a timer
-    announce_interval_secs: 1800  # auto mode only: re-announce lxmf.delivery every N s
+    announce_mode: auto    # auto = re-announce on a timer (mesh/eth0/HaLow/LAN only; never RNode/modem73); manual = operator only
+    announce_interval_secs: 1800  # auto mode only: re-announce lxmf.delivery every N s (60-86400)
     propagation_node: false       # run an LXMF store-and-forward node (extra memory/disk)
   atak_notify:             # node notifications -> local ATAK device as a direct GeoChat (unicast only)
     enabled: true

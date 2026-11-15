@@ -225,6 +225,14 @@ else
     echo "    /etc/nucleus/config.yaml exists — left untouched"
 fi
 
+echo "==> Reticulum control plugin -> ~natak/.reticulum/interfaces"
+# rnsd loads it via the [[Nucleus Control]] entry in the rendered config; it lets
+# nucleus-messaging send manual announces on the access_point radios.
+install -d -m 700 -o natak -g natak /home/natak/.reticulum
+install -d -m 755 -o natak -g natak /home/natak/.reticulum/interfaces
+install -m 644 -o natak -g natak "$REPO/system/reticulum/NucleusCtlInterface.py" \
+    /home/natak/.reticulum/interfaces/NucleusCtlInterface.py
+
 echo "==> Reticulum config is rendered by 'nucleusctl apply'"
 # rnsd runs as user 'natak' and reads ~natak/.reticulum/config. That file is a
 # rendered artifact now (templates/reticulum-config.j2), produced from the one

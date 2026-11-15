@@ -445,7 +445,7 @@ learned later (mesh pull, operator **req path**, or a signed inbound message) an
 persisted.
 
 - `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>",
-  "name":"<node name>","announce_mode":"manual"}`. `address` is this node's lxmf.delivery destination
+  "name":"<node name>","announce_mode":"auto"}`. `address` is this node's lxmf.delivery destination
   hash — the thing to share.
 - `GET /rns/contacts` — known contacts:
   `{"ok":true,"contacts":[{"lxmf_hash":"...","pubkey":"...","name":"","
@@ -475,7 +475,12 @@ persisted.
   neighbours; nodes with the lane off are omitted. Cards are untrusted until
   added (which re-verifies address↔key).
 - `POST /rns/announce` — emit this node's `lxmf.delivery` announce once
-  (operator-triggered): `{"ok":true,"announced":bool}`.
+  (operator-triggered): `{"ok":true,"announced":bool}`. Goes out on every
+  interface except the `access_point` radios (RNode, modem73).
+- `POST /rns/announce/{iface}` — `iface` = `rnode` | `modem73`. Announces once,
+  then re-sends that announce on the named radio only (via the rnsd Nucleus
+  Control plugin): `{"ok":true,"interface":"rnode"}`. `400` with the reason if
+  the iface is unknown, the radio is down, or the plugin is unreachable.
 - `GET /rns/contacts/{dest}/path` — read-only path state for a contact:
   `{"ok":true,"path":{"known":bool,"hops":<n|null>,"interface":"<name>|null"}}`.
   Reads rnsd's local path table only — **emits no radio traffic**. Pair `known`

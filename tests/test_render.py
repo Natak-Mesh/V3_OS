@@ -136,6 +136,39 @@ def test_reticulum_rnode_enabled():
     assert "codingrate = 6" in r
 
 
+def _iface_block(r, name):
+    """Lines of one [[name]] section of the rendered Reticulum config."""
+    out, inside = [], False
+    for line in r.splitlines():
+        s = line.strip()
+        if s.startswith("[["):
+            inside = s == f"[[{name}]]"
+            continue
+        if inside and s and not s.startswith("#"):
+            out.append(s)
+    return out
+
+
+def test_reticulum_radios_access_point_manual_announce():
+    """RNode + modem73 are access_point (rnsd never broadcasts announces on them;
+    manual announces go via the Nucleus Control plugin); mesh stays full."""
+    r = rendered()["/home/natak/.reticulum/config"]
+    assert "mode = access_point" in _iface_block(r, "RNode LoRa")
+    assert "mode = access_point" in _iface_block(r, "MODEM73 Soundmodem")
+    assert "mode = full" in _iface_block(r, "Mesh AutoInterface")
+    ctl = _iface_block(r, "Nucleus Control")
+    assert "type = NucleusCtlInterface" in ctl
+    assert "outgoing = False" in ctl
+
+
+def test_reticulum_announce_iface_names_match_template():
+    """The lane's manual-announce map must name real [[...]] sections."""
+    from nucleusd.messaging.rns_lane import ANNOUNCE_IFACES
+    r = rendered()["/home/natak/.reticulum/config"]
+    for name in ANNOUNCE_IFACES.values():
+        assert f"[[{name}]]" in r
+
+
 def test_modem73_launch_script():
     r = rendered()["/opt/nucleus/bin/nucleus-modem73-up.sh"]
     assert "/usr/bin/modem73" in r

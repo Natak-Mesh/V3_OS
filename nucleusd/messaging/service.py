@@ -107,7 +107,7 @@ def load_config() -> dict:
         "sender": socket.gethostname().split(".")[0],
         "mesh_ttl": 8,
         "rns_enabled": False,
-        "rns_announce_mode": "manual",
+        "rns_announce_mode": "auto",
         "rns_announce_interval_secs": 1800,
         "rns_propagation_node": False,
         "mesh_ifaces": list(MESH_IFACES),
@@ -481,6 +481,8 @@ class MessagingService:
             return self._rns_clear(req.get("dest", ""))
         if cmd == "rns_announce":
             return self._rns_announce()
+        if cmd == "rns_announce_on":
+            return self._rns_announce_on(req.get("iface", ""))
         if cmd == "rns_path":
             return self._rns_path(req.get("dest", ""))
         if cmd == "rns_request_path":
@@ -520,7 +522,7 @@ class MessagingService:
             "started": bool(lane and lane.started),
             "address": lane.delivery_hash_hex if lane else None,
             "name": self.sender,
-            "announce_mode": self.cfg.get("rns_announce_mode", "manual"),
+            "announce_mode": self.cfg.get("rns_announce_mode", "auto"),
         }
 
     def _rns_contacts_list(self) -> dict:
@@ -648,6 +650,12 @@ class MessagingService:
             return {"ok": False, "error": "rns lane not available"}
         return {"ok": True, "announced": self._rns_lane.announce()}
 
+    def _rns_announce_on(self, iface: str) -> dict:
+        """Operator-triggered announce over one access_point radio (rnode/modem73)."""
+        if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
+            return {"ok": False, "error": "rns lane not available"}
+        return self._rns_lane.announce_on(iface)
+
     def _rns_path(self, dest: str) -> dict:
         """Read-only path-table state for one contact (emits nothing)."""
         if not (self.rns_enabled and self._rns_lane and self._rns_lane.started):
@@ -756,7 +764,7 @@ class MessagingService:
         self._rns_lane = RnsLane(
             display_name=self.sender,
             node_id=self.cfg.get("node_id"),
-            announce_mode=self.cfg.get("rns_announce_mode", "manual"),
+            announce_mode=self.cfg.get("rns_announce_mode", "auto"),
             announce_interval_secs=self.cfg.get("rns_announce_interval_secs", 1800),
             propagation_node=self.cfg.get("rns_propagation_node", False),
             contacts=self._rns_contacts,

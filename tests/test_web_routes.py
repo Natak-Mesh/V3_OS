@@ -106,6 +106,7 @@ def test_messaging_rns_routes_degrade_cleanly():
     # Per-contact path status (read-only) and the explicit path-request POST.
     assert client.get("/api/v1/messaging/rns/contacts/abc/path").status_code in (200, 503)
     assert client.post("/api/v1/messaging/rns/contacts/abc/path").status_code in (200, 400, 503)
+    assert client.post("/api/v1/messaging/rns/announce/rnode").status_code in (200, 400, 503)
     # Rename (nickname) and remove a contact — both relay cleanly.
     assert client.patch("/api/v1/messaging/rns/contacts/abc",
                         json={"name": "x"}).status_code in (200, 400, 503)
