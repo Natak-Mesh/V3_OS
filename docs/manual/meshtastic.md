@@ -31,9 +31,6 @@ Chat history is RAM-only (`/run/nucleus-meshchat/`, max 500 messages per chat):
 kept across bridge restarts, **cleared on every boot**. Favorites, ignored nodes
 and read marks persist in `/var/lib/nucleus/meshclient.json`.
 
-Plain primary-channel broadcasts also appear in [Messaging](messaging.md); DMs,
-secondary channels and reactions appear only here.
-
 ## Status
 
 A status line shows: radio `detected` / `not detected`, CoT bridge

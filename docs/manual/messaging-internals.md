@@ -45,7 +45,8 @@ per-message badge of the transport(s) that delivered it (`wifi`, `lora`, or
 - `nucleusd/messaging/service.py` — daemon (`nucleus-messaging.service`): both
   transports + a UDP control socket (127.0.0.1:5562).
 - `nucleusd/messaging/router.py` — FastAPI layer at `/api/v1/messaging`.
-- Web: MESSAGING page in the CLI/TUI shell.
+- Web: no broadcast page (removed — Meshtastic and Reticulum pages cover chat);
+  the broadcast store remains reachable via `/api/v1/messaging/messages`.
 - CoT bridge text relay: localhost UDP 5560 (TX) / 5561 (RX).
 
 ## Third lane — Reticulum/LXMF direct messages (opt-in)

@@ -1,15 +1,15 @@
 # Monitor page (MESH CONNECTIONS)
 
 Who this node can currently reach. Three tables (four when a HaLow radio is
-plugged in), auto-refreshed every 5s. Diagnostic detail (interface addresses,
-service states) lives on the [System](system.md) page.
+plugged in), auto-refreshed every 5s. Interface addresses live on the
+[Radios and Interfaces](radios.md) page.
 
 ## Radio-off alerts
 
 A radio that has been deliberately switched off looks exactly like a broken
 mesh from this page (empty tables). So when a radio is off, amber alerts are
 shown at the top of the page, followed by a selectable
-**» OPEN RADIOS (RF ON/OFF)** link to the [Radios](radios.md) page where it is
+**» OPEN RADIOS AND INTERFACES** link to the [Radios and Interfaces](radios.md) page where it is
 switched back on:
 
 | Alert | Shown when |
