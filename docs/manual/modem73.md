@@ -5,6 +5,16 @@ DigiRig (USB audio + CP210x RTS PTT at `/dev/nucleus/modem`) → UV-5R.
 `nucleus-modem73.service` runs `/opt/nucleus/bin/nucleus-modem73-up.sh`, rendered
 from the `reticulum.modem73_*` keys in `config.yaml` by `nucleusctl apply`.
 
+## Quick help
+
+Tune the analog-radio data link (DigiRig + handheld radio). Watch the far node's page while tuning.
+
+- **Receive** targets: level **-10 to -30 dBFS**, SNR **15 dB or more**, BER **under 1%** (green = good).
+- Order: set RX level first (radio volume knob, then RX gain), then lower the far end's TX level if SNR is low, then pick the mode.
+- Many errors = slower mode. Clean, strong signal = a faster mode will work.
+- **SEND TEST FRAME** keys the radio once.
+- Gains change at once but are lost on restart; **SAVE + APPLY** keeps them.
+
 ## Required settings
 
 | Setting | Value | Why |

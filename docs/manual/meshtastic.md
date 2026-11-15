@@ -3,6 +3,17 @@
 Configure the local Meshtastic LoRa radio and align its channel with peers, and
 use it as a regular Meshtastic node (CHATS / NODES / POSITIONS).
 
+## Quick help
+
+Use the LoRa radio like the Meshtastic phone app, and set up its channel.
+
+- **CHATS** — channel and direct-message chats. **●** = unread.
+- **NODES** / **POSITIONS** — every Meshtastic node heard; distance and bearing.
+- **RADIO CONFIGURATION** — names, preset, region, power. **Apply** reboots the radio (30-120 s).
+- **SET CHANNEL** — share, paste or join a channel. Channel name, key, region and preset must match to talk.
+- **PRESENCE HEARTBEAT** — keeps this node in others' lists without ATAK traffic.
+- Sending is blocked while the radio is receive-only (RADIOS AND INTERFACES).
+
 ## Meshtastic client
 
 For use without ATAK — what the Meshtastic phone app does, minus radio config
@@ -30,9 +41,6 @@ refused while the radio is receive-only.
 Chat history is RAM-only (`/run/nucleus-meshchat/`, max 500 messages per chat):
 kept across bridge restarts, **cleared on every boot**. Favorites, ignored nodes
 and read marks persist in `/var/lib/nucleus/meshclient.json`.
-
-Plain primary-channel broadcasts also appear in [Messaging](messaging.md); DMs,
-secondary channels and reactions appear only here.
 
 ## Status
 
@@ -108,9 +116,12 @@ nodes (names absent) still list the sender by hardware id.
 
 ## TX rate limit
 
-Node config (not radio) — read live by the CoT bridge, so no radio reboot.
-Minimum seconds between LoRa transmissions of the same CoT UID; drops repeat
-updates for a UID inside the window to keep the airwaves clear.
+How often the same ATAK user or marker can be sent over LoRa. ATAK repeats
+positions often; LoRa is slow and shared, so updates for the same item that come
+within this many seconds of the last one are dropped. Raise it if LoRa is
+congested; lower it for fresher positions. Saved live — no radio reboot.
+
+Node config (not radio) — read live by the CoT bridge. Applies per CoT UID.
 
 - **TX rate limit (s)** — 0–3600. `0` disables the limit.
 - **Save TX rate limit** — active within one bridge cycle (~10s).

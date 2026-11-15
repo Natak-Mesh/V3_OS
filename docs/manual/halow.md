@@ -11,6 +11,15 @@ disappears. Engineering notes and the regulatory channel tables are in
 [docs/halow.md](../halow.md); recognised USB hardware in
 [usb-devices.md](usb-devices.md).
 
+## Quick help
+
+Settings for the plug-in HaLow (long-range, low-speed) mesh radio. Only shown while it is plugged in.
+
+- **Enabled**, **Bandwidth**, **Channel**: edit, then **Deploy** to save and apply.
+- Every HaLow node must use the **same channel and bandwidth** to link.
+- SSID, password and country come from the Wi-Fi mesh settings (Config page).
+- HaLow neighbours are listed on MESH CONNECTIONS.
+
 ## Status
 
 Read-only, refreshed every 5s from `GET /api/v1/status` (`.radios.halow`) and

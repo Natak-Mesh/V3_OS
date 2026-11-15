@@ -3,6 +3,14 @@
 Reboot or power off this node from the web UI. Both actions hit the node
 immediately and take its mesh links down with it.
 
+## Quick help
+
+Display theme and power control (NODE SETTINGS).
+
+- **Theme** — colour scheme for this browser only. **Night** = red on black for dark use.
+- **Reboot** — restarts the node; the UI returns when it is back.
+- **Power off** — shuts down. Needs someone at the node to turn it back on.
+
 ## Actions
 
 - **Reboot** — prompts for confirmation, then reboots the node. The web UI drops

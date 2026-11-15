@@ -1,10 +1,20 @@
-# Radios page (RADIOS — RF ON/OFF)
+# Radios and Interfaces page (RADIOS AND INTERFACES)
 
 Take an individual radio on this node on or off **without shutting the node
 down**, so a wired link keeps working. Each radio is its own switch — there is
 **no "kill all" master switch**. The page shows one line per radio with an
 inline `ON` / `OFF` / `—` (unknown) switch, refreshed every 5 s from
-`GET /api/v1/status` (`.radios`).
+`GET /api/v1/status` (`.radios`). Below the switches is the interface table.
+
+## Quick help
+
+Turn each radio on or off, and see the network interfaces.
+
+- **Wi-Fi mesh** — off leaves the mesh. Stays off after reboot.
+- **Meshtastic** — off = receive-only (hears, never transmits). Stays off after reboot.
+- **Access point** — off drops phones on the AP. Always comes back **on** at reboot.
+- Turning off the mesh or AP can cut your own connection. Fallbacks: USB-C, eth0, console.
+- **Interfaces** — each interface's state (`UP` green) and addresses.
 
 ## The three switches
 
@@ -18,6 +28,17 @@ The RNode LoRa radio is controlled separately on the [Reticulum](reticulum.md)
 page (`reticulum.rnode_enabled`), not here. The optional Wi-Fi HaLow radio is
 enabled/disabled on its own [HaLow Mesh](halow.md) page (`halow.enabled`), which
 appears only when the radio is plugged in.
+
+## Interfaces
+
+Interface state and addresses, from the same `GET /api/v1/status` call
+(`.interfaces`), refreshed every 5 s.
+
+| Column | Meaning |
+|--------|---------|
+| Iface | Interface name. |
+| State | Operational state: `UP` (green), `absent` (grey/off), other (amber). |
+| Addr | Comma-separated addresses, or `—`. |
 
 ## How the switches apply
 

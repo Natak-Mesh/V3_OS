@@ -1,6 +1,16 @@
 # Nucleus Manual
 
 Operator manual for the Nucleus web UI — one page per UI page (see Pages below).
+Each UI page's manual file starts with a `## Quick help` section: that section
+is what the web UI's **?** control shows on the page (see The shell).
+
+## Quick help
+
+- Pick a page with **▲ / ▼** (or arrow keys), open it with **ENTER**.
+- **BACK** (Esc) returns to the previous page.
+- **?** (top-right, or h key) shows or hides help for the page you are on.
+- The header shows this node, its mesh IP and how many mesh nodes it sees.
+- Items with **●** have unread messages.
 
 ## Overview
 
@@ -37,9 +47,9 @@ AP via this web UI (or the same REST API / `nucleusctl`).
 |--------|----------|---------|-----------|
 | nucleus-mesh / babeld / smcroute | Bring up + route the 802.11s mesh | [Monitor](monitor.md) | README §1 |
 | cot-bridge | Owns the LoRa radio; ATAK CoT bridge, message + heartbeat relay | [Meshtastic](meshtastic.md) | — |
-| nucleus-messaging | WiFi mcast + LoRa → one deduped message store | [Messaging](messaging.md) | [messaging-internals.md](messaging-internals.md) |
+| nucleus-messaging | Message daemon behind the [Reticulum](reticulum.md) DM pages (and the WiFi mcast + LoRa broadcast store, API only) | [Reticulum](reticulum.md) | [messaging-internals.md](messaging-internals.md) |
 | nucleus-voice | UDP-mcast PTT voice; optional LoRa STT/TTS | [Voice](voice.md) | [voice-internals.md](voice-internals.md) |
-| nucleusd | Always-on FastAPI: config/apply/status, REST API, serves this UI | [System](system.md) | [API.md](../API.md) |
+| nucleusd | Always-on FastAPI: config/apply/status, REST API, serves this UI | — | [API.md](../API.md) |
 | takserver *(optional)* | Official TAK Server (tak.gov) + MediaMTX; off by default, provisioned per-node | — | [takserver.md](takserver.md) |
 | opentakserver *(optional)* | OpenTAKServer — either/or alternative to takserver; off by default, installed per-node | — | [opentakserver.md](opentakserver.md) |
 
@@ -61,6 +71,11 @@ shell served at `/`.
   - `ip` — mesh IPv4 on wlan1 (`10.20.1.<id>`).
   - `mesh` — `N connected` (Babel neighbours, green), `0 connected` (amber), or
     `DOWN` (nucleus-mesh not active). Refreshed every 5s.
+  - `?` (top-right) — show/hide this page's help (h key): the `## Quick help`
+    section of the page's manual file, or a named `##` section for detail
+    pages. Served by `GET /api/v1/manual/{page}` from the copy `install.sh`
+    puts in `/opt/nucleus/manual/` — the manual is the only source of the
+    help text.
 - **View** (scrolls) — the current page's content.
 - **Control bar** (fixed, bottom), identical on every page:
   - `▲` / `▼` — move the cursor between selectable items (also ↑/↓ keys).
@@ -76,14 +91,12 @@ Selectable item types: navigation links, action buttons, and editable fields
 | Menu item | Page |
 |-----------|------|
 | MESH CONNECTIONS | [Monitor](monitor.md) |
-| MESSAGING | [Messaging](messaging.md) |
 | VOICE (PTT) | [Voice](voice.md) |
 | MESHTASTIC | [Meshtastic Radio](meshtastic.md) |
-| INTERFACES AND SERVICES | [System](system.md) |
-| RADIOS (RF ON/OFF) | [Radios](radios.md) |
+| RADIOS AND INTERFACES | [Radios and Interfaces](radios.md) |
 | HALOW MESH *(only when a HaLow USB radio is plugged in)* | [HaLow Mesh](halow.md) |
 | RETICULUM | [Reticulum](reticulum.md); MODEM73 LIVE: [modem73](modem73.md) |
-| TAILSCALE (VPN) | *(no dedicated page)* — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
+| TAILSCALE (VPN) | [Tailscale](tailscale.md) — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
 | RADIO CONFIGURATION | [Config](config.md) |
 | TAK SERVER *(optional)* | [TAK Server](takserver.md) |
 | OPENTAKSERVER *(optional)* | [OpenTAKServer](opentakserver.md#web-ui-page) |

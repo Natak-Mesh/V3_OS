@@ -57,7 +57,7 @@ def test_messaging_log_sticks_to_newest_message():
     cli_js = (web / "cli.js").read_text()
 
     # The messaging page opts into stick-to-bottom behaviour.
-    assert "stickBottom: true" in app_js, "messaging page lost stickBottom flag"
+    assert "stickBottom: true" in app_js, "chat pages lost stickBottom flag"
 
     # render() honours stickBottom: detect bottom, force a jump, pin the view.
     assert "stickBottom" in cli_js, "render() no longer reads stickBottom"
@@ -279,7 +279,7 @@ def test_mesh_connections_warns_when_a_radio_is_off():
     # AP is intentionally excluded (live-only, resets ON at boot).
     assert "r.ap" not in alerts_fn, "AP must not raise a radio-off alert"
 
-    monitor = app_js[app_js.index("  monitor: {"):app_js.index("  system: {")]
+    monitor = app_js[app_js.index("  monitor: {"):app_js.index("  linktest: {")]
     assert "radioOffAlerts(radios)" in monitor, "monitor page no longer shows alerts"
     assert 'to: "radios"' in monitor, "alert lost its selectable link to RADIOS"
     assert 'class="rf-alert"' in monitor, "alert no longer uses the rf-alert style"
@@ -335,7 +335,7 @@ def test_link_test_page_wiring():
     app_js = (web / "app.js").read_text()
     monitor = app_js[app_js.index("  monitor: {"):app_js.index("  linktest: {")]
     assert 'to: "linktest"' in monitor, "monitor lost its LINK TEST entry"
-    page = app_js[app_js.index("  linktest: {"):app_js.index("  system: {")]
+    page = app_js[app_js.index("  linktest: {"):app_js.index("  tak: {")]
     for link in ("wifi", "halow", "lora"):
         assert f'LT.link === "{link}"' in page
     run = app_js[app_js.index("async function ltRun("):app_js.index("async function mcFlag(")]
@@ -345,3 +345,27 @@ def test_link_test_page_wiring():
     assert 'mcAction(S, arg.id, "traceroute")' in run
     # The peer-side server endpoint is node-to-node only, never called by the UI.
     assert "iperf-server" not in app_js
+
+
+def test_broadcast_messaging_page_removed():
+    """The broadcast MESSAGING page duplicated the Meshtastic + Reticulum pages
+    and was removed with its client code. The Reticulum pages still use the
+    messaging daemon WebSocket (msgWsOpen) for DM pushes."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    for gone in ('to: "messaging"', "  messaging: {", "function sendMessage",
+                 "MSG_CACHE", "MSG_DRAFT", "msgUpsert", '"/api/v1/messaging/messages"'):
+        assert gone not in app_js, gone
+    assert "function msgWsOpen" in app_js and "rnsUpsert(obj.message)" in app_js
+
+
+def test_system_page_merged_into_radios():
+    """INTERFACES AND SERVICES merged into the radios page: one menu entry,
+    interface table kept, services list dropped."""
+    web = Path(__file__).resolve().parent.parent / "nucleusd" / "web"
+    app_js = (web / "app.js").read_text()
+    assert "  system: {" not in app_js and 'to: "system"' not in app_js
+    assert app_js.count('label: "RADIOS AND INTERFACES", to: "radios"') == 1
+    radios = app_js[app_js.index("  radios: {"):app_js.index("  halow: {")]
+    assert "st.interfaces" in radios, "interface table missing from radios page"
+    assert "Object.entries(st.services" not in app_js, "services list should be gone"

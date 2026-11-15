@@ -127,7 +127,7 @@ function radioOffAlerts(radios) {
   const out = [];
   if (mesh.on === false) {
     out.push("<b>Wi-Fi mesh radio is OFF.</b> This node cannot see or reach " +
-      "other Wi-Fi mesh nodes. Turn it on under RADIOS (RF ON/OFF).");
+      "other Wi-Fi mesh nodes. Turn it on under RADIOS AND INTERFACES.");
   } else if (mesh.rf_mismatch === true) {
     out.push("<b>Wi-Fi mesh is enabled but the wlan1 radio is still " +
       "switched off.</b> Apply the config or reboot the node.");
@@ -198,24 +198,11 @@ let M73_VIEW = null;
 let M73_WS = null;
 let M73_WS_POLL = false;
 let M73_EDIT = null;
-let MSG_DRAFT = "";
-// Live chat state: messages cache + WebSocket, populated by the messaging page.
-let MSG_CACHE = [];        // ordered oldest→newest, keyed by id
-let MSG_WS = null;         // active WebSocket, or null when the page is closed
+// Messaging daemon WebSocket: pushes Reticulum DMs to the Reticulum pages.
+let MSG_WS = null;         // active WebSocket, or null when no page holds it
 let MSG_WS_POLL = false;   // true once WS failed and we fell back to polling
 
-// Merge a message into MSG_CACHE by id (updates transports/mine if it exists).
-function msgUpsert(m) {
-  if (!m || !m.id) return;
-  const i = MSG_CACHE.findIndex((x) => x.id === m.id);
-  if (i >= 0) MSG_CACHE[i] = m;
-  else MSG_CACHE.push(m);
-  // Keep oldest→newest by ts: WS pushes, poll merges and late LoRa copies can
-  // arrive out of order. Stable tiebreak on id so equal-ts entries don't jitter.
-  MSG_CACHE.sort((a, b) => (a.ts - b.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
-
-// Reticulum/LXMF direct-message state. Separate from the broadcast chat above:
+// Reticulum/LXMF direct-message state.
 // DMs are per-peer, keyed by the peer's lxmf.delivery hash.
 let RNS_DRAFT = "";
 let RNS_ADD_HASH = "";     // draft: lxmf.delivery address to add a contact by
@@ -511,7 +498,10 @@ function meshFillFrom(cfg) {
 
 
 // ── PAGES ──────────────────────────────────────────────────────
-// Each page: { title, dynamic?, async build(params) -> { items:[...] } }.
+// Each page: { title, help, dynamic?, async build(params) -> { items:[...] } }.
+// `help` names the operator-manual page (docs/manual/<page>.md) whose
+// `## Quick help` section the shell's ? control shows; "<page>#<heading>"
+// shows that `## <heading>` section instead.
 // Item types the shell understands:
 //   nav      selectable  -> onEnter navigates
 //   button   selectable  -> onEnter runs an action
@@ -523,17 +513,16 @@ const PAGES = {
   // Dashboard: a menu; live data lives in the persistent header.
   home: {
     title: "Main Menu",
+    help: "README",
     dynamic: 5000,
     async build() {
       const [{ ok: sok, d: st }, { ok, d: tak }, mcNew, rnsNew] = await Promise.all([
         jget("/api/v1/status"), jget("/api/v1/tak/status"), mcHasUnread(), rnsHasUnread()]);
       const items = [
         { type: "nav", label: "MESH CONNECTIONS", to: "monitor" },
-        { type: "nav", label: "MESSAGING", to: "messaging" },
         { type: "nav", label: "VOICE (PTT)", to: "voice" },
         { type: "nav", label: `${mcNew ? "● " : ""}MESHTASTIC`, to: "meshtastic" },
-        { type: "nav", label: "INTERFACES AND SERVICES", to: "system" },
-        { type: "nav", label: "RADIOS (RF ON/OFF)", to: "radios" },
+        { type: "nav", label: "RADIOS AND INTERFACES", to: "radios" },
         { type: "nav", label: `${rnsNew ? "● " : ""}RETICULUM`, to: "reticulum" },
         { type: "nav", label: "TAILSCALE (VPN)", to: "tailscale" },
         { type: "nav", label: "RADIO CONFIGURATION", to: "config" },
@@ -554,10 +543,11 @@ const PAGES = {
     },
   },
 
-  // Who's connected: direct peers per radio + whole-mesh routes. Diagnostic detail
-  // (interfaces, services) lives on the SYSTEM page.
+  // Who's connected: direct peers per radio + whole-mesh routes. Interface
+  // addresses live on the RADIOS AND INTERFACES page.
   monitor: {
     title: "Monitor",
+    help: "monitor",
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
@@ -572,7 +562,7 @@ const PAGES = {
       if (alerts.length) {
         items.push({ type: "content", html: `<div class="content">` +
           alerts.map((a) => `<div class="rf-alert">${a}</div>`).join("") + `</div>` });
-        items.push({ type: "nav", label: "» OPEN RADIOS (RF ON/OFF)", to: "radios" });
+        items.push({ type: "nav", label: "» OPEN RADIOS AND INTERFACES", to: "radios" });
       }
       let h = "";
 
@@ -658,6 +648,7 @@ const PAGES = {
   // a test button is pressed (see nucleusd/linktest.py).
   linktest: {
     title: "Link Test",
+    help: "monitor#Link test",
     dynamic: 5000,
     async build() {
       const [{ d: st }, mc, rc] = await Promise.all([
@@ -709,44 +700,12 @@ const PAGES = {
     },
   },
 
-  // Diagnostic detail: interface addresses + systemd service states.
-  system: {
-    title: "System",
-    dynamic: 5000,
-    async build() {
-      const { d: st } = await jget("/api/v1/status");
-      let h = "";
-
-      h += `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div><table>` +
-        `<tr><th>Iface</th><th>State</th><th>Addr</th></tr>`;
-      Object.entries(st.interfaces || {}).forEach(([name, i]) => {
-        const os = i.oper_state || i.state;
-        const cls = os === "UP" ? "ok" : (i.state === "absent" ? "off" : "warn");
-        h += `<tr><td>${esc(name)}</td><td class="${cls}">${esc(os)}</td>` +
-          `<td>${esc((i.addrs || []).join(", ") || "—")}</td></tr>`;
-      });
-      h += `</table></div>`;
-
-      h += `<div class="content"><div class="page-title" style="padding-left:0">Services</div><table>`;
-      Object.entries(st.services || {}).forEach(([u, s]) => {
-        h += `<tr><td>${esc(u)}</td><td class="${s === "active" ? "ok" : "off"}">${esc(s)}</td></tr>`;
-      });
-      // TAK Server is optional; show a row only when it's installed.
-      const { d: tak } = await jget("/api/v1/tak/status");
-      if (tak && tak.installed) {
-        h += `<tr><td>${esc(tak.unit || "takserver")}</td><td class="${tak.service === "active" ? "ok" : "off"}">${esc(tak.service)}</td></tr>`;
-      }
-      h += `</table></div>`;
-
-      return { items: [{ type: "content", html: h }] };
-    },
-  },
-
   // TAK Server (optional): official (nucleus-tak-setup.sh) OR OpenTAKServer
   // (installer + nucleus-ots-fixup.sh). Cert downloads + web-UI pointer; the
   // menu entry is hidden when neither is installed.
   tak: {
     title: "TAK Server",
+    help: "takserver",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/tak/status");
@@ -829,9 +788,11 @@ const PAGES = {
   //   * Access point is a LIVE toggle (resets ON at boot) -> POST /api/v1/rf/ap
   //     directly, like the Tailscale page drives the CLI outside the pipeline.
   // Live state comes from /api/v1/status (.radios). Selecting a row (Enter/tap),
-  // or tapping its switch, toggles that radio.
+  // or tapping its switch, toggles that radio. Below the switches: the
+  // interface table (state + addresses) from the same status call.
   radios: {
-    title: "Radios",
+    title: "Radios and Interfaces",
+    help: "radios",
     dynamic: 5000,
     async build() {
       const { ok, d: st } = await jget("/api/v1/status");
@@ -851,6 +812,15 @@ const PAGES = {
       const mt = r.meshtastic || {};
       const ap = r.ap || {};
       const meshOn = mesh.on !== false;
+      let h = `<div class="content"><div class="page-title" style="padding-left:0">Interfaces</div><table>` +
+        `<tr><th>Iface</th><th>State</th><th>Addr</th></tr>`;
+      Object.entries(st.interfaces || {}).forEach(([name, i]) => {
+        const os = i.oper_state || i.state;
+        const cls = os === "UP" ? "ok" : (i.state === "absent" ? "off" : "warn");
+        h += `<tr><td>${esc(name)}</td><td class="${cls}">${esc(os)}</td>` +
+          `<td>${esc((i.addrs || []).join(", ") || "—")}</td></tr>`;
+      });
+      h += `</table></div>`;
       return { items: [
         { type: "button", label: "Wi-Fi mesh",
           onEnter: (S) => rfSetMesh(S, !meshOn),
@@ -861,6 +831,7 @@ const PAGES = {
         { type: "button", label: "Access point",
           onEnter: (S) => rfSetAp(S, !ap.on),
           action: sw(ap.on, (S) => rfSetAp(S, !ap.on)) },
+        { type: "content", html: h },
       ] };
     },
   },
@@ -873,6 +844,7 @@ const PAGES = {
   // _derived.halow_channels (the schema), never a list hardcoded here.
   halow: {
     title: "HaLow",
+    help: "halow",
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
@@ -989,6 +961,7 @@ const PAGES = {
   // tailnets. Outside the config pipeline — drives the tailscale CLI directly.
   tailscale: {
     title: "Tailscale",
+    help: "tailscale",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/tailscale/status");
@@ -1070,6 +1043,7 @@ const PAGES = {
   // are on the Node page.
   reticulum: {
     title: "Reticulum",
+    help: "reticulum",
     dynamic: 5000,
     onEnter: (S) => msgWsOpen(S),
     onLeave: () => msgWsClose(),
@@ -1149,6 +1123,7 @@ const PAGES = {
   // control socket via /api/v1/reticulum.
   rns_node: {
     title: "Reticulum Node",
+    help: "reticulum",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
@@ -1198,6 +1173,7 @@ const PAGES = {
   // config and restarts only rnsd.
   rns_rnode: {
     title: "RNode LoRa",
+    help: "reticulum",
     async build() {
       if (!RN_SCHEMA) {
         const { ok, d } = await jget("/api/v1/config/schema");
@@ -1262,6 +1238,7 @@ const PAGES = {
   // /api/v1/modem73 (WS, poll fallback).
   rns_modem73: {
     title: "modem73",
+    help: "modem73",
     dynamic: 3000,
     onEnter: (S) => m73WsOpen(S),
     onLeave: () => { m73WsClose(); M73_EDIT = null; },
@@ -1321,6 +1298,7 @@ const PAGES = {
   // of several collapsible sections stacked on one screen.
   meshtastic: {
     title: "Meshtastic Radio",
+    help: "meshtastic",
     dynamic: 5000,
     async build() {
       const [{ d: s }, mcNew] = await Promise.all([jget(MB + "/status"), mcHasUnread()]);
@@ -1348,6 +1326,7 @@ const PAGES = {
   // Chat list: every channel, then DMs (newest first), with unread counts.
   mc_chats: {
     title: "Chats",
+    help: "meshtastic",
     dynamic: 5000,
     async build() {
       const { ok, d } = await jget(MC);
@@ -1367,6 +1346,7 @@ const PAGES = {
   // One conversation (channel or DM). Reply/react via » REPLY / REACT.
   mc_chat: {
     title: "Chat",
+    help: "meshtastic",
     stickBottom: true,
     dynamic: 3000,
     async build(params) {
@@ -1413,6 +1393,7 @@ const PAGES = {
   // Pick a message: Enter = reply to it, "react" = choose an emoji.
   mc_pick: {
     title: "Reply / React",
+    help: "meshtastic",
     async build() {
       const p = MC_CUR || {};   // the open chat (Back from React drops params)
       const msgs = (MC_LAST.chat === p.chat ? MC_LAST.messages : [])
@@ -1433,6 +1414,7 @@ const PAGES = {
 
   mc_react: {
     title: "React",
+    help: "meshtastic",
     async build(params) {
       const p = params || {};
       const items = [{ type: "content", html: `<div class="content"><div class="kv">` +
@@ -1446,6 +1428,7 @@ const PAGES = {
   // Node list: filter (name/id), sort, show all / favorites / ignored.
   mc_nodes: {
     title: "Nodes",
+    help: "meshtastic",
     dynamic: 10000,
     async build() {
       const { ok, d } = await jget(MC + "/nodes");
@@ -1494,6 +1477,7 @@ const PAGES = {
   // Node detail + actions.
   mc_node: {
     title: "Node",
+    help: "meshtastic",
     dynamic: 5000,
     async build(params) {
       MC_NODE = (params && params.id) || MC_NODE;
@@ -1545,6 +1529,7 @@ const PAGES = {
   // Distance + bearing to every node with a position (nearest first).
   mc_positions: {
     title: "Positions",
+    help: "meshtastic",
     dynamic: 10000,
     async build() {
       const { ok, d } = await jget(MC + "/nodes");
@@ -1571,6 +1556,7 @@ const PAGES = {
   // apply. Loads the cached radio config (M) on entry if not already loaded.
   mt_radio: {
     title: "Radio Configuration",
+    help: "meshtastic",
     async build() {
       if (!M) {
         const { d } = await jget(MB + "/config");
@@ -1616,6 +1602,7 @@ const PAGES = {
   // (share / apply / join) has its own uncluttered screen.
   mt_channel: {
     title: "Set Channel",
+    help: "meshtastic",
     async build() {
       return {
         items: [
@@ -1631,6 +1618,7 @@ const PAGES = {
   // sits in a .content box so it is selectable (the page body disables select).
   mt_ch_share: {
     title: "Share Channel",
+    help: "meshtastic",
     async build() {
       if (!M) {
         const { d } = await jget(MB + "/config");
@@ -1653,6 +1641,7 @@ const PAGES = {
   // Apply: paste a channel URL and write it to this radio.
   mt_ch_apply: {
     title: "Apply Channel URL",
+    help: "meshtastic",
     async build() {
       return {
         items: [
@@ -1668,6 +1657,7 @@ const PAGES = {
   // Join: copy a Nucleus peer's channel over the wifi mesh.
   mt_ch_join: {
     title: "Join Peer Channel",
+    help: "meshtastic",
     async build() {
       return {
         items: [
@@ -1686,6 +1676,7 @@ const PAGES = {
   // /api/v1/config. cot-bridge reads it live, so no radio reboot.
   mt_heartbeat: {
     title: "Presence Heartbeat",
+    help: "meshtastic",
     async build() {
       if (!HB) {
         const { d: cfg } = await jget("/api/v1/config");
@@ -1711,6 +1702,7 @@ const PAGES = {
   // CoT TX rate limit (node config, not radio) — cot-bridge reads it live.
   mt_txrate: {
     title: "CoT TX Rate Limit",
+    help: "meshtastic#TX rate limit",
     async build() {
       if (TXR === null) {
         const { d: cfg } = await jget("/api/v1/config");
@@ -1734,6 +1726,7 @@ const PAGES = {
   // each section shows the DERIVED values the schema computes from them.
   config: {
     title: "Config",
+    help: "config",
     async build() {
       // First open (or after Reload) loads a working copy; edits mutate CFG and
       // are saved as one read-modify-write PUT, matching saveHeartbeat's model.
@@ -1857,6 +1850,7 @@ const PAGES = {
   // only changes after the update pulls, reinstalls the venv and restarts.
   update: {
     title: "Update",
+    help: "update",
     async build() {
       const { d: v } = await jget("/api/v1/update/check");
       const installed = v.installed || "?";
@@ -1917,6 +1911,7 @@ const PAGES = {
   // config pipeline or the API, so it refreshes instantly and per-client.
   node: {
     title: "Node Settings",
+    help: "power",
     async build() {
       return {
         items: [
@@ -1942,63 +1937,13 @@ const PAGES = {
     },
   },
 
-  // Messaging: one conversation, delivered over WiFi + LoRa into a single store.
-  // A message from a plain Meshtastic radio appears here like any other; the
-  // per-message badge shows which transport(s) delivered it.
-  messaging: {
-    title: "Messaging",
-    // Keep the viewport pinned to the newest message as the log grows, unless
-    // the operator has scrolled up to read history (see render() in cli.js).
-    stickBottom: true,
-    // A live WebSocket pushes new messages (see onEnter). `dynamic` stays as a
-    // fallback poll: build() only fetches when the WS isn't delivering.
-    dynamic: 3000,
-    onEnter: (S) => msgWsOpen(S),
-    onLeave: () => msgWsClose(),
-    async build() {
-      // When the WS is live, render straight from the pushed cache (no fetch).
-      // Otherwise fall back to a one-shot history fetch into the same cache.
-      let ok = true;
-      if (!MSG_WS || MSG_WS_POLL) {
-        const r = await jget("/api/v1/messaging/messages");
-        ok = r.ok;
-        if (ok) (r.d.messages || []).forEach(msgUpsert);
-      }
-      let h = `<div class="hint">Sends over WiFi + LoRa; the Via badge shows which transport delivered each message.</div>`;
-      h += `<div class="content">`;
-      if (!ok) {
-        h += `<div class="warn">messaging service unavailable</div>`;
-      } else if (!MSG_CACHE.length) {
-        h += `<div class="off">no messages yet</div>`;
-      } else {
-        h += `<table><tr><th>When</th><th>From</th><th>Message</th><th>Via</th></tr>`;
-        MSG_CACHE.slice(-100).forEach((m) => {
-          const via = (m.transports || []).join("+") || "—";
-          const who = m.mine ? "me" : esc(m.sender);
-          h += `<tr><td>${ago(m.ts)}</td><td class="${m.mine ? "ok" : ""}">${who}</td>` +
-            `<td>${esc(m.text)}</td><td>${esc(via)}</td></tr>`;
-        });
-        h += `</table>`;
-      }
-      h += `</div>`;
-      return {
-        items: [
-          { type: "content", html: h },
-          { type: "compose", key: "msg_text", value: MSG_DRAFT, max: 200,
-            placeholder: "Type a message",
-            sendLabel: "Send", onChange: (v) => MSG_DRAFT = v,
-            onSubmit: (S, text) => sendMessage(S, text) },
-        ],
-      };
-    },
-  },
-
   // Network (NomadNet-style): lxmf.delivery announces this node has heard
   // on-air (in-memory, cleared on daemon restart). Kept off the landing page so
   // a busy/internet-connected network can't flood the contact list. Each row
   // can be added to contacts or ignored; neither transmits anything.
   rns_heard: {
     title: "Network",
+    help: "reticulum",
     dynamic: 5000,
     async build() {
       const items = [];
@@ -2027,6 +1972,7 @@ const PAGES = {
   // on the WiFi mesh. My own address is on the Reticulum landing page.
   rns_add: {
     title: "Add Contact",
+    help: "reticulum",
     async build() {
       const st = await jget("/api/v1/messaging/rns/status");
       const items = [];
@@ -2073,6 +2019,7 @@ const PAGES = {
   // conversation marks it read.
   rns_chat: {
     title: "DM",
+    help: "reticulum",
     stickBottom: true,
     dynamic: 3000,
     onEnter: (S) => msgWsOpen(S),
@@ -2127,6 +2074,7 @@ const PAGES = {
   // and remove transmit nothing; req path emits one path request.
   rns_contact: {
     title: "Contact",
+    help: "reticulum",
     dynamic: 5000,
     async build(params) {
       const peer = (params || {}).hash;
@@ -2171,6 +2119,7 @@ const PAGES = {
   // see mesh audio state and switch channel from the TUI.
   voice: {
     title: "Voice",
+    help: "voice",
     dynamic: 5000,
     async build() {
       const { ok, d } = await jget("/api/v1/voice/status");
@@ -2384,17 +2333,6 @@ async function saveRnode(S) {
   else S.msg("validation failed: " + JSON.stringify(d.detail), false);
 }
 
-async function sendMessage(S, text) {
-  text = (text != null ? text : MSG_DRAFT || "").trim();
-  if (!text) return S.msg("type a message first", false);
-  const { ok, d } = await jsend("POST", "/api/v1/messaging/messages", { text });
-  if (!ok) return S.msg("send failed: " + (d.detail || "error"), false);
-  MSG_DRAFT = "";
-  S.msg("sent");
-  // The WS push will echo our own message back; still reload for immediate view.
-  return S.reload();
-}
-
 // ── Meshtastic client actions (relayed to cot-bridge) ──────────
 async function mcSend(S, chat, text) {
   const reply_id = MC_REPLY && MC_REPLY.chat === chat ? MC_REPLY.pkt_id : null;
@@ -2592,8 +2530,8 @@ async function rnsHeardDelete(S, peer, who) {
 }
 
 // ── Messaging live push (WebSocket) ────────────────────────────
-// Opens a WS to the daemon-backed /api/v1/messaging/ws endpoint. New messages
-// arrive as {event:"message",message:{...}}; the initial frame is the history.
+// Opens a WS to the daemon-backed /api/v1/messaging/ws endpoint. Reticulum DMs
+// arrive as {event:"rns_message",message:{...}}.
 // Falls back to the page's 3s poll if the socket can't be established.
 function msgWsOpen(S) {
   msgWsClose();
@@ -2610,14 +2548,10 @@ function msgWsOpen(S) {
   ws.onmessage = (ev) => {
     let obj;
     try { obj = JSON.parse(ev.data); } catch (e) { return; }
-    if (obj.event === "history") {
-      MSG_CACHE = [];
-      (obj.messages || []).forEach(msgUpsert);
-    } else if (obj.event === "message") {
-      msgUpsert(obj.message);
-    } else if (obj.event === "rns_message") {
-      rnsUpsert(obj.message);
-    } else return;
+    // Only Reticulum DMs are rendered; broadcast history/message frames are
+    // ignored (the broadcast Messaging page was removed).
+    if (obj.event === "rns_message") rnsUpsert(obj.message);
+    else return;
     if (S) S.reload();
   };
   ws.onclose = () => {

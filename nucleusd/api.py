@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from . import __version__
 from . import config as cfgio
+from . import manual as manualmod
 from . import status as statusmod
 from . import power as powermod
 from . import update as updatemod
@@ -113,6 +114,19 @@ except Exception:
 def get_version() -> dict:
     """Report the running Nucleus OS version (from the VERSION file)."""
     return {"version": __version__}
+
+
+@app.get("/api/v1/manual/{page}")
+def get_manual_help(page: str, section: str | None = None) -> dict:
+    """Quick help section (or `?section=<## heading>`) of one operator-manual
+    page, for the web UI `?` panel.
+
+    Read from the manual copy install.sh places in manual.MANUAL_DIR.
+    """
+    help_ = manualmod.quick_help(page, section)
+    if help_ is None:
+        raise HTTPException(status_code=404, detail="no help for this page")
+    return help_
 
 
 # Sent in place of the real web password on read; echoed back unchanged means

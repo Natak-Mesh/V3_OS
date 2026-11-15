@@ -4,6 +4,14 @@ Mesh push-to-talk voice. The TUI **Voice** page shows daemon state and switches
 channel; the full soft-PTT handset is a standalone page at `/voice`. For the
 audio/transport internals see [voice.md](voice-internals.md).
 
+## Quick help
+
+Push-to-talk voice over the mesh.
+
+- Shows PTT state, current channel, who is talking, and headset.
+- **Set channel** + **Switch channel** — everyone on the same channel hears each other.
+- **Open soft-PTT handset** — talk from this phone/laptop: hold **TALK** (or Spacebar). Opens over HTTPS; accept the certificate warning.
+
 ## TUI Voice page
 
 Status (auto-refreshed every 5s). `voice daemon unavailable` means the voice

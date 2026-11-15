@@ -67,7 +67,7 @@ With the firewall enabled, the following rules are applied, in this order:
 
 The raw app port (8080) is never opened on eth0 — only the nginx proxy (80/443)
 is exposed there, and only when `eth0_access` is on. See [Config](config.md) for
-the web access toggle and [System](system.md) for eth0 WAN/LAN mode.
+the web access toggle and eth0 WAN/LAN mode.
 
 ## Turning the firewall off
 
