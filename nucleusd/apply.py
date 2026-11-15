@@ -44,6 +44,10 @@ DNSMASQ_CONF = Path("/etc/nucleus/dnsmasq-nucleus.conf")
 DNS_UNIT = "nucleus-dns"
 MDNS_ALIAS_ENV = Path("/etc/nucleus/mdns-alias.env")
 MDNS_ALIAS_UNIT = "nucleus-mdns-alias"
+# The node's own DNS: global systemd-resolved server, so a mesh-only node (no
+# eth0 DHCP DNS; wlan1 DORMANT so per-link DNS is ignored) can still resolve.
+RESOLVED_CONF = Path("/etc/systemd/resolved.conf.d/90-nucleus.conf")
+RESOLVED_UNIT = "systemd-resolved"
 CERT_DIR = Path("/etc/nucleus/certs")
 CERT_CRT = CERT_DIR / "nucleus-web.crt"
 CERT_KEY = CERT_DIR / "nucleus-web.key"
@@ -142,6 +146,9 @@ TARGETS: list[Target] = [
     # Local names — enable/restart handled in apply() via _reconcile_local_names.
     Target("dnsmasq-nucleus.conf.j2", DNSMASQ_CONF, ()),
     Target("nucleus-mdns-alias.env.j2", MDNS_ALIAS_ENV, ()),
+    # Node DNS — systemd-resolved restarted directly in apply() on change (it is
+    # not in NET_GROUP_ORDER; a DNS change must not bounce the mesh).
+    Target("resolved-nucleus.conf.j2", RESOLVED_CONF, (RESOLVED_UNIT,)),
 ]
 
 
@@ -662,6 +669,12 @@ def apply(cfg: NucleusConfig, dry_run: bool = False) -> ApplyResult:
     if FIREWALL_UNIT in units_to_restart:
         _restart([FIREWALL_UNIT])
         result.units_restarted.append(FIREWALL_UNIT)
+
+    # Node DNS: restart systemd-resolved when its drop-in changed (outside the
+    # network group, so a DNS change never bounces the mesh).
+    if RESOLVED_UNIT in units_to_restart:
+        _restart([RESOLVED_UNIT])
+        result.units_restarted.append(RESOLVED_UNIT)
 
     # Local names: br-lan DNS (nucleus-dns) + mDNS short name. After the group
     # bounce so br-lan exists when dnsmasq binds to it.

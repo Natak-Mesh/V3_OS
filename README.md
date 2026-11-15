@@ -35,6 +35,7 @@ Everything flows one direction, from one file:
    nucleus-firewall.sh, babeld.conf, smcroute.conf, hostapd.conf, meshtasticd config.yaml,
    ~natak/.reticulum/config, nucleus-modem73-up.sh (modem73 soundmodem),
    60-nucleus-usb.rules (udev), nginx vhost + htpasswd,
+   resolved.conf.d/90-nucleus.conf (node DNS),
    wpa_supplicant-halow.conf, nucleus-halow-up.sh, nucleus-morse.conf (HaLow)
         |
         v   (restart / enable / reload only what changed)
@@ -148,7 +149,9 @@ Bring-up is split between **declarative** (systemd-networkd) and **imperative**
 nginx fronts the UI on :80/:443 (self-signed cert, `<serial>.local` and
 `<hostname>.local` via avahi + `nucleus-mdns-alias`). br-lan DHCP hands out the
 node as DNS (`nucleus-dns`, dnsmasq DNS-only), which answers both names with no
-internet and forwards the rest to `br_lan.dns`;
+internet and forwards the rest to `br_lan.dns`. The node itself also resolves
+via `br_lan.dns` (global systemd-resolved `DNS=` drop-in), so mesh-only nodes
+with eth0 down still have DNS — per-link DNS on DORMANT wlan1 is ignored;
 requests over eth0 need HTTP Basic auth, trusted nets (mesh, br-lan, Tailscale,
 localhost) don't.
 
