@@ -555,10 +555,12 @@ class RnsMessagingConfig(BaseModel):
     publishes a contact card (its lxmf.delivery address + identity public key)
     that peers import out-of-band — over the WiFi mesh, by pasting a link, or by
     scanning a QR — see ``messaging/rns_proto.py`` and ``rns_contacts.py``. The
-    only thing announced is the standard ``lxmf.delivery`` destination, and that
-    is MANUAL by default (``announce_mode: manual``): nothing is broadcast until
-    an operator presses "Announce" (or sends a message). Set ``announce_mode:
-    auto`` to also re-announce on ``announce_interval_secs``.
+    only thing announced is the standard ``lxmf.delivery`` destination. It is
+    AUTO by default (``announce_mode: auto``): re-announced every
+    ``announce_interval_secs`` on the mesh/eth0/HaLow/LAN interfaces. The RNode
+    and modem73 radios are access_point in rnsd, so they never carry these —
+    only an operator "announce over" does. ``announce_mode: manual`` disables
+    the timer (operator "Announce" only).
 
     The identity is created once at runtime under /var/lib/nucleus/rns/ and is a
     NODE identity (phones never hold it).
@@ -569,7 +571,7 @@ class RnsMessagingConfig(BaseModel):
         description="Enable the Reticulum/LXMF direct-message lane in nucleus-messaging.",
     )
     announce_mode: Literal["manual", "auto"] = Field(
-        "manual",
+        "auto",
         description="manual = never announce lxmf.delivery automatically (operator triggers it); auto = re-announce every announce_interval_secs.",
     )
     announce_interval_secs: int = Field(

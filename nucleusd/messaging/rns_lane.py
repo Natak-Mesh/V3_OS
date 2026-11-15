@@ -126,7 +126,7 @@ class RnsLane:
 
     def __init__(self, display_name: str,
                  node_id: Optional[int] = None,
-                 announce_mode: str = "manual",
+                 announce_mode: str = "auto",
                  announce_interval_secs: int = 1800,
                  propagation_node: bool = False,
                  contacts=None,
@@ -232,8 +232,9 @@ class RnsLane:
         self._preload_contacts()
 
         self._started = True
-        # Only run the announce timer in auto mode. In manual mode (the default)
-        # nothing is ever broadcast until announce() is called explicitly.
+        # Announce timer in auto mode (the default). In manual mode nothing is
+        # broadcast until announce() is called explicitly. Either way rnsd keeps
+        # these off the access_point radios (RNode/modem73).
         if self.announce_mode == "auto":
             self._announce_thread = threading.Thread(target=self._announce_loop, daemon=True)
             self._announce_thread.start()

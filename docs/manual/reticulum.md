@@ -217,12 +217,12 @@ the next announce, so press **ANNOUNCE** afterwards. If you edit `config.yaml`
 by hand, run `sudo systemctl restart nucleus-messaging` to pick it up
 (`nucleusctl apply` does not restart the messaging daemon).
 
-Announcing is **manual by default** (`messaging.rns.announce_mode: manual`):
-nothing is broadcast until you press **ANNOUNCE** on the Reticulum page
-(a send also announces once so the recipient can find a path back). Set
-`announce_mode: auto` to re-announce the `lxmf.delivery` destination every
-`announce_interval_secs`. In both modes announces never go out on the RNode or
-modem73 radios — only via **ANNOUNCE OVER …**.
+Announcing is **automatic by default** (`messaging.rns.announce_mode: auto`):
+the `lxmf.delivery` destination is re-announced every `announce_interval_secs`
+(default 1800 s = 30 min, range 60–86400) over the mesh, eth0, HaLow and LAN.
+Set `announce_mode: manual` to announce only when you press **ANNOUNCE**. In
+both modes announces never go out on the RNode or modem73 radios — only via
+**ANNOUNCE OVER …**.
 See [messaging-internals.md](messaging-internals.md).
 Off by default; the RNS/LXMF libraries load only when enabled.
 

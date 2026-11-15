@@ -107,7 +107,7 @@ def load_config() -> dict:
         "sender": socket.gethostname().split(".")[0],
         "mesh_ttl": 8,
         "rns_enabled": False,
-        "rns_announce_mode": "manual",
+        "rns_announce_mode": "auto",
         "rns_announce_interval_secs": 1800,
         "rns_propagation_node": False,
         "mesh_ifaces": list(MESH_IFACES),
@@ -522,7 +522,7 @@ class MessagingService:
             "started": bool(lane and lane.started),
             "address": lane.delivery_hash_hex if lane else None,
             "name": self.sender,
-            "announce_mode": self.cfg.get("rns_announce_mode", "manual"),
+            "announce_mode": self.cfg.get("rns_announce_mode", "auto"),
         }
 
     def _rns_contacts_list(self) -> dict:
@@ -764,7 +764,7 @@ class MessagingService:
         self._rns_lane = RnsLane(
             display_name=self.sender,
             node_id=self.cfg.get("node_id"),
-            announce_mode=self.cfg.get("rns_announce_mode", "manual"),
+            announce_mode=self.cfg.get("rns_announce_mode", "auto"),
             announce_interval_secs=self.cfg.get("rns_announce_interval_secs", 1800),
             propagation_node=self.cfg.get("rns_propagation_node", False),
             contacts=self._rns_contacts,

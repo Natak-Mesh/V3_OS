@@ -219,10 +219,11 @@ def _cfg(**rns):
     return NucleusConfig.model_validate(raw)
 
 
-def test_schema_rns_defaults_manual_announce():
+def test_schema_rns_defaults_auto_announce():
     cfg = _cfg()
     assert cfg.messaging.rns.enabled is True
-    assert cfg.messaging.rns.announce_mode == "manual"
+    assert cfg.messaging.rns.announce_mode == "auto"
+    assert cfg.messaging.rns.announce_interval_secs == 1800
     assert cfg.messaging.rns.propagation_node is False
 
 

@@ -1074,7 +1074,7 @@ const PAGES = {
       items.push({ type: "content", html: `<div class="content">` +
         `<div class="hint" style="padding-left:0;word-break:break-all">` +
         (m.address ? `address <b>${esc(m.address)}</b>` : `address not ready — lane starting`) +
-        ` · announce ${esc(m.announce_mode || "manual")}</div></div>` });
+        ` · announce ${esc(m.announce_mode || "auto")}</div></div>` });
       // Radios in access_point mode never carry automatic announces; these are
       // the only way ours goes out on them. Shown only when configured in rnsd.
       const cfgIfaces = rnsdUp ? (rs.d.interfaces || []).map((i) => i.short_name) : [];

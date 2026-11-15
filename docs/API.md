@@ -445,7 +445,7 @@ learned later (mesh pull, operator **req path**, or a signed inbound message) an
 persisted.
 
 - `GET /rns/status` — `{"enabled":bool,"started":bool,"address":"<lxmf hash>",
-  "name":"<node name>","announce_mode":"manual"}`. `address` is this node's lxmf.delivery destination
+  "name":"<node name>","announce_mode":"auto"}`. `address` is this node's lxmf.delivery destination
   hash — the thing to share.
 - `GET /rns/contacts` — known contacts:
   `{"ok":true,"contacts":[{"lxmf_hash":"...","pubkey":"...","name":"","
