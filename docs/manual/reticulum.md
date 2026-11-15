@@ -21,8 +21,8 @@ Encrypted direct messages over Reticulum (works with Sideband, MeshChat, NomadNe
 |-----------|------|------|---------|
 | Mesh AutoInterface | AutoInterface on `wlan1`, `eth0` (+ `halow0` if present) | full | Auto-peers with other nodes over the 802.11s mesh and over a direct wired/fiber `eth0` link (IPv6 link-local + multicast). In eth0 `lan` mode the network config enables a router-less IPv6 link-local (`LinkLocalAddressing=ipv6`, `IPv6AcceptRA=no`) so the multicast route installs with no router present; its UDP ports (29716/29717/42671) are opened by the host firewall. |
 | LAN TCP Server | TCPServerInterface on `br-lan:4242` | internal | Attach point for client apps (Sideband, MeshChat, nomadnet) on the node's AP/LAN. |
-| RNode LoRa | RNodeInterface on `/dev/nucleus/rnode` | full (default) | USB LoRa RNode radio, on by default (harmless with no radio plugged in). Only the RAK4631 is supported. |
-| MODEM73 Soundmodem | TCPClientInterface, `kiss_framing = True`, `127.0.0.1:8001` | full (default) | modem73 OFDM soundmodem driving an analog VHF/UHF radio through a DigiRig (USB audio + serial PTT). On by default (harmless if modem73 isn't running; rnsd retries). See [modem73](modem73.md). |
+| RNode LoRa | RNodeInterface on `/dev/nucleus/rnode` | access_point | USB LoRa RNode radio, on by default (harmless with no radio plugged in). Only the RAK4631 is supported. |
+| MODEM73 Soundmodem | TCPClientInterface, `kiss_framing = True`, `127.0.0.1:8001` | access_point | modem73 OFDM soundmodem driving an analog VHF/UHF radio through a DigiRig (USB audio + serial PTT). On by default (harmless if modem73 isn't running; rnsd retries). See [modem73](modem73.md). |
 
 There is no public-IP uplink: the Entry Node interface is disabled in the
 template (`reticulum-config.j2`), so nodes peer only over the mesh, eth0 and
@@ -36,8 +36,16 @@ the radios.
   shared-instance links.
 - **LAN TCP Server — `internal`.** Client apps attach here. They can still
   resolve paths on demand via path requests.
-- **RNode LoRa / MODEM73 Soundmodem — `full`** (RNS default, no `mode` set).
-  Radio links to other nodes, so announces propagate across them.
+- **RNode LoRa / MODEM73 Soundmodem — `access_point`.** rnsd never broadcasts
+  announces on these slow radios — not ours (button or `auto` mode) and not
+  ones relayed from the mesh. Path requests and path responses still work over
+  them. To announce over one, use **ANNOUNCE OVER RNODE** / **ANNOUNCE OVER
+  MODEM73** on the Reticulum page.
+- **Nucleus Control** — not a link. An rnsd plugin
+  (`~/.reticulum/interfaces/NucleusCtlInterface.py`, installed by `install.sh`)
+  that never transmits by itself; on request it re-sends this node's stored
+  announce on one named radio. That is how the manual radio announce gets past
+  `access_point` mode.
 
 Modes ship in the rendered template, so they are consistent on every node.
 
@@ -115,7 +123,10 @@ contacts, NomadNet-style:
 - **me: <name> · rename** — this node's name, its lxmf.delivery address (the
   thing to share) and the announce mode. Tap the row to rename the node (see
   [Node name](#node-name)); the inline **ANNOUNCE** button emits one
-  `lxmf.delivery` announce.
+  `lxmf.delivery` announce over the mesh/eth0/HaLow/LAN (never the radios).
+- **ANNOUNCE OVER RNODE / MODEM73** — shown when that radio is configured. Does
+  a normal announce, then sends it on that radio only. Fails with
+  `interface ... is down` if the radio isn't attached.
 - **Contacts** — saved contacts only, most recent conversation first. Each row
   shows `●` for an unread incoming message, the path state, and a preview of
   the last message, plus an inline **REQ PATH** button. Tap a row to open the
@@ -210,7 +221,9 @@ Announcing is **manual by default** (`messaging.rns.announce_mode: manual`):
 nothing is broadcast until you press **ANNOUNCE** on the Reticulum page
 (a send also announces once so the recipient can find a path back). Set
 `announce_mode: auto` to re-announce the `lxmf.delivery` destination every
-`announce_interval_secs`. See [messaging-internals.md](messaging-internals.md).
+`announce_interval_secs`. In both modes announces never go out on the RNode or
+modem73 radios — only via **ANNOUNCE OVER …**.
+See [messaging-internals.md](messaging-internals.md).
 Off by default; the RNS/LXMF libraries load only when enabled.
 
 ## Troubleshooting

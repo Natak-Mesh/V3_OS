@@ -47,8 +47,12 @@
 -#}
 {% if reti_rnode_enabled %}
   [[RNode LoRa]]
+    # access_point: rnsd never broadcasts announces here (ours or relayed);
+    # path requests/responses still flow. Manual announces go out via the
+    # Nucleus Control plugin below.
     type = RNodeInterface
     enabled = Yes
+    mode = access_point
     port = {{ reti_rnode_port }}
     frequency = {{ reti_rnode_frequency }}
     bandwidth = {{ reti_rnode_bandwidth }}
@@ -63,8 +67,10 @@
     # device + serial PTT). kiss_framing is only safe here because this socket
     # only ever talks to modem73, never to our own br-lan TCPServer. fixed_mtu /
     # bitrate tell RNS this is a slow radio link so it frames/times correctly.
+    # access_point: no broadcast announces, same as the RNode (manual only).
     type = TCPClientInterface
     enabled = Yes
+    mode = access_point
     kiss_framing = True
     target_host = {{ reti_modem73_host }}
     target_port = {{ reti_modem73_port }}
@@ -72,3 +78,12 @@
     bitrate = {{ reti_modem73_bitrate }}
 
 {% endif %}
+  [[Nucleus Control]]
+    # Not a link: an rnsd plugin (~/.reticulum/interfaces/NucleusCtlInterface.py,
+    # installed by install.sh) that transmits nothing itself. On request from
+    # nucleus-messaging it re-sends our stored announce on ONE named interface,
+    # which is how manual announces reach the access_point radios above.
+    type = NucleusCtlInterface
+    enabled = Yes
+    outgoing = False
+

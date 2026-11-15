@@ -204,6 +204,20 @@ def rns_announce() -> dict:
     return res
 
 
+@router.post("/rns/announce/{iface}")
+def rns_announce_on(iface: str) -> dict:
+    """Announce once, then also over one access_point radio (rnode | modem73).
+
+    Those radios never carry automatic announces; this is the only way ours
+    goes out on them.
+    """
+    # Lane sleeps ~1 s for rnsd to store the announce before the radio send.
+    res = _rpc({"cmd": "rns_announce_on", "iface": iface}, timeout=8.0)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("error", "announce failed"))
+    return res
+
+
 @router.get("/rns/contacts/{dest}/path")
 def rns_path(dest: str) -> dict:
     """Read-only path-table state for a contact (known/hops/interface).

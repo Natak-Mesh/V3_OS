@@ -20,7 +20,9 @@ ReticulumError), so the router/tests can exercise it with a mocked `_rpc`.
 from __future__ import annotations
 
 import hashlib
+import json
 import multiprocessing.connection as mpc
+import socket
 from pathlib import Path
 
 # NOTE: RNS is imported lazily inside _rpc (not at module load) so this module
@@ -36,6 +38,9 @@ INSTANCE_NAME = "default"
 # Abstract AF_UNIX address (leading NUL) — matches Reticulum.rpc_addr on Linux.
 RPC_ADDR = f"\0rns/{INSTANCE_NAME}/rpc"
 _TIMEOUT = 5.0
+# Abstract AF_UNIX socket of the Nucleus Control rnsd plugin
+# (system/reticulum/NucleusCtlInterface.py). Must match its CTL_ADDR.
+CTL_ADDR = "\0nucleus/rns-ctl"
 
 # RNS interface mode byte -> human label (RNS.Interfaces.Interface.Interface).
 _MODES = {
@@ -207,6 +212,39 @@ def drop_path(dest_hash_hex: str) -> bool:
     except (ValueError, TypeError) as e:
         raise ReticulumError(f"bad destination hash: {e}") from e
     return bool(_rpc({"drop": "path", "destination_hash": dest_hash}))
+
+
+def announce_on(interface: str, dest_hash_hex: str, timeout: float = _TIMEOUT) -> dict:
+    """Have rnsd re-send its stored announce for one destination on ONE interface.
+
+    Talks to the Nucleus Control plugin inside rnsd (the only code that can
+    target an rnsd interface). Used for manual announces over the access_point
+    radios (RNode, modem73), which rnsd otherwise never announces on. Returns
+    the plugin's reply ``{"ok": bool, "error"?: str}``. Raises ReticulumError
+    if the plugin socket is unreachable.
+    """
+    req = json.dumps({"cmd": "announce_on", "interface": interface,
+                      "dest": dest_hash_hex}).encode("utf-8") + b"\n"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(CTL_ADDR)
+            s.sendall(req)
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+    except OSError as e:
+        raise ReticulumError(f"rnsd control plugin unreachable: {e}") from e
+    try:
+        reply = json.loads(buf.decode("utf-8"))
+    except ValueError as e:
+        raise ReticulumError(f"bad control plugin reply: {e}") from e
+    if not isinstance(reply, dict):
+        raise ReticulumError("bad control plugin reply")
+    return reply
 
 
 def status() -> dict:

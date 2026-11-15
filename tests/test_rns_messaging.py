@@ -360,6 +360,42 @@ def _started_lane(monkeypatch):
     return lane
 
 
+def test_announce_on_announces_then_targets_radio(monkeypatch):
+    from nucleusd.messaging import rns_lane
+    lane = _started_lane(monkeypatch)
+    lane._delivery_hash = bytes.fromhex(FIXTURE_LXMF)
+    order = []
+    monkeypatch.setattr(lane, "announce", lambda: order.append("announce") or True)
+    monkeypatch.setattr(rns_lane, "ANNOUNCE_ON_WAIT_SECS", 0)
+    monkeypatch.setattr(rns_lane.reti, "announce_on",
+                        lambda name, dest: order.append((name, dest)) or {"ok": True})
+    assert lane.announce_on("rnode") == {"ok": True, "interface": "rnode"}
+    assert order == ["announce", ("RNode LoRa", FIXTURE_LXMF)]
+    order.clear()
+    assert lane.announce_on("modem73")["ok"]
+    assert order[1] == ("MODEM73 Soundmodem", FIXTURE_LXMF)
+
+
+def test_announce_on_rejects_unknown_iface_and_reports_errors(monkeypatch):
+    from nucleusd.messaging import rns_lane
+    lane = _started_lane(monkeypatch)
+    lane._delivery_hash = bytes.fromhex(FIXTURE_LXMF)
+    called = []
+    monkeypatch.setattr(lane, "announce", lambda: called.append(1) or True)
+    monkeypatch.setattr(rns_lane, "ANNOUNCE_ON_WAIT_SECS", 0)
+    assert lane.announce_on("wlan1")["ok"] is False
+    assert called == []   # nothing emitted for a bad iface
+    monkeypatch.setattr(rns_lane.reti, "announce_on",
+                        lambda n, d: {"ok": False, "error": "interface 'RNode LoRa' is down"})
+    res = lane.announce_on("rnode")
+    assert res == {"ok": False, "error": "interface 'RNode LoRa' is down"}
+
+    def _boom(n, d):
+        raise rns_lane.reti.ReticulumError("rnsd control plugin unreachable")
+    monkeypatch.setattr(rns_lane.reti, "announce_on", _boom)
+    assert "unreachable" in lane.announce_on("rnode")["error"]
+
+
 def test_request_path_emits_one_request(monkeypatch):
     lane = _started_lane(monkeypatch)
     res = lane.request_path(FIXTURE_LXMF)
