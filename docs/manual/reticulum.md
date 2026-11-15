@@ -8,7 +8,9 @@ The config is rendered by `nucleusctl apply` from `/etc/nucleus/config.yaml`
 
 Encrypted direct messages over Reticulum (works with Sideband, MeshChat, NomadNet).
 
-- **me** — this node's name and address. Give the address to others; **ANNOUNCE** tells the network you exist.
+- **me** — this node's name and address. Give the address to others; **ANNOUNCE** tells the network you exist now.
+- **Announces** — automatic every 30 min over mesh, eth0, HaLow and LAN (`messaging.rns.announce_mode`, `announce_interval_secs`). Never sent over the RNode or modem73 radios on their own — not ours, not relayed ones.
+- **ANNOUNCE OVER RNODE / MODEM73** — the only way an announce goes out on that radio. Shown when the radio is configured; fails with `is down` if it isn't attached. Path requests still work over the radios.
 - **Contacts** — tap one to chat. **●** = unread. Path shows the link and hops, or `no path`.
 - **REQ PATH** — ask the network for a route to that contact (needed before the first message).
 - **ADD CONTACT** — paste an address, or one-tap add a Nucleus node on the mesh.
