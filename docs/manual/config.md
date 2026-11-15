@@ -5,6 +5,17 @@ Operators set primitives; each section header shows the **derived** values the
 schema computes from them. Editing mutates a working copy that is saved as one
 read-modify-write `PUT /api/v1/config`.
 
+## Quick help
+
+All node settings, grouped by section.
+
+- Edit fields, then **Save (not applied)** — nothing changes on the node yet.
+- **Dry-run apply** — shows what would change.
+- **Apply** — makes it live; restarts only what changed.
+- **Reload** — throw away unsaved edits.
+- Mesh SSID, channel and password must match on every node.
+- Default web login is `admin` / `52235223` — change it.
+
 ## Node
 
 Header: derived hostname and mesh IP.

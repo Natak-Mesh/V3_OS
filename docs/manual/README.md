@@ -1,6 +1,16 @@
 # Nucleus Manual
 
 Operator manual for the Nucleus web UI — one page per UI page (see Pages below).
+Each UI page's manual file starts with a `## Quick help` section: that section
+is what the web UI's **?** control shows on the page (see The shell).
+
+## Quick help
+
+- Pick a page with **▲ / ▼** (or arrow keys), open it with **ENTER**.
+- **BACK** (Esc) returns to the previous page.
+- **?** (h key) shows or hides help for the page you are on.
+- The header shows this node, its mesh IP and how many mesh nodes it sees.
+- Items with **●** have unread messages.
 
 ## Overview
 
@@ -66,6 +76,10 @@ shell served at `/`.
   - `▲` / `▼` — move the cursor between selectable items (also ↑/↓ keys).
   - `ENTER` — activate the item / enter edit mode (Enter key).
   - `BACK` — go back one page (Esc key).
+  - `?` — show/hide this page's help (h key): the `## Quick help` section of
+    the page's manual file, or a named `##` section for detail pages. Served by
+    `GET /api/v1/manual/{page}` from the copy `install.sh` puts in
+    `/opt/nucleus/manual/` — the manual is the only source of the help text.
 
 Selectable item types: navigation links, action buttons, and editable fields
 (text, number stepper, and cycle-through option pickers). Display-only blocks
@@ -81,7 +95,7 @@ Selectable item types: navigation links, action buttons, and editable fields
 | RADIOS AND INTERFACES | [Radios and Interfaces](radios.md) |
 | HALOW MESH *(only when a HaLow USB radio is plugged in)* | [HaLow Mesh](halow.md) |
 | RETICULUM | [Reticulum](reticulum.md); MODEM73 LIVE: [modem73](modem73.md) |
-| TAILSCALE (VPN) | *(no dedicated page)* — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
+| TAILSCALE (VPN) | [Tailscale](tailscale.md) — live VPN on/off + tailnet switching, outside the config pipeline (README §4). |
 | RADIO CONFIGURATION | [Config](config.md) |
 | TAK SERVER *(optional)* | [TAK Server](takserver.md) |
 | OPENTAKSERVER *(optional)* | [OpenTAKServer](opentakserver.md#web-ui-page) |

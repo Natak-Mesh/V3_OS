@@ -4,6 +4,15 @@ Optional official TAK Server (tak.gov) + MediaMTX on a node. **Off by default �
 most nodes never run this.** Not a web UI page: it is provisioned once by a
 script, then administered from TAK's own web admin console.
 
+## Quick help
+
+TAK Server or OpenTAKServer on this node (only one of them). Shown only when installed.
+
+- Status shows whether the server is running.
+- **TAK Server**: import `webadmin.p12` into your browser, then open `https://<node>:8443` to manage users.
+- **OpenTAKServer**: **OPEN OPENTAKSERVER WEB UI** (port 8444).
+- Download the certificate / truststore buttons to set up ATAK devices. Devices connect on port 8089.
+
 ## When to use
 
 Run this only on a node that should host a full TAK Server (ATAK/WinTAK data
@@ -99,8 +108,7 @@ pre-generate per-client certs. Revoke/inspect issued certs under
 The **TAK SERVER** page appears in the Nucleus web UI on nodes where TAK Server
 is installed (it shows "not installed" otherwise). It provides:
 
-- **Status** — the `takserver` service state (also shown on the System page's
-  Services table when installed).
+- **Status** — the `takserver` service state.
 - **Web admin pointer** — the TAK admin console URL (`https://<node-ip>:8443`,
   TAK's own port, not the Nucleus UI). Import `webadmin.p12` into your browser
   first, then open it to manage users and certificates.

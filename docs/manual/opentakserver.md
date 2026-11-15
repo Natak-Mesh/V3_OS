@@ -72,7 +72,7 @@ When OTS is installed (`/etc/systemd/system/opentakserver.service` exists) the
 Nucleus main menu shows **OPENTAKSERVER**. The page shows:
 
 - **Server / status** — `OpenTAKServer` and the `opentakserver` service state
-  (also on the System page's Services table).
+
 - **Web UI link** — `https://<host>:8444`, built from the address used to reach
   the Nucleus UI, plus an **OPEN OPENTAKSERVER WEB UI** button.
 - **Download truststore** — `truststore-root.p12`, staged in

@@ -498,7 +498,10 @@ function meshFillFrom(cfg) {
 
 
 // ── PAGES ──────────────────────────────────────────────────────
-// Each page: { title, dynamic?, async build(params) -> { items:[...] } }.
+// Each page: { title, help, dynamic?, async build(params) -> { items:[...] } }.
+// `help` names the operator-manual page (docs/manual/<page>.md) whose
+// `## Quick help` section the shell's ? control shows; "<page>#<heading>"
+// shows that `## <heading>` section instead.
 // Item types the shell understands:
 //   nav      selectable  -> onEnter navigates
 //   button   selectable  -> onEnter runs an action
@@ -510,6 +513,7 @@ const PAGES = {
   // Dashboard: a menu; live data lives in the persistent header.
   home: {
     title: "Main Menu",
+    help: "README",
     dynamic: 5000,
     async build() {
       const [{ ok: sok, d: st }, { ok, d: tak }, mcNew, rnsNew] = await Promise.all([
@@ -543,6 +547,7 @@ const PAGES = {
   // addresses live on the RADIOS AND INTERFACES page.
   monitor: {
     title: "Monitor",
+    help: "monitor",
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
@@ -643,6 +648,7 @@ const PAGES = {
   // a test button is pressed (see nucleusd/linktest.py).
   linktest: {
     title: "Link Test",
+    help: "monitor#Link test",
     dynamic: 5000,
     async build() {
       const [{ d: st }, mc, rc] = await Promise.all([
@@ -699,6 +705,7 @@ const PAGES = {
   // menu entry is hidden when neither is installed.
   tak: {
     title: "TAK Server",
+    help: "takserver",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/tak/status");
@@ -785,6 +792,7 @@ const PAGES = {
   // interface table (state + addresses) from the same status call.
   radios: {
     title: "Radios and Interfaces",
+    help: "radios",
     dynamic: 5000,
     async build() {
       const { ok, d: st } = await jget("/api/v1/status");
@@ -836,6 +844,7 @@ const PAGES = {
   // _derived.halow_channels (the schema), never a list hardcoded here.
   halow: {
     title: "HaLow",
+    help: "halow",
     dynamic: 5000,
     async build() {
       const { d: st } = await jget("/api/v1/status");
@@ -952,6 +961,7 @@ const PAGES = {
   // tailnets. Outside the config pipeline — drives the tailscale CLI directly.
   tailscale: {
     title: "Tailscale",
+    help: "tailscale",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/tailscale/status");
@@ -1033,6 +1043,7 @@ const PAGES = {
   // are on the Node page.
   reticulum: {
     title: "Reticulum",
+    help: "reticulum",
     dynamic: 5000,
     onEnter: (S) => msgWsOpen(S),
     onLeave: () => msgWsClose(),
@@ -1112,6 +1123,7 @@ const PAGES = {
   // control socket via /api/v1/reticulum.
   rns_node: {
     title: "Reticulum Node",
+    help: "reticulum",
     dynamic: 5000,
     async build() {
       const { ok, d: s } = await jget("/api/v1/reticulum/status");
@@ -1161,6 +1173,7 @@ const PAGES = {
   // config and restarts only rnsd.
   rns_rnode: {
     title: "RNode LoRa",
+    help: "reticulum",
     async build() {
       if (!RN_SCHEMA) {
         const { ok, d } = await jget("/api/v1/config/schema");
@@ -1225,6 +1238,7 @@ const PAGES = {
   // /api/v1/modem73 (WS, poll fallback).
   rns_modem73: {
     title: "modem73",
+    help: "modem73",
     dynamic: 3000,
     onEnter: (S) => m73WsOpen(S),
     onLeave: () => { m73WsClose(); M73_EDIT = null; },
@@ -1284,6 +1298,7 @@ const PAGES = {
   // of several collapsible sections stacked on one screen.
   meshtastic: {
     title: "Meshtastic Radio",
+    help: "meshtastic",
     dynamic: 5000,
     async build() {
       const [{ d: s }, mcNew] = await Promise.all([jget(MB + "/status"), mcHasUnread()]);
@@ -1311,6 +1326,7 @@ const PAGES = {
   // Chat list: every channel, then DMs (newest first), with unread counts.
   mc_chats: {
     title: "Chats",
+    help: "meshtastic",
     dynamic: 5000,
     async build() {
       const { ok, d } = await jget(MC);
@@ -1330,6 +1346,7 @@ const PAGES = {
   // One conversation (channel or DM). Reply/react via » REPLY / REACT.
   mc_chat: {
     title: "Chat",
+    help: "meshtastic",
     stickBottom: true,
     dynamic: 3000,
     async build(params) {
@@ -1376,6 +1393,7 @@ const PAGES = {
   // Pick a message: Enter = reply to it, "react" = choose an emoji.
   mc_pick: {
     title: "Reply / React",
+    help: "meshtastic",
     async build() {
       const p = MC_CUR || {};   // the open chat (Back from React drops params)
       const msgs = (MC_LAST.chat === p.chat ? MC_LAST.messages : [])
@@ -1396,6 +1414,7 @@ const PAGES = {
 
   mc_react: {
     title: "React",
+    help: "meshtastic",
     async build(params) {
       const p = params || {};
       const items = [{ type: "content", html: `<div class="content"><div class="kv">` +
@@ -1409,6 +1428,7 @@ const PAGES = {
   // Node list: filter (name/id), sort, show all / favorites / ignored.
   mc_nodes: {
     title: "Nodes",
+    help: "meshtastic",
     dynamic: 10000,
     async build() {
       const { ok, d } = await jget(MC + "/nodes");
@@ -1457,6 +1477,7 @@ const PAGES = {
   // Node detail + actions.
   mc_node: {
     title: "Node",
+    help: "meshtastic",
     dynamic: 5000,
     async build(params) {
       MC_NODE = (params && params.id) || MC_NODE;
@@ -1508,6 +1529,7 @@ const PAGES = {
   // Distance + bearing to every node with a position (nearest first).
   mc_positions: {
     title: "Positions",
+    help: "meshtastic",
     dynamic: 10000,
     async build() {
       const { ok, d } = await jget(MC + "/nodes");
@@ -1534,6 +1556,7 @@ const PAGES = {
   // apply. Loads the cached radio config (M) on entry if not already loaded.
   mt_radio: {
     title: "Radio Configuration",
+    help: "meshtastic",
     async build() {
       if (!M) {
         const { d } = await jget(MB + "/config");
@@ -1579,6 +1602,7 @@ const PAGES = {
   // (share / apply / join) has its own uncluttered screen.
   mt_channel: {
     title: "Set Channel",
+    help: "meshtastic",
     async build() {
       return {
         items: [
@@ -1594,6 +1618,7 @@ const PAGES = {
   // sits in a .content box so it is selectable (the page body disables select).
   mt_ch_share: {
     title: "Share Channel",
+    help: "meshtastic",
     async build() {
       if (!M) {
         const { d } = await jget(MB + "/config");
@@ -1616,6 +1641,7 @@ const PAGES = {
   // Apply: paste a channel URL and write it to this radio.
   mt_ch_apply: {
     title: "Apply Channel URL",
+    help: "meshtastic",
     async build() {
       return {
         items: [
@@ -1631,6 +1657,7 @@ const PAGES = {
   // Join: copy a Nucleus peer's channel over the wifi mesh.
   mt_ch_join: {
     title: "Join Peer Channel",
+    help: "meshtastic",
     async build() {
       return {
         items: [
@@ -1649,6 +1676,7 @@ const PAGES = {
   // /api/v1/config. cot-bridge reads it live, so no radio reboot.
   mt_heartbeat: {
     title: "Presence Heartbeat",
+    help: "meshtastic",
     async build() {
       if (!HB) {
         const { d: cfg } = await jget("/api/v1/config");
@@ -1674,6 +1702,7 @@ const PAGES = {
   // CoT TX rate limit (node config, not radio) — cot-bridge reads it live.
   mt_txrate: {
     title: "CoT TX Rate Limit",
+    help: "meshtastic",
     async build() {
       if (TXR === null) {
         const { d: cfg } = await jget("/api/v1/config");
@@ -1697,6 +1726,7 @@ const PAGES = {
   // each section shows the DERIVED values the schema computes from them.
   config: {
     title: "Config",
+    help: "config",
     async build() {
       // First open (or after Reload) loads a working copy; edits mutate CFG and
       // are saved as one read-modify-write PUT, matching saveHeartbeat's model.
@@ -1820,6 +1850,7 @@ const PAGES = {
   // only changes after the update pulls, reinstalls the venv and restarts.
   update: {
     title: "Update",
+    help: "update",
     async build() {
       const { d: v } = await jget("/api/v1/update/check");
       const installed = v.installed || "?";
@@ -1880,6 +1911,7 @@ const PAGES = {
   // config pipeline or the API, so it refreshes instantly and per-client.
   node: {
     title: "Node Settings",
+    help: "power",
     async build() {
       return {
         items: [
@@ -1911,6 +1943,7 @@ const PAGES = {
   // can be added to contacts or ignored; neither transmits anything.
   rns_heard: {
     title: "Network",
+    help: "reticulum",
     dynamic: 5000,
     async build() {
       const items = [];
@@ -1939,6 +1972,7 @@ const PAGES = {
   // on the WiFi mesh. My own address is on the Reticulum landing page.
   rns_add: {
     title: "Add Contact",
+    help: "reticulum",
     async build() {
       const st = await jget("/api/v1/messaging/rns/status");
       const items = [];
@@ -1985,6 +2019,7 @@ const PAGES = {
   // conversation marks it read.
   rns_chat: {
     title: "DM",
+    help: "reticulum",
     stickBottom: true,
     dynamic: 3000,
     onEnter: (S) => msgWsOpen(S),
@@ -2039,6 +2074,7 @@ const PAGES = {
   // and remove transmit nothing; req path emits one path request.
   rns_contact: {
     title: "Contact",
+    help: "reticulum",
     dynamic: 5000,
     async build(params) {
       const peer = (params || {}).hash;
@@ -2083,6 +2119,7 @@ const PAGES = {
   // see mesh audio state and switch channel from the TUI.
   voice: {
     title: "Voice",
+    help: "voice",
     dynamic: 5000,
     async build() {
       const { ok, d } = await jget("/api/v1/voice/status");

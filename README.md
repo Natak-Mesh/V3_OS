@@ -80,10 +80,11 @@ Everything flows one direction, from one file:
 | `modem73/` | modem73 live link tuning: one shared control-port connection (`control.py`, status/config/decoded-frame cache), frames heard incl. CRC failures from `/var/log/modem73.log` (`logtail.py`), sound-card mixer (`mixer.py`), router (`/api/v1/modem73`: test frame, live TX level/gains, save + apply of all modem73 settings for the single web page). |
 | `linktest.py`, `linktest_router.py` | On-demand link tests: ping + iperf3 over wlan1/halow0 (peer spawns a one-shot `iperf3 -s -1` per test — no daemon), `rnprobe` over Reticulum. |
 | `update.py` | Self-update: version check + launches `nucleus-update.sh`. |
+| `manual.py` | Per-page help for the web UI: `## Quick help` (or a named section) from the installed manual copy, via `GET /api/v1/manual/{page}`. |
 | `power.py` | Imperative node power control (reboot / power off) via `systemctl`; the router/API only relays to it. |
 | `meshtastic/lora_freq.py` | Pure LoRa frequency math — region/preset/channel → slot + band edges (MHz); drives the radio-config page's frequency readout. |
 | `templates/` | Jinja2 templates, named after their destination. |
-| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum pages (contacts landing, conversation, contact, network, node status) are in `app.js`. Selectable display theme (classic / htop / day / dark / night) with bundled Terminus and Atkinson Hyperlegible Mono fonts. |
+| `web/` | Static UI (`index.html`, `cli.js`/`cli.css` shell, `voice.html`); talks only to `/api/v1/...`. The Reticulum pages (contacts landing, conversation, contact, network, node status) are in `app.js`. Selectable display theme (classic / htop / day / dark / night) with bundled Terminus and Atkinson Hyperlegible Mono fonts. Each page's `help` key names its manual page for the `?` help panel. |
 | `mesh_peers.py` | Shared mesh-neighbour discovery helper: Babel neighbours (monitor on `[::1]:33123`) → per-node HTTP pulls. Used to fetch peers' contact cards for one-tap add. |
 
 Routers are thin HTTP layers: logic stays in the module/daemon they wrap.
@@ -200,6 +201,8 @@ node:
 - apt packages, incl. meshtasticd (Meshtastic OBS repo) and Tailscale (its repo)
 - Python package → `/opt/nucleus/venv`; `nucleusctl` + Reticulum CLIs →
   `/usr/local/bin`
+- `docs/manual/*.md` → `/opt/nucleus/manual/` (replaced each run): the web
+  UI's per-page help (`?`) shows each page's `## Quick help` section from it
 - `system/` → systemd units, NetworkManager conf, sudoers,
   `nucleus-update.sh`, `nucleus-tak-setup.sh`, `nucleus-ots-fixup.sh` (inert
   unless used). The USB udev rule (`60-nucleus-usb.rules`) is **generated** by
@@ -289,4 +292,8 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 pytest                          # no hardware needed
 ```
+
+Deploy to a node only with `cd /home/natak/V3_OS && sudo ./install.sh` — the
+same path self-update uses. Never `pip install` into `/opt/nucleus/venv`
+directly: it skips the manual copy, units and the other syncs above.
 

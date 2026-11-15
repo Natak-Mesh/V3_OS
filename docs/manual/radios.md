@@ -6,6 +6,16 @@ down**, so a wired link keeps working. Each radio is its own switch — there is
 inline `ON` / `OFF` / `—` (unknown) switch, refreshed every 5 s from
 `GET /api/v1/status` (`.radios`). Below the switches is the interface table.
 
+## Quick help
+
+Turn each radio on or off, and see the network interfaces.
+
+- **Wi-Fi mesh** — off leaves the mesh. Stays off after reboot.
+- **Meshtastic** — off = receive-only (hears, never transmits). Stays off after reboot.
+- **Access point** — off drops phones on the AP. Always comes back **on** at reboot.
+- Turning off the mesh or AP can cut your own connection. Fallbacks: USB-C, eth0, console.
+- **Interfaces** — each interface's state (`UP` green) and addresses.
+
 ## The three switches
 
 | Radio | What "off" does | Persistence |

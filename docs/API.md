@@ -194,6 +194,20 @@ toggle them with `PUT /api/v1/config` (`mesh.enabled` / `meshtastic.tx_enabled`)
 `radios` (below). See the [Radios](manual/radios.md) manual page.
 
 
+### `GET /api/v1/manual/{page}`
+
+Help text for the web UI `?` panel. `page` is a manual file stem
+(`docs/manual/<page>.md`, e.g. `monitor`, `README`). Returns the page's
+`## Quick help` section, or with `?section=<heading>` that `## <heading>`
+section:
+
+```json
+{"page": "monitor", "title": "Monitor page (MESH CONNECTIONS)", "markdown": "..."}
+```
+
+Read from `/opt/nucleus/manual/` (copied by `install.sh`). 404 if the page or
+section is absent or the name is not a bare file stem.
+
 ---
 
 ## Meshtastic radio (`/api/v1/meshtastic`)

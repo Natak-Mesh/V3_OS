@@ -3,6 +3,17 @@
 Configure the local Meshtastic LoRa radio and align its channel with peers, and
 use it as a regular Meshtastic node (CHATS / NODES / POSITIONS).
 
+## Quick help
+
+Use the LoRa radio like the Meshtastic phone app, and set up its channel.
+
+- **CHATS** — channel and direct-message chats. **●** = unread.
+- **NODES** / **POSITIONS** — every Meshtastic node heard; distance and bearing.
+- **RADIO CONFIGURATION** — names, preset, region, power. **Apply** reboots the radio (30-120 s).
+- **SET CHANNEL** — share, paste or join a channel. Channel name, key, region and preset must match to talk.
+- **PRESENCE HEARTBEAT** — keeps this node in others' lists without ATAK traffic.
+- Sending is blocked while the radio is receive-only (RADIOS AND INTERFACES).
+
 ## Meshtastic client
 
 For use without ATAK — what the Meshtastic phone app does, minus radio config

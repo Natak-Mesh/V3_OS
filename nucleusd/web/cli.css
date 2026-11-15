@@ -460,6 +460,27 @@ html, body {
   grid-area: back; border-top: 1px solid var(--border-color);
   font-size: calc(14px * var(--fscale)); letter-spacing: .1em; color: var(--text-secondary);
 }
+/* Shell control bar with the ? help key beside BACK (index.html only; the
+   standalone voice handset keeps the plain BACK-only bar). */
+#ctrl.has-help {
+  grid-template-columns: 1fr .35fr .65fr 1fr;
+  grid-template-areas: "up enter enter down" "up help back down";
+}
+#c-help {
+  grid-area: help; border-top: 1px solid var(--border-color);
+  font-size: calc(14px * var(--fscale)); color: var(--text-secondary);
+}
+
+/* Help panel (? key): the manual's Quick help for the current page. */
+.content.help-panel {
+  margin: 0 14px 8px; padding: 6px 10px;
+  border: 1px solid var(--border-color); background: var(--bg-card);
+  font-size: calc(13px * var(--fscale)); line-height: 1.5;
+}
+.help-panel p { margin: 4px 0; }
+.help-panel ul { margin: 4px 0; padding-left: 18px; }
+.help-panel code { color: var(--accent); }
+.help-panel table { margin: 4px 0; }
 
 /* Thin dark scrollbar to match the terminal shell. */
 #view::-webkit-scrollbar { width: 8px; }

@@ -4,6 +4,15 @@ Compares the installed (running) version with the git remote and launches the
 node update. Git and live state are kept separate — the running version only
 changes after the update pulls, reinstalls the venv and restarts services.
 
+## Quick help
+
+Update this node's software.
+
+- Shows the installed version and whether a newer one exists.
+- **Update now** — downloads, installs and restarts. The page may disconnect briefly; it comes back.
+- Needs internet. Blocked if the node's code has local changes.
+- **Refresh** — check again.
+
 ## Status
 
 | State | Meaning |

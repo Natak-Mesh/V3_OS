@@ -4,6 +4,16 @@ Who this node can currently reach. Three tables (four when a HaLow radio is
 plugged in), auto-refreshed every 5s. Interface addresses live on the
 [Radios and Interfaces](radios.md) page.
 
+## Quick help
+
+Who this node can reach right now. Refreshes every 5 s.
+
+- **Wifi / HaLow mesh peers** — nodes heard directly over that radio. **Link** = share of recent routing hellos received (100% is best). **Signal** in dBm (closer to 0 is stronger).
+- **Mesh routes** — every reachable node. **Via** `direct` or the relaying node. **Cost** 1.0 = perfect direct link; each extra hop adds about 1.0.
+- **Meshtastic Nodes** — LoRa nodes heard in the last 15 min.
+- Empty tables with an amber alert = a radio is switched off. Use **OPEN RADIOS AND INTERFACES**.
+- **LINK TEST** runs ping / throughput / traceroute to one peer.
+
 ## Radio-off alerts
 
 A radio that has been deliberately switched off looks exactly like a broken

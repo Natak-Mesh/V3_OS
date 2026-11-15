@@ -8,6 +8,7 @@
   const view = document.getElementById("view");
   const cEnter = document.getElementById("c-enter");
   const cBack = document.getElementById("c-back");
+  const cHelp = document.getElementById("c-help");
 
   const state = {
     page: "home",     // current page key
@@ -19,7 +20,79 @@
     timer: null,      // dynamic-refresh interval id
     building: false,  // guards overlapping builds
     stickJump: false, // one-shot: force stickBottom pages to the newest line
+    help: false,      // ? panel open on the current page
   };
+
+  // ── Help panel (?) ───────────────────────────────────────────
+  // A page's `help` (app.js) names a manual page, optionally "#<heading>".
+  // The API returns that page's `## Quick help` (or the named `##` section)
+  // from the manual copy install.sh puts on the node. Cached per help key.
+  const helpCache = {};  // key -> rendered HTML
+
+  function helpKey() { return (PAGES[state.page] || {}).help || ""; }
+
+  async function loadHelp(key) {
+    if (helpCache[key]) return;
+    const [page, section] = key.split("#");
+    let url = "/api/v1/manual/" + encodeURIComponent(page);
+    if (section) url += "?section=" + encodeURIComponent(section);
+    let html;
+    try {
+      const r = await fetch(url);
+      if (r.ok) html = mdToHtml((await r.json()).markdown || "");
+      else html = `<div class="off">help not installed for this page (run install.sh)</div>`;
+    } catch (e) {
+      return;  // network blip: leave uncached so the next toggle retries
+    }
+    helpCache[key] = html;
+  }
+
+  async function toggleHelp() {
+    if (state.help) { state.help = false; return render(true); }
+    const key = helpKey();
+    if (!key) return S.msg("no help for this page", false);
+    state.help = true;
+    await loadHelp(key);
+    if (state.help && helpKey() === key) render(true);
+  }
+
+  // Minimal markdown for the manual's Quick help: paragraphs, "- " lists,
+  // "| a | b |" tables, ### subheads, **bold**, `code`. Links keep their text
+  // only (manual-relative URLs don't resolve in the UI). Escaped first.
+  function mdInline(t) {
+    return escHtml(t)
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  }
+  function mdToHtml(md) {
+    const out = [];
+    let para = [], list = null, table = null;
+    const flush = () => {
+      if (para.length) out.push(`<p>${mdInline(para.join(" "))}</p>`);
+      if (list) out.push(`<ul>${list.map((li) => `<li>${mdInline(li)}</li>`).join("")}</ul>`);
+      if (table) {
+        const rows = table.filter((r) => !/^\s*\|?\s*:?-+/.test(r));
+        const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|");
+        out.push("<table>" + rows.map((r, i) => "<tr>" + cells(r).map((c) =>
+          (i ? "<td>" : "<th>") + mdInline(c.trim()) + (i ? "</td>" : "</th>")).join("") +
+          "</tr>").join("") + "</table>");
+      }
+      para = []; list = null; table = null;
+    };
+    for (const line of md.split("\n")) {
+      if (!line.trim()) { flush(); continue; }
+      if (/^#{3,} /.test(line)) { flush(); out.push(`<p><b>${mdInline(line.replace(/^#+ /, ""))}</b></p>`); continue; }
+      if (/^\s*\|/.test(line)) { if (!table) flush(); table = table || []; table.push(line); continue; }
+      const li = /^\s*[-*] (.*)$/.exec(line);
+      if (li) { if (!list) flush(); list = list || []; list.push(li[1]); continue; }
+      if (list && /^\s+\S/.test(line)) { list[list.length - 1] += " " + line.trim(); continue; }
+      if (list || table) flush();
+      para.push(line.trim());
+    }
+    flush();
+    return out.join("");
+  }
 
   // Shell helpers handed to page actions.
   const S = {
@@ -64,6 +137,10 @@
   // selected row.
   function render(keepScroll = false) {
     let html = `<div class="page-title">${(PAGES[state.page] || {}).title || ""}</div>`;
+    if (state.help) {
+      html += `<div class="content help-panel">` +
+        (helpCache[helpKey()] || `<div class="off">loading help…</div>`) + `</div>`;
+    }
     html += `<div id="shell-msg" class="msg"></div>`;
     let composeIdx = -1;
     state.items.forEach((it, idx) => {
@@ -266,6 +343,7 @@
     state.params = params;
     state.sel = 0;
     state.editing = false;
+    state.help = false;
     stopTimer();
     await build(false);
     startTimer();
@@ -276,6 +354,7 @@
 
   function back() {
     if (state.editing) { commitEdit(); return; }
+    if (state.help) { state.help = false; render(true); return; }
     const prev = state.stack.pop();
     go(prev || "home", false);
   }
@@ -369,6 +448,7 @@
   // ── Controls: buttons + keyboard + hold-to-repeat ────────────
   cEnter.addEventListener("click", activate);
   cBack.addEventListener("click", back);
+  if (cHelp) cHelp.addEventListener("click", toggleHelp);
 
   // Hold-to-repeat on ▲ ▼ so long lists don't need many taps.
   function holdRepeat(btn, fn) {
@@ -404,6 +484,9 @@
         break;
       case "Enter": e.preventDefault(); activate(); break;
       case "Escape": e.preventDefault(); back(); break;
+      case "h": case "?":
+        if (!typing && !state.editing) { e.preventDefault(); toggleHelp(); }
+        break;
     }
   });
 

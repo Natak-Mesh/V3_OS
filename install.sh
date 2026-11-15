@@ -97,6 +97,13 @@ python3 -m venv "$VENV"
 "$VENV/bin/pip" install -q --upgrade pip
 "$VENV/bin/pip" install -q "$REPO"
 
+echo "==> operator manual (web UI help) -> $OPT/manual"
+# The web UI's per-page help reads the `## Quick help` sections from this copy
+# (nucleusd/manual.py). Replaced wholesale so pages removed from the repo go too.
+rm -rf "$OPT/manual"
+install -d -m 755 "$OPT/manual"
+install -m 644 "$REPO"/docs/manual/*.md "$OPT/manual/"
+
 echo "==> nucleusctl launcher"
 cat > /usr/local/bin/nucleusctl <<EOF
 #!/bin/bash
