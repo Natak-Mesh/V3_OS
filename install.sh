@@ -38,7 +38,14 @@ systemctl disable --now iperf3.service 2>/dev/null || true
 # Reload dbus first: its policy references the systemd-resolve user the package
 # just created, and without the reload resolved cannot claim its bus name.
 systemctl reload dbus
-systemctl enable --now systemd-resolved
+systemctl enable systemd-resolved
+# The package postinst already started resolved under the old dbus policy, so it
+# never claimed org.freedesktop.resolve1; restart it so it does.
+systemctl restart systemd-resolved
+# Resend the uplink DNS servers to resolved.
+systemctl reload NetworkManager
+for i in $(seq 30); do getent hosts deb.debian.org >/dev/null && break; sleep 1; done
+getent hosts deb.debian.org >/dev/null || { echo "ERROR: DNS not available after enabling systemd-resolved"; exit 1; }
 
 echo "==> meshtasticd (native, from the Meshtastic apt repo)"
 # Native meshtasticd replaces the V2 Docker container. The repo ships the
