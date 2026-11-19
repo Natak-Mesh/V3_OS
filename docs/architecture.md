@@ -56,7 +56,9 @@ Details: [network stack](../README.md#3-network-stack),
 [HaLow](manual/halow.md), [wired node link](manual/config.md#wired-node-link-eth0--turning-it-on),
 [Reticulum](manual/reticulum.md), [Tailscale](manual/tailscale.md).
 
-## 2. ATAK position and other multicast traffic
+## 2. ATAK traffic
+
+### Multicast
 
 This example follows **outbound** ATAK multicast from a device on the local AP.
 The bridge's LoRa path applies to supported CoT messages, not all ATAK
@@ -89,6 +91,39 @@ Ethernet relay has additional paths and loop-prevention constraints.
 The node raises the TTL of incoming local ATAK multicast so it can be forwarded.
 See [Ethernet mesh relay](manual/eth0-mesh-relay.md) for the complete
 two-node topology, source filtering and constraints.
+
+### Unicast
+
+ATAK can also send traffic to a specific IP endpoint. This example shows a
+device reaching a device on another node's LAN; the reverse direction needs
+its own usable route and permitted traffic. The middle links are alternative
+paths, not a requirement to use all three.
+
+```mermaid
+flowchart LR
+    a["ATAK device A"] --> lana["Node A<br/>br-lan"]
+    lana --> routea["Node A<br/>IP forwarding"]
+    routea --> wifi["wlan1 mesh"]
+    routea -.-> halow["halow0 mesh"]
+    routea -.-> wire["eth0 wired node link"]
+    wifi --> routeb["Node B<br/>IP forwarding"]
+    halow -.-> routeb
+    wire -.-> routeb
+    routeb --> lanb["Node B<br/>br-lan"]
+    lanb --> b["ATAK device B"]
+```
+
+| Path | Conditions and boundaries |
+|---|---|
+| Between node LANs | Devices need reachable destination addresses and routes through their nodes; Babel distributes node LAN routes across working links. Firewall rules and the destination application must permit the traffic. |
+| Via `eth0` | The wired node link needs `eth0.babel` on participating nodes and appropriate firewall rules. Unicast routing is independent of `eth0.mcast_mode`. |
+| Same LAN | Devices can communicate directly on the LAN without traversing the mesh. |
+| TAK server | A configured ATAK client can also use IP unicast to a reachable TAK Server or OpenTAKServer. A server is optional and may be local or remote; access and credentials depend on its setup. |
+
+This is normal IP forwarding, not ATAK multicast routing through `smcroute`;
+the CoT-to-LoRa bridge shown above is not a general unicast IP router. The
+node can also send its own [ATAK notifications](atak-node-notifications.md)
+as unicast to a known local device.
 
 ## 3. Meshtastic chat
 
