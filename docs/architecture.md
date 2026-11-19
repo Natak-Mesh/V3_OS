@@ -31,8 +31,12 @@ flowchart LR
     meshtastic -.-> meshtasticPeers["Meshtastic peers"]
     node -.-> rnode["RNode LoRa radio"]
     rnode -.-> rnsPeers["Reticulum peers"]
-    node -.-> modem["modem73 + audio / PTT adapter"]
-    modem -.-> analog["Analog radio"]
+    node -.-> modem["modem73"]
+    modem -.-> digirig["DigiRig<br/>USB audio + serial PTT"]
+    digirig -.-> analog["Analog radio"]
+    node -.-> pttAdapter["PTT adapter"]
+    pttAdapter -.-> radioPtt["Radio PTT"]
+    pttAdapter -.-> audioHeadset["Audio headset"]
     node -.-> headset["OpenVLM headset"]
 ```
 
