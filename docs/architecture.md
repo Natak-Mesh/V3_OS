@@ -35,6 +35,7 @@ flowchart LR
     modem -.-> digirig["DigiRig<br/>USB audio + serial PTT"]
     digirig -.-> analog["Analog radio"]
     node -.-> openvlm["OpenVLM<br/>USB audio + HID PTT adapter"]
+    openvlm -.-> tactical["Tactical headset"]
 ```
 
 The dashed hardware links can communicate both ways when present and active;
@@ -160,7 +161,8 @@ own multicast voice groups.
 
 ```mermaid
 flowchart LR
-    openvlm["OpenVLM<br/>PTT adapter + audio"] <--> voice["Voice daemon"]
+    headset["Tactical headset"] <--> openvlm["OpenVLM<br/>PTT adapter + audio"]
+    openvlm <--> voice["Voice daemon"]
     browser["Phone / browser"] <--> nginx["nginx<br/>HTTPS + WebSocket"]
     nginx <--> voice
     voice --> ip["IP audio multicast"]
@@ -180,7 +182,7 @@ text to speech; it is not a live audio stream.
 | Path | Conditions and boundaries |
 |---|---|
 | IP voice | `voice.enabled`; matching voice channel and usable mesh interface. Sends on `wlan1` and enabled, available `halow0`, with duplicate frames suppressed on receive. |
-| Browser PTT | HTTPS and a working WebSocket through nginx; no OpenVLM headset is required. |
+| Browser PTT | HTTPS and a working WebSocket through nginx; no OpenVLM adapter or tactical headset is required. |
 | LoRa voice-text | `voice.lora_enabled`, installed speech models and a working Meshtastic bridge/radio. A completed utterance is sent as text, then spoken at the receiver. |
 | LoRa Codec2 | `voice.stream_enabled`, usable codec and Meshtastic bridge/radio. This is a separate selected transport from voice-text. |
 
