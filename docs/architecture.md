@@ -102,11 +102,11 @@ paths, not a requirement to use all three.
 ```mermaid
 flowchart LR
     a["ATAK device A"] --> lana["Node A<br/>br-lan"]
-    lana --> routea["Node A<br/>IP forwarding"]
+    lana --> routea["Node A<br/>IP forwarding + Babel routes"]
     routea --> wifi["wlan1 mesh"]
     routea -.-> halow["halow0 mesh"]
     routea -.-> wire["eth0 wired node link"]
-    wifi --> routeb["Node B<br/>IP forwarding"]
+    wifi --> routeb["Node B<br/>IP forwarding + Babel routes"]
     halow -.-> routeb
     wire -.-> routeb
     routeb --> lanb["Node B<br/>br-lan"]
