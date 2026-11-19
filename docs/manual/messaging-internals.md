@@ -13,9 +13,10 @@ LoRa (portnum 1)┘         ▲
 
 ## Transports
 
-- **WiFi** — UDP multicast on the wlan1 802.11s mesh (default `239.10.10.60:17020`).
-  Fast, free, multi-hop at L2. Wire frame is a tiny JSON line `{sender,text,ts}`;
-  only Nucleus nodes speak it.
+- **WiFi** — UDP multicast on the wlan1 802.11s mesh and, when enabled and
+  available, the halow0 mesh (default `239.10.10.60:17020`). Fast, free,
+  multi-hop at L2. Wire frame is a tiny JSON line `{sender,text,ts}`; only
+  Nucleus nodes speak it.
 - **LoRa** — **standard Meshtastic `TEXT_MESSAGE_APP` (portnum 1)** on the
   primary channel, relayed through the CoT bridge (which owns the radio). Because
   it is ordinary Meshtastic text with **no custom header**, plain Meshtastic
@@ -49,13 +50,13 @@ per-message badge of the transport(s) that delivered it (`wifi`, `lora`, or
   the broadcast store remains reachable via `/api/v1/messaging/messages`.
 - CoT bridge text relay: localhost UDP 5560 (TX) / 5561 (RX).
 
-## Third lane — Reticulum/LXMF direct messages (opt-in)
+## Third lane — Reticulum/LXMF direct messages
 
 Unlike WiFi and LoRa, which broadcast into the one deduped store, the Reticulum
 lane sends **addressed, one-to-one** LXMF messages to a specific node, so it has
 its own **per-peer conversation store** (`rns_store.ConversationStore`,
 persisted to `/var/lib/nucleus/rns_messages.jsonl`) rather than the shared log.
-It is **off by default** (`messaging.rns.enabled`); the RNS/LXMF libraries
+It is enabled by default (`messaging.rns.enabled`); the RNS/LXMF libraries
 (~27 MB) are imported only when it is on.
 
 ```
