@@ -15,6 +15,9 @@ node: Wi-Fi HaLow (802.11ah) second mesh on a Morse MM8108 USB radio
 ([docs/halow.md](docs/halow.md)),
 Tailscale, official TAK Server **or** OpenTAKServer (either/or; see §4).
 
+For connection maps and traffic-flow diagrams, see
+[Nucleus architecture and data flows](docs/architecture.md).
+
 ---
 
 ## 1. Core logic — the config pipeline
@@ -73,7 +76,7 @@ Everything flows one direction, from one file:
 | `api.py` | FastAPI app (`nucleusd`, :8080): REST API + web UI, mounts the routers below. |
 | `cli.py` | `nucleusctl` — thin wrapper over the same modules. |
 | `meshtastic/` | Radio configurator + router, first-boot radio init, CoT bridge daemon, Meshtastic client (`meshchat.py`: chats/nodes; the bridge stays the radio's only client, chat history in `/run`). |
-| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store, history in `/run`) + router. Optional third lane: Reticulum/LXMF direct messages (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`), attaching to the shared `rnsd` as a client; off by default. Peers are explicit **contact cards** (imported over the mesh / link / QR), not flooded announces; the node announces only on operator request. |
+| `messaging/` | Messaging daemon (WiFi mcast + LoRa → one deduped store, history in `/run`) + router. A separate Reticulum/LXMF direct-message lane (`rns_lane`/`rns_proto`/`rns_store`/`rns_contacts`) attaches to the shared `rnsd` as a client. Peers use **contact cards** (imported over the mesh / link / QR); announces can be automatic or operator-triggered. |
 | `voice/` | PTT voice daemon (OpenVLM hardware + browser soft PTT) + router. |
 | `rf.py` | Per-radio RF control — the **only** module that touches rfkill/`/sys`. Resolves a phy from its interface, soft-blocks/unblocks it, and enforces persistent RF state at boot (`nucleus-rf.service`). Consumed by `apply.py`, `status.py` and the AP toggle. |
 | `tailscale.py`, `tailscale_router.py` | Imperative Tailscale control (see §4). |

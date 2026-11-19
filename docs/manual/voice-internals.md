@@ -1,8 +1,9 @@
 # Mesh PTT Voice — hardware + soft PTT
 
 Real-time push-to-talk voice between Nucleus nodes, carried as **UDP multicast**
-directly on the wlan1 802.11s mesh (`239.10.10.N:5555`, PCM S16_LE 16 kHz, 20 ms
-frames). One daemon per node (`nucleus-voice.service` → `nucleusd.voice.daemon`)
+on the wlan1 802.11s mesh and, when enabled and available, the halow0 mesh
+(`239.10.10.N:5555`, PCM S16_LE 16 kHz, 20 ms frames). One daemon per node
+(`nucleus-voice.service` → `nucleusd.voice.daemon`)
 with two interchangeable PTT front-ends that put identical frames on the air:
 
 - **Hardware PTT** — OpenVLM CM108 (`0d8c:0012`) tactical headset. Mic/speaker
