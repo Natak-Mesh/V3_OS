@@ -34,10 +34,7 @@ flowchart LR
     node -.-> modem["modem73"]
     modem -.-> digirig["DigiRig<br/>USB audio + serial PTT"]
     digirig -.-> analog["Analog radio"]
-    node -.-> pttAdapter["PTT adapter"]
-    pttAdapter -.-> radioPtt["Radio PTT"]
-    pttAdapter -.-> audioHeadset["Audio headset"]
-    node -.-> headset["OpenVLM headset"]
+    node -.-> openvlm["OpenVLM<br/>USB audio + HID PTT adapter"]
 ```
 
 The dashed hardware links can communicate both ways when present and active;
@@ -163,7 +160,7 @@ own multicast voice groups.
 
 ```mermaid
 flowchart LR
-    headset["OpenVLM headset"] <--> voice["Voice daemon"]
+    openvlm["OpenVLM<br/>PTT adapter + audio"] <--> voice["Voice daemon"]
     browser["Phone / browser"] <--> nginx["nginx<br/>HTTPS + WebSocket"]
     nginx <--> voice
     voice --> ip["IP audio multicast"]
