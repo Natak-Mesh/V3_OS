@@ -23,25 +23,25 @@ flowchart LR
     lan <--> node["Nucleus services"]
     node <--> wifi["Wi-Fi mesh: wlan1"]
     wifi <--> wifiPeers["Other Wi-Fi mesh nodes"]
-    node -.-> halow["HaLow mesh: halow0"]
-    halow -.-> halowPeers["Other HaLow nodes"]
+    node <-.-> halow["HaLow mesh: halow0"]
+    halow <-.-> halowPeers["Other HaLow nodes"]
     node <--> eth["Ethernet: eth0"]
     eth <--> wired["Internet / LAN or wired node"]
-    node -.-> meshtastic["Meshtastic radio"]
-    meshtastic -.-> meshtasticPeers["Meshtastic peers"]
-    node -.-> rnode["RNode LoRa radio"]
-    rnode -.-> rnsPeers["Reticulum peers"]
-    node -.-> modem["modem73"]
-    modem -.-> digirig["DigiRig<br/>USB audio + serial PTT"]
-    digirig -.-> analog["Analog radio"]
-    node -.-> openvlm["OpenVLM<br/>USB audio + HID PTT adapter"]
-    openvlm -.-> tactical["Tactical headset"]
+    node <-.-> meshtastic["Meshtastic radio"]
+    meshtastic <-.-> meshtasticPeers["Meshtastic peers"]
+    node <-.-> rnode["RNode LoRa radio"]
+    rnode <-.-> rnsPeers["Reticulum peers"]
+    node <-.-> modem["modem73"]
+    modem <-.-> digirig["DigiRig<br/>USB audio + serial PTT"]
+    digirig <-.-> analog["Analog radio"]
+    node <-.-> openvlm["OpenVLM<br/>USB audio + HID PTT adapter"]
+    openvlm <-.-> tactical["Tactical headset"]
 ```
 
-The dashed hardware links can communicate both ways when present and active;
-dashes are used for their optional nature, not to imply transmit-only. The
-Meshtastic and RNode LoRa radios are **separate** links with different
-software and protocols. `eth0` can be a WAN or LAN connection; wired node
+Dashed double arrows show optional two-way connections, not current link
+status; a radio can be configured receive-only. The Meshtastic and RNode LoRa
+radios are **separate** links with different software and protocols. `eth0`
+can be a WAN or LAN connection; wired node
 peering requires additional configuration. Babel handles IP unicast routing
 over the enabled mesh interfaces and, when configured, Ethernet. Optional
 Tailscale and TAK servers are not physical interfaces and are omitted here.
