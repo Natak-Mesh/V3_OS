@@ -81,7 +81,7 @@ Ethernet relay has additional paths and loop-prevention constraints.
 | Path | Conditions and boundaries |
 |---|---|
 | `br-lan` ↔ `wlan1` / `halow0` | ATAK multicast groups are routed without echoing back to the ingress interface. HaLow requires its enabled, present radio. |
-| `wlan1` ↔ `halow0` | **No direct ATAK multicast forwarding** between these meshes. This is separate from application-level fan-out shown below. |
+| `wlan1` ↔ `halow0` | **No direct ATAK multicast forwarding** between these meshes. This is separate from the voice daemon's application-level fan-out shown below. |
 | `br-lan` ↔ `eth0` | `eth0.mcast_mode: br_lan` or `mesh_relay`; `off` installs no eth0 multicast routes. |
 | `eth0` ↔ radio meshes | `mesh_relay` only; at most one relay per Ethernet segment and other wired nodes must be RF-silent on the same meshes. |
 | CoT → LoRa | `meshtastic.enabled`, `meshtastic.cot_bridge`, `meshtastic.tx_enabled`, working radio and accepted source; rate limits also apply. For relayed wired sources, configure `eth0.mcast_source_node_ids`. |
@@ -90,34 +90,31 @@ The node raises the TTL of incoming local ATAK multicast so it can be forwarded.
 See [Ethernet mesh relay](manual/eth0-mesh-relay.md) for the complete
 two-node topology, source filtering and constraints.
 
-## 3. Broadcast text messaging
+## 3. Meshtastic chat
 
-The Nucleus broadcast messaging service sends its own message on the available
-mesh interfaces and, if enabled, through the Meshtastic bridge. Incoming
-messages from these lanes enter one deduplicated store.
+The Meshtastic client provides channel chats and direct messages through the
+local radio. The CoT bridge owns the radio connection and also maintains the
+chat history.
 
 ```mermaid
 flowchart LR
-    client["API client"] <--> service["Messaging service"]
-    service <--> store["Broadcast store<br/>deduplicate"]
-    service <--> wifi["wlan1 multicast"]
-    service <-.-> halow["halow0 multicast"]
-    service <-.-> bridge["CoT bridge<br/>text relay"]
-    bridge <-.-> radio["meshtasticd + radio"]
-    radio <-.-> lora["Meshtastic LoRa peers"]
+    ui["Meshtastic chat UI"] <--> api["Meshtastic API"]
+    api <--> bridge["CoT bridge<br/>radio client"]
+    bridge --> store["Chat history<br/>in RAM"]
+    store --> api
+    bridge <--> daemon["meshtasticd"]
+    daemon <--> radio["Meshtastic radio"]
+    radio <--> peers["Meshtastic peers"]
 ```
 
 | Path | Conditions and boundaries |
 |---|---|
-| Mesh text | `messaging.enabled`; `messaging.wifi_group` and `messaging.wifi_port` select the group and port. The service sends and receives on `wlan1` and, when enabled and available, `halow0`. |
-| Meshtastic text | `messaging.lora`, a running bridge and usable Meshtastic radio. Outbound radio transmission also requires `meshtastic.tx_enabled`. Plain primary-channel broadcast text interoperates with ordinary Meshtastic devices. |
-| Store | Wi-Fi and LoRa copies can be deduplicated; broadcast history is in `/run` and cleared on reboot. This broadcast store is accessible via the API, not a separate broadcast chat page. |
+| Chat | `meshtastic.enabled`, `meshtastic.cot_bridge`, a running bridge, a usable radio and compatible peer channel settings. |
+| Sending | `meshtastic.tx_enabled` must be on; receive-only mode still allows reception. |
+| History | Chat history is kept in `/run` and cleared on reboot; preferences such as favorites and read marks persist. |
 
-This application fan-out is **not** `smcroute` forwarding one mesh to the
-other. Meshtastic-only messages received over LoRa are not automatically
-retransmitted over the mesh text lane. Reticulum direct messages are a
-separate lane and store, shown below. See
-[messaging internals](manual/messaging-internals.md).
+This is Meshtastic chat over LoRa, not ATAK GeoChat or Reticulum direct
+messaging. See the [Meshtastic client](manual/meshtastic.md#meshtastic-client).
 
 ## 4. Push-to-talk voice
 
@@ -176,14 +173,14 @@ flowchart LR
 
 | Path | Conditions and boundaries |
 |---|---|
-| Nucleus direct messages | `messaging.enabled`, `messaging.rns.enabled` and running `rnsd`; a usable contact identity and path are needed. Conversations persist separately from broadcast text. |
+| Nucleus direct messages | `messaging.enabled`, `messaging.rns.enabled` and running `rnsd`; a usable contact identity and path are needed. Conversations persist separately from Meshtastic chat. |
 | AutoInterface | `reticulum.enabled` and `reticulum.auto_interface`; peer reachability depends on the configured interfaces and their links. HaLow requires its radio. |
 | Client on AP/LAN | `reticulum.tcp_server`; the client connects to the node's `br-lan` address and configured TCP port. |
 | RNode / modem73 | Corresponding `reticulum.rnode_enabled` / `reticulum.modem73_enabled` setting and working hardware. Automatic announces are not flooded onto these slow radios; an operator can announce over a selected radio. |
 
 The rendered Reticulum template currently disables the public entry-node
 interface even though entry-node settings exist. See
-[Reticulum](manual/reticulum.md) and [messaging internals](manual/messaging-internals.md#third-lane--reticulumlxmf-direct-messages).
+[Reticulum](manual/reticulum.md).
 
 ## 6. Configuration and apply
 
